@@ -1,0 +1,83 @@
+import type { Config } from "@codevil/shared";
+
+import type { RunCommand } from "./args.js";
+
+export interface CreateSessionResponse {
+  session_id: string;
+  ws_url: string;
+}
+
+export interface SessionPayload {
+  prompt: string;
+  repo: string;
+  plan_model: string;
+  exec_model: string;
+  max_cost: string;
+  max_time: string;
+  max_steps: number;
+}
+
+export type FetchLike = (
+  url: string,
+  init: {
+    method: "POST";
+    headers: Record<string, string>;
+    body: string;
+  },
+) => Promise<Response>;
+
+export function buildSessionPayload(command: RunCommand, config: Config): SessionPayload {
+  return {
+    prompt: command.prompt,
+    repo: command.repo,
+    plan_model: command.planModel ?? config.defaults.plan_model,
+    exec_model: command.execModel ?? config.defaults.exec_model,
+    max_cost: command.maxCost ?? config.defaults.max_cost,
+    max_time: command.maxTime ?? config.defaults.max_time,
+    max_steps: command.maxSteps ?? config.defaults.max_steps,
+  };
+}
+
+export async function createSession(
+  config: Config,
+  command: RunCommand,
+  fetcher: FetchLike = fetch,
+): Promise<CreateSessionResponse> {
+  const endpoint = config.endpoint.replace(/\/$/, "");
+  const response = await fetcher(`${endpoint}/sessions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.api_key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(buildSessionPayload(command, config)),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to create session: ${response.status} ${await response.text()}`);
+  }
+
+  const body = await response.json() as unknown;
+  if (!isRecord(body) || typeof body.session_id !== "string" || typeof body.ws_url !== "string") {
+    throw new Error("Invalid create session response");
+  }
+
+  return {
+    session_id: body.session_id,
+    ws_url: body.ws_url,
+  };
+}
+
+export function buildWebSocketUrl(url: string, cursor: number): string {
+  const wsUrl = new URL(url);
+
+  if (wsUrl.protocol === "https:") wsUrl.protocol = "wss:";
+  if (wsUrl.protocol === "http:") wsUrl.protocol = "ws:";
+
+  wsUrl.searchParams.set("cursor", cursor.toString());
+  return wsUrl.toString();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

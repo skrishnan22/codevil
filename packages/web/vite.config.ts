@@ -12,6 +12,15 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
+  server: {
+    proxy: {
+      "/sessions": {
+        target: "http://localhost:8787",
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+  },
   test: {
     environment: "node",
   },

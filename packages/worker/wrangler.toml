@@ -2,10 +2,39 @@ name = "codevil"
 main = "src/index.ts"
 compatibility_date = "2026-04-07"
 
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+
+[[containers]]
+class_name = "Sandbox"
+image = "../../Dockerfile.sandbox"
+instance_type = "standard-1"
+max_instances = 5
+
+  [containers.wrangler_ssh]
+  enabled = true
+
+  [[containers.authorized_keys]]
+  name = "skrishnan"
+  public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFtkKouaIC/eYvfkC//kSCqiim8C6301kF+Fhp7V1nrm skrish22195@gmail.com"
+
 [[durable_objects.bindings]]
 name = "ORCHESTRATOR"
 class_name = "Orchestrator"
 
+[[durable_objects.bindings]]
+name = "Sandbox"
+class_name = "Sandbox"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Orchestrator"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Sandbox"]

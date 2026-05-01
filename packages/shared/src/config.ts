@@ -14,9 +14,9 @@ export interface ConfigDefaults {
 }
 
 export const DEFAULT_CONFIG: ConfigDefaults = {
-  plan_model: "claude-sonnet-4-6",
-  exec_model: "claude-sonnet-4-6",
-  provider: "anthropic",
+  plan_model: "gpt-5.4",
+  exec_model: "gpt-5.4",
+  provider: "openai",
   max_cost: "$2",
   max_time: "15m",
   max_steps: 50,

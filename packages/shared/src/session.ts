@@ -3,7 +3,6 @@ export type SessionState =
   | "provisioning_sandbox"
   | "cloning_repo"
   | "planning"
-  | "plan_ready"
   | "awaiting_approval"
   | "refining"
   | "executing"
@@ -21,8 +20,7 @@ const transitions: Record<SessionState, readonly SessionState[]> = {
   initializing: ["provisioning_sandbox", "failed"],
   provisioning_sandbox: ["cloning_repo", "failed", "timed_out", "cost_exceeded"],
   cloning_repo: ["planning", "failed", "timed_out", "cost_exceeded"],
-  planning: ["plan_ready", "failed", "timed_out", "cost_exceeded"],
-  plan_ready: ["awaiting_approval", "failed", "timed_out", "cost_exceeded"],
+  planning: ["awaiting_approval", "failed", "timed_out", "cost_exceeded"],
   awaiting_approval: ["refining", "executing", "failed", "timed_out", "cost_exceeded"],
   refining: ["awaiting_approval", "failed", "timed_out", "cost_exceeded"],
   executing: ["verifying", "failed", "timed_out", "cost_exceeded"],

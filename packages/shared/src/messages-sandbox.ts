@@ -11,12 +11,14 @@ export interface PlanMessage {
   type: "plan";
   prompt: string;
   model: string;
+  provider?: string;
 }
 
 export interface ExecuteMessage {
   type: "execute";
   plan: string;
   model: string;
+  provider?: string;
 }
 
 export interface RefinePlanSandboxMessage {
@@ -52,6 +54,24 @@ export interface SandboxAgentEvent {
   event: unknown;
 }
 
+export interface SandboxCloneStarted {
+  type: "clone_started";
+}
+
+export interface SandboxCloneComplete {
+  type: "clone_complete";
+}
+
+export interface SandboxStatus {
+  type: "status";
+  message: string;
+}
+
+export interface SandboxCloneProgress {
+  type: "clone_progress";
+  line: string;
+}
+
 export interface SandboxPlanReady {
   type: "plan_ready";
   plan: string;
@@ -61,6 +81,25 @@ export interface SandboxPlanReady {
 export interface ExecutionComplete {
   type: "execution_complete";
   cost: CostInfo;
+}
+
+export interface SandboxVerificationStarted {
+  type: "verification_started";
+  attempt: number;
+  max_attempts: number;
+}
+
+export interface SandboxVerificationRetrying {
+  type: "verification_retrying";
+  attempt: number;
+  max_attempts: number;
+  last_error: string;
+}
+
+export interface SandboxVerificationFailed {
+  type: "verification_failed";
+  attempts: number;
+  last_error: string;
 }
 
 export interface CredentialRequest {
@@ -80,8 +119,15 @@ export interface SandboxError {
 
 export type SandboxToDOMessage =
   | SandboxAgentEvent
+  | SandboxCloneStarted
+  | SandboxCloneComplete
+  | SandboxStatus
+  | SandboxCloneProgress
   | SandboxPlanReady
   | ExecutionComplete
+  | SandboxVerificationStarted
+  | SandboxVerificationRetrying
+  | SandboxVerificationFailed
   | CredentialRequest
   | PRCreated
   | SandboxError;

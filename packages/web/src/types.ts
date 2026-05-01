@@ -7,6 +7,7 @@ export interface ChatMessage {
     | "text"
     | "status"
     | "phase"
+    | "progress"
     | "plan"
     | "tool_summary"
     | "complete"
@@ -33,10 +34,11 @@ export type ActivityEntryStatus = "running" | "success" | "error";
 
 export interface ActivityEntry {
   id: string;
-  kind: "tool_call" | "thinking" | "phase_divider";
+  kind: "tool_call" | "thinking" | "phase_divider" | "event";
   status: ActivityEntryStatus;
   timestamp: number;
   tool?: {
+    callId?: string;
     name: string;
     summary: string;
     args?: string;
@@ -48,6 +50,10 @@ export interface ActivityEntry {
   };
   phase?: {
     label: string;
+  };
+  event?: {
+    label: string;
+    detail?: string;
   };
 }
 

@@ -9,7 +9,7 @@ export function PhaseDivider({ entry }: PhaseDividerProps) {
   if (!entry.phase) return null;
 
   return (
-    <div className="flex items-center gap-3 py-2">
+    <div className="activity-phase">
       <Separator className="flex-1" />
       <span className="text-xs font-medium text-muted-foreground">{entry.phase.label}</span>
       <Separator className="flex-1" />

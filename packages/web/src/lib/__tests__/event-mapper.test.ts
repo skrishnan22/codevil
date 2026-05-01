@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapEventToChat, mapEventToActivity } from "../event-mapper";
+import { mapEventToChat, mapEventToActivity, projectEvent } from "../event-mapper";
 import type { DOToCLIEvent } from "@codevil/shared";
 
 describe("mapEventToChat", () => {
@@ -19,6 +19,12 @@ describe("mapEventToChat", () => {
     expect(messages[0].role).toBe("system");
     expect(messages[0].variant).toBe("status");
     expect(messages[0].content).toBe("Provisioning sandbox...");
+  });
+
+  it("does not render awaiting approval status separately from the plan card", () => {
+    const event: DOToCLIEvent = { type: "status", message: "Waiting for user approval." };
+    const messages = mapEventToChat(event);
+    expect(messages).toHaveLength(0);
   });
 
   it("maps phase to a phase badge message", () => {
@@ -61,34 +67,39 @@ describe("mapEventToChat", () => {
     expect(messages[0].content).toBe("Something broke");
   });
 
-  it("maps agent_event tool_execution_start to a tool_summary", () => {
+  it("maps meaningful completed agent tools to durable tool summaries", () => {
     const event: DOToCLIEvent = {
       type: "agent_event",
-      event: { type: "tool_execution_start", tool: "read", args: { path: "src/index.ts" } },
+      event: { type: "tool_execution_end", tool: "bash", args: { command: "npm test" }, success: true },
     };
     const messages = mapEventToChat(event);
     expect(messages).toHaveLength(1);
     expect(messages[0].variant).toBe("tool_summary");
-    expect(messages[0].meta?.tool_name).toBe("read");
+    expect(messages[0].meta?.tool_name).toBe("bash");
   });
 
-  it("maps agent_event message_update to an assistant text message", () => {
+  it("does not put low-signal read-only tools in the durable timeline", () => {
+    const event: DOToCLIEvent = {
+      type: "agent_event",
+      event: { type: "tool_execution_end", toolName: "find", args: { path: ".", pattern: "README.md" }, isError: false },
+    };
+    const messages = mapEventToChat(event);
+    expect(messages).toHaveLength(0);
+  });
+
+  it("keeps agent message_update events out of the durable timeline", () => {
     const event: DOToCLIEvent = {
       type: "agent_event",
       event: { type: "message_update", content: "Let me look at" },
     };
     const messages = mapEventToChat(event);
-    expect(messages).toHaveLength(1);
-    expect(messages[0].role).toBe("assistant");
-    expect(messages[0].variant).toBe("text");
-    expect(messages[0].content).toBe("Let me look at");
+    expect(messages).toHaveLength(0);
   });
 
-  it("maps clone_progress to a system status message", () => {
+  it("keeps clone_progress line noise out of the durable timeline", () => {
     const event: DOToCLIEvent = { type: "clone_progress", line: "Receiving objects: 50%" };
     const messages = mapEventToChat(event);
-    expect(messages).toHaveLength(1);
-    expect(messages[0].variant).toBe("status");
+    expect(messages).toHaveLength(0);
   });
 
   it("maps verification_failed to a verification_failed message", () => {
@@ -98,6 +109,156 @@ describe("mapEventToChat", () => {
     expect(messages[0].variant).toBe("verification_failed");
     expect(messages[0].meta?.attempts).toBe(3);
     expect(messages[0].meta?.last_error).toBe("test failed");
+  });
+});
+
+describe("projectEvent", () => {
+  it("coalesces streamed message updates into one thinking entry", () => {
+    const first = projectEvent(
+      { messages: [], activityLog: [] },
+      { type: "agent_event", event: { type: "message_update", content: "Analyzing " } },
+    );
+    const second = projectEvent(
+      first,
+      { type: "agent_event", event: { type: "message_update", content: "the repo." } },
+    );
+
+    expect(second.messages).toHaveLength(0);
+    expect(second.activityLog).toHaveLength(1);
+    expect(second.activityLog[0].kind).toBe("thinking");
+    expect(second.activityLog[0].thinking?.text).toBe("Analyzing the repo.");
+  });
+
+  it("coalesces Pi assistant text deltas into one thinking entry", () => {
+    const first = projectEvent(
+      { messages: [], activityLog: [] },
+      {
+        type: "agent_event",
+        event: {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "Reading " },
+        },
+      },
+    );
+    const second = projectEvent(
+      first,
+      {
+        type: "agent_event",
+        event: {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "files." },
+        },
+      },
+    );
+
+    expect(second.activityLog).toHaveLength(1);
+    expect(second.activityLog[0].thinking?.text).toBe("Reading files.");
+  });
+
+  it("promotes agent markdown headings into durable progress timeline events", () => {
+    const projected = projectEvent(
+      { messages: [], activityLog: [] },
+      {
+        type: "agent_event",
+        event: {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: "**Inspecting package.json**\n\nI need to check the scripts.",
+          },
+        },
+      },
+    );
+
+    expect(projected.messages).toHaveLength(1);
+    expect(projected.messages[0].variant).toBe("progress");
+    expect(projected.messages[0].content).toBe("Inspecting package.json");
+  });
+
+  it("does not duplicate the same promoted progress heading", () => {
+    const first = projectEvent(
+      { messages: [], activityLog: [] },
+      {
+        type: "agent_event",
+        event: {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "**Inspecting package.json**" },
+        },
+      },
+    );
+    const second = projectEvent(
+      first,
+      {
+        type: "agent_event",
+        event: {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "\n\n**Inspecting package.json**" },
+        },
+      },
+    );
+
+    expect(second.messages).toHaveLength(1);
+  });
+
+  it("updates a running tool entry when the matching tool ends", () => {
+    const started = projectEvent(
+      { messages: [], activityLog: [] },
+      { type: "agent_event", event: { type: "tool_execution_start", tool: "bash", args: { command: "pnpm test" } } },
+    );
+    const ended = projectEvent(
+      started,
+      { type: "agent_event", event: { type: "tool_execution_end", tool: "bash", args: { command: "pnpm test" }, result: "PASS", success: true } },
+    );
+
+    expect(ended.messages).toHaveLength(1);
+    expect(ended.messages[0].variant).toBe("tool_summary");
+    expect(ended.activityLog).toHaveLength(1);
+    expect(ended.activityLog[0].status).toBe("success");
+    expect(ended.activityLog[0].tool?.result).toBe("PASS");
+  });
+
+  it("updates Pi tool events using toolCallId", () => {
+    const started = projectEvent(
+      { messages: [], activityLog: [] },
+      {
+        type: "agent_event",
+        event: {
+          type: "tool_execution_start",
+          toolCallId: "call_1",
+          toolName: "read",
+          args: { path: "src/index.ts" },
+        },
+      },
+    );
+    const ended = projectEvent(
+      started,
+      {
+        type: "agent_event",
+        event: {
+          type: "tool_execution_end",
+          toolCallId: "call_1",
+          toolName: "read",
+          result: "file contents",
+          isError: false,
+        },
+      },
+    );
+
+    expect(ended.activityLog).toHaveLength(1);
+    expect(ended.activityLog[0].status).toBe("success");
+    expect(ended.activityLog[0].tool?.name).toBe("read");
+    expect(ended.activityLog[0].tool?.result).toBe("file contents");
+  });
+
+  it("renders generic Pi lifecycle events in the activity pane", () => {
+    const projected = projectEvent(
+      { messages: [], activityLog: [] },
+      { type: "agent_event", event: { type: "agent_start" } },
+    );
+
+    expect(projected.activityLog).toHaveLength(1);
+    expect(projected.activityLog[0].kind).toBe("event");
+    expect(projected.activityLog[0].event?.label).toBe("Agent started");
   });
 });
 
@@ -112,7 +273,7 @@ describe("mapEventToActivity", () => {
     expect(entries[0].kind).toBe("tool_call");
     expect(entries[0].status).toBe("running");
     expect(entries[0].tool?.name).toBe("bash");
-    expect(entries[0].tool?.summary).toBe("npm test");
+    expect(entries[0].tool?.summary).toBe("Run npm test");
   });
 
   it("maps agent_event tool_execution_end to a completed tool_call entry", () => {

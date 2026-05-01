@@ -52,11 +52,14 @@ function SessionPage() {
   }
 
   const leftPanel = (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b px-4 py-2">
-        <span className="text-sm font-medium truncate">Session {id.slice(0, 12)}...</span>
+    <div className="session-panel session-panel-left">
+      <div className="session-panel-header">
+        <div className="min-w-0">
+          <div className="eyebrow">Session</div>
+          <div className="truncate font-mono text-sm font-semibold">{id.slice(0, 18)}</div>
+        </div>
         <ConnectionBadge status={connectionStatus} />
-        {sessionPhase && <Badge variant="outline" className="text-xs">{sessionPhase}</Badge>}
+        {sessionPhase && <Badge variant="outline" className="text-xs">{formatPhase(sessionPhase)}</Badge>}
       </div>
       <ChatThread messages={messages} planComponent={renderPlan} />
       <PromptInput
@@ -74,7 +77,7 @@ function SessionPage() {
   const rightPanel = <ActivityFeed entries={activityLog} />;
 
   return (
-    <div className="flex flex-1 overflow-hidden">
+    <div className="session-shell">
       <SplitPane left={leftPanel} right={rightPanel} />
     </div>
   );
@@ -83,4 +86,8 @@ function SessionPage() {
 function ConnectionBadge({ status }: { status: string }) {
   const variant = status === "connected" ? "default" : status === "error" ? "destructive" : "secondary";
   return <Badge variant={variant} className="text-xs">{status}</Badge>;
+}
+
+function formatPhase(phase: string): string {
+  return phase.replaceAll("_", " ");
 }

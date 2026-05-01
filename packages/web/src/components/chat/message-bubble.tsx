@@ -11,13 +11,13 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   switch (message.variant) {
     case "text":
       return message.role === "user" ? (
-        <div className="flex justify-end">
-          <div className="max-w-[80%] rounded-lg bg-primary px-4 py-2 text-primary-foreground">
+        <div className="flex justify-end py-1">
+          <div className="max-w-[80%] rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground">
             {message.content}
           </div>
         </div>
       ) : (
-        <div className="max-w-[80%]">
+        <div className="timeline-item timeline-item-text">
           <div className="prose prose-sm dark:prose-invert">
             <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
           </div>
@@ -26,23 +26,34 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
     case "status":
       return (
-        <div className="flex justify-center">
-          <span className="text-xs text-muted-foreground">{message.content}</span>
+        <div className="timeline-item">
+          <span className="timeline-dot" />
+          <span className="timeline-copy">{message.content}</span>
         </div>
       );
 
     case "phase":
       return (
-        <div className="flex justify-center py-1">
-          <Badge variant="secondary">
+        <div className="timeline-item timeline-item-phase">
+          <span className="timeline-dot timeline-dot-active" />
+          <Badge variant="secondary" className="rounded-md font-mono text-[11px]">
             {message.content}
           </Badge>
         </div>
       );
 
+    case "progress":
+      return (
+        <div className="timeline-item timeline-item-progress">
+          <span className="timeline-dot timeline-dot-progress" />
+          <span className="timeline-progress-label">{message.content}</span>
+        </div>
+      );
+
     case "tool_summary":
       return (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="timeline-item timeline-item-tool">
+          <span className="timeline-dot timeline-dot-muted" />
           <span className="font-mono">{message.meta?.tool_name}</span>
           <span className="truncate">{message.content}</span>
         </div>
@@ -50,7 +61,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
     case "complete":
       return (
-        <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-4">
+        <div className="timeline-card timeline-card-success">
           <p className="font-medium text-green-700 dark:text-green-400">Session completed</p>
           {message.meta?.pr_url && (
             <a
@@ -67,14 +78,14 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
     case "error":
       return (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4">
+        <div className="timeline-card timeline-card-error">
           <p className="text-sm text-destructive">{message.content}</p>
         </div>
       );
 
     case "verification_failed":
       return (
-        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4">
+        <div className="timeline-card timeline-card-warning">
           <p className="font-medium text-yellow-700 dark:text-yellow-400">
             Verification failed ({message.meta?.attempts} attempt{message.meta?.attempts === 1 ? "" : "s"})
           </p>

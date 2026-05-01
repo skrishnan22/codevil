@@ -7,12 +7,13 @@ export function TopBar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
-    <header className="flex h-14 items-center justify-between border-b px-4">
-      <Link to="/" className="text-lg font-semibold">
-        Codevil
+    <header className="app-topbar">
+      <Link to="/" className="brand-lockup">
+        <span className="brand-mark" />
+        <span>Codevil</span>
       </Link>
-      <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" asChild>
+      <div className="flex items-center gap-1">
+        <Button variant="ghost" size="sm" asChild>
           <Link to="/">Sessions</Link>
         </Button>
         <Button variant="ghost" size="sm" onClick={() => setSettingsOpen(true)}>

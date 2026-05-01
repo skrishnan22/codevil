@@ -29,15 +29,11 @@ export function ChatThread({ messages, planComponent }: ChatThreadProps) {
 
   return (
     <div className="relative flex h-full flex-col">
-      <div
-        ref={containerRef}
-        className="flex-1 overflow-y-auto px-4 py-4"
-        onScroll={handleScroll}
-      >
-        <div className="flex flex-col gap-3">
+      <div ref={containerRef} className="timeline-scroll" onScroll={handleScroll}>
+        <div className="timeline-stack">
           {messages.map((msg) =>
             msg.variant === "plan" && planComponent ? (
-              <div key={msg.id}>{planComponent(msg)}</div>
+              <div key={msg.id} className="timeline-plan">{planComponent(msg)}</div>
             ) : (
               <MessageBubble key={msg.id} message={msg} />
             ),

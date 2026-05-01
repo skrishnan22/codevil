@@ -20,7 +20,7 @@ export function PromptInput({ onSubmit, disabled, placeholder }: PromptInputProp
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex gap-2 border-t p-4">
+    <form onSubmit={handleSubmit} className="prompt-bar">
       <Input
         placeholder={placeholder ?? "Send a message..."}
         value={value}

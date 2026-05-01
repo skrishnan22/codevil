@@ -3,7 +3,7 @@ import type { SessionState, DOToCLIEvent, CLIToDOMessage } from "@codevil/shared
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
-import { mapEventToChat, mapEventToActivity } from "../lib/event-mapper";
+import { projectEvents } from "../lib/event-mapper";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
@@ -45,6 +45,16 @@ const initialState: SessionStoreState = {
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
+let pendingEvents: DOToCLIEvent[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearPendingEvents(): void {
+  pendingEvents = [];
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+}
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
   ...initialState,
@@ -62,34 +72,63 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   connectToSession(config, sessionId, wsUrl) {
     wsHandle?.close();
-    set({ sessionId, wsUrl, connectionStatus: "connecting" });
+    clearPendingEvents();
+
+    const current = get();
+    const isSameSession = current.sessionId === sessionId;
+    const initialCursor = isSameSession ? current.cursor : 0;
+
+    set({
+      ...(isSameSession ? {} : {
+        messages: [],
+        activityLog: [],
+        sessionPhase: null,
+        cursor: 0,
+        error: null,
+        planApproved: false,
+      }),
+      sessionId,
+      wsUrl,
+      connectionStatus: "connecting",
+    });
 
     wsHandle = connectWebSocket({
       wsUrl,
       apiKey: config.apiKey,
-      initialCursor: get().cursor,
+      initialCursor,
       onOpen() {
         set({ connectionStatus: "connected" });
       },
       onEvent(envelope: EventEnvelope) {
-        const chatMessages = mapEventToChat(envelope.event);
-        const activityEntries = mapEventToActivity(envelope.event);
-
         set((state) => {
           const nextPhase = inferPhase(envelope.event, state.sessionPhase);
-          const planApproved =
-            envelope.event.type === "phase" && envelope.event.phase === "executing"
-              ? true
-              : state.planApproved;
+          const planApproved = inferPlanApproved(envelope.event, state.planApproved);
 
           return {
             cursor: envelope.cursor,
-            messages: [...state.messages, ...chatMessages],
-            activityLog: [...state.activityLog, ...activityEntries],
             sessionPhase: nextPhase ?? state.sessionPhase,
             planApproved,
           };
         });
+
+        pendingEvents.push(envelope.event);
+        if (!flushTimer) {
+          flushTimer = setTimeout(() => {
+            const events = pendingEvents;
+            pendingEvents = [];
+            flushTimer = null;
+
+            set((state) =>
+              projectEvents(
+                {
+                  messages: state.messages,
+                  activityLog: state.activityLog,
+                },
+                events,
+              ),
+            );
+          }, 100);
+        }
       },
       onClose(_code, _reason) {
         set({ connectionStatus: "disconnected" });
@@ -127,6 +166,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   disconnect() {
     wsHandle?.close();
     wsHandle = null;
+    clearPendingEvents();
     set({ connectionStatus: "disconnected" });
   },
 
@@ -148,13 +188,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   reset() {
     wsHandle?.close();
     wsHandle = null;
+    clearPendingEvents();
     set(initialState);
   },
 }));
 
-function inferPhase(
+export function inferPhase(
   event: DOToCLIEvent,
-  _current: SessionState | null,
+  current: SessionState | null,
 ): SessionState | null {
   switch (event.type) {
     case "session_created":
@@ -165,9 +206,21 @@ function inferPhase(
       return "awaiting_approval";
     case "complete":
       return "completed";
+    case "verification_failed":
+      return "failed";
     case "error":
       return "failed";
+    case "status":
+      if (event.message === "Plan approved. Starting execution.") return "executing";
+      if (event.message.startsWith("Verification failed")) return current === "failed" ? "failed" : "verifying";
+      return null;
     default:
       return null;
   }
+}
+
+export function inferPlanApproved(event: DOToCLIEvent, current: boolean): boolean {
+  if (event.type === "phase" && event.phase === "executing") return true;
+  if (event.type === "status" && event.message === "Plan approved. Starting execution.") return true;
+  return current;
 }

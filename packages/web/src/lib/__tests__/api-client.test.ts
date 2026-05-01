@@ -30,6 +30,33 @@ describe("createSession", () => {
     });
   });
 
+  it("sends selected provider and models when creating a session", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        session_id: "ses_123",
+        ws_url: "wss://example.com/sessions/ses_123/ws",
+      }),
+    });
+
+    await createSession(
+      { endpoint: "https://example.com", apiKey: "cdv_test" },
+      {
+        prompt: "add tests",
+        repo: "github.com/user/repo",
+        provider: "openai",
+        planModel: "gpt-5.4",
+        execModel: "gpt-5.4-mini",
+      },
+      mockFetch,
+    );
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.provider).toBe("openai");
+    expect(body.plan_model).toBe("gpt-5.4");
+    expect(body.exec_model).toBe("gpt-5.4-mini");
+  });
+
   it("throws on non-ok response", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,

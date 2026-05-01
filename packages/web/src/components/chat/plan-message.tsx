@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import type { ChatMessage } from "@/types";
+import { normalizePlanMarkdown } from "@/lib/plan-markdown";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -16,6 +17,8 @@ interface PlanMessageProps {
 
 export function PlanMessage({ message, approved, onApprove, onAbort, onRefine }: PlanMessageProps) {
   const [feedback, setFeedback] = useState("");
+  const hasPlan = message.content.trim().length > 0;
+  const markdown = normalizePlanMarkdown(message.content);
 
   function handleRefine(e: React.FormEvent) {
     e.preventDefault();
@@ -26,24 +29,40 @@ export function PlanMessage({ message, approved, onApprove, onAbort, onRefine }:
   }
 
   return (
-    <div className="rounded-lg border p-4">
-      <div className="prose prose-sm dark:prose-invert max-w-none">
-        <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+    <div className="plan-surface">
+      <div className="plan-header">
+        <div>
+          <div className="eyebrow">Plan ready</div>
+          <h2>Review before execution</h2>
+        </div>
+        {approved && <Badge variant="default">Approved</Badge>}
       </div>
 
       {message.meta?.cost && (
-        <p className="mt-3 text-xs text-muted-foreground">
+        <p className="plan-meta">
           Cost: ${message.meta.cost.total_cost_usd.toFixed(2)} ({message.meta.cost.input_tokens} in / {message.meta.cost.output_tokens} out)
           {message.meta.refinement_round ? ` | Round ${message.meta.refinement_round}` : ""}
         </p>
       )}
 
+      <div className="plan-document">
+        {hasPlan ? (
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            <Markdown remarkPlugins={[remarkGfm]}>{markdown}</Markdown>
+          </div>
+        ) : (
+          <div className="empty-plan">
+            Plan content was empty. The session returned an approval checkpoint without a readable plan.
+          </div>
+        )}
+      </div>
+
       {approved ? (
-        <div className="mt-3">
-          <Badge variant="default">Approved</Badge>
+        <div className="plan-approved-note">
+          Execution has started from this approved plan.
         </div>
       ) : (
-        <div className="mt-4 flex flex-col gap-3">
+        <div className="plan-actions">
           <div className="flex gap-2">
             <Button size="sm" onClick={onApprove}>Approve</Button>
             <Button size="sm" variant="destructive" onClick={onAbort}>Abort</Button>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { ActivityEntry } from "@/types";
+import { ChevronRight } from "lucide-react";
 
 interface ToolCardProps {
   entry: ActivityEntry;
@@ -12,21 +13,22 @@ export function ToolCard({ entry }: ToolCardProps) {
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted">
+      <CollapsibleTrigger className="activity-tool-trigger">
+        <ChevronRight className="activity-disclosure" aria-hidden="true" />
         <StatusDot status={entry.status} />
-        <span className="font-mono text-xs font-medium">{entry.tool.name}</span>
-        <span className="truncate text-xs text-muted-foreground">{entry.tool.summary}</span>
+        <span className="activity-tool-name">{entry.tool.name}</span>
+        <span className="activity-tool-summary">{entry.tool.summary}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="ml-6 mt-1 mb-2">
+        <div className="activity-tool-body">
           {entry.tool.args && (
-            <pre className="overflow-x-auto rounded bg-muted p-2 text-xs">{entry.tool.args}</pre>
+            <pre>{entry.tool.args}</pre>
           )}
           {entry.tool.result && (
-            <pre className="mt-1 max-h-64 overflow-auto rounded bg-muted p-2 text-xs">{entry.tool.result}</pre>
+            <pre>{entry.tool.result}</pre>
           )}
           {entry.tool.error && (
-            <pre className="mt-1 rounded bg-destructive/10 p-2 text-xs text-destructive">{entry.tool.error}</pre>
+            <pre className="text-destructive">{entry.tool.error}</pre>
           )}
         </div>
       </CollapsibleContent>
@@ -36,10 +38,10 @@ export function ToolCard({ entry }: ToolCardProps) {
 
 function StatusDot({ status }: { status: string }) {
   if (status === "running") {
-    return <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />;
+    return <span className="status-dot status-dot-running" />;
   }
   if (status === "success") {
-    return <span className="h-2 w-2 rounded-full bg-green-500" />;
+    return <span className="status-dot status-dot-success" />;
   }
-  return <span className="h-2 w-2 rounded-full bg-red-500" />;
+  return <span className="status-dot status-dot-error" />;
 }

@@ -12,6 +12,7 @@ test("builds session payload from run command and config defaults", () => {
     type: "run",
     repo: "https://github.com/example/app",
     prompt: "add rate limits",
+    provider: undefined,
     planModel: undefined,
     execModel: "executor",
     maxCost: undefined,
@@ -31,6 +32,7 @@ test("builds session payload from run command and config defaults", () => {
   }), {
     prompt: "add rate limits",
     repo: "https://github.com/example/app",
+    provider: "anthropic",
     plan_model: "planner",
     exec_model: "executor",
     max_cost: "$2",
@@ -58,6 +60,7 @@ test("creates sessions with bearer auth", async () => {
       type: "run",
       repo: "https://github.com/example/app",
       prompt: "add rate limits",
+      provider: "openai",
       planModel: undefined,
       execModel: undefined,
       maxCost: undefined,
@@ -80,6 +83,41 @@ test("creates sessions with bearer auth", async () => {
   assert.equal(calls[0].url, "https://codevil.example.com/sessions");
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.headers.Authorization, "Bearer secret");
+});
+
+test("includes error detail from JSON error responses", async () => {
+  await assert.rejects(
+    createSession(
+      {
+        endpoint: "https://codevil.example.com",
+        api_key: "secret",
+        defaults: {
+          plan_model: "planner",
+          exec_model: "executor",
+          provider: "anthropic",
+          max_cost: "$2",
+          max_time: "15m",
+          max_steps: 50,
+        },
+      },
+      {
+        type: "run",
+        repo: "https://github.com/example/app",
+        prompt: "test",
+        provider: undefined,
+        planModel: undefined,
+        execModel: undefined,
+        maxCost: undefined,
+        maxTime: undefined,
+        maxSteps: undefined,
+      },
+      async () => new Response(JSON.stringify({
+        error: "Failed to initialize session",
+        detail: "SQL storage unavailable",
+      }), { status: 500, headers: { "Content-Type": "application/json" } }),
+    ),
+    /SQL storage unavailable/,
+  );
 });
 
 test("converts HTTP session URLs into WebSocket URLs with cursor", () => {

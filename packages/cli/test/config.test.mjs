@@ -15,7 +15,9 @@ test("writes and reads config from ~/.codevil/config", async () => {
   const home = await mkdtemp(join(tmpdir(), "codevil-home-"));
 
   try {
-    const config = createConfig("https://codevil.example.com/", "secret");
+    const config = createConfig("https://codevil.example.com/", "secret", {
+      provider: "anthropic",
+    });
     await writeConfig(config, { home });
 
     assert.equal(getConfigPath({ home }), join(home, ".codevil", "config"));
@@ -26,6 +28,14 @@ test("writes and reads config from ~/.codevil/config", async () => {
   } finally {
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test("defaults new configs to OpenAI GPT-5.4", () => {
+  const config = createConfig("https://codevil.example.com/", "secret");
+
+  assert.equal(config.defaults.provider, "openai");
+  assert.equal(config.defaults.plan_model, "gpt-5.4");
+  assert.equal(config.defaults.exec_model, "gpt-5.4");
 });
 
 test("reports missing config with init guidance", async () => {

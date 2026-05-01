@@ -10,6 +10,7 @@ export interface CreateSessionResponse {
 export interface SessionPayload {
   prompt: string;
   repo: string;
+  provider: string;
   plan_model: string;
   exec_model: string;
   max_cost: string;
@@ -30,6 +31,7 @@ export function buildSessionPayload(command: RunCommand, config: Config): Sessio
   return {
     prompt: command.prompt,
     repo: command.repo,
+    provider: command.provider ?? config.defaults.provider,
     plan_model: command.planModel ?? config.defaults.plan_model,
     exec_model: command.execModel ?? config.defaults.exec_model,
     max_cost: command.maxCost ?? config.defaults.max_cost,
@@ -54,7 +56,14 @@ export async function createSession(
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to create session: ${response.status} ${await response.text()}`);
+    let detail = "";
+    try {
+      const errBody = await response.json() as Record<string, unknown>;
+      detail = String(errBody.detail ?? errBody.error ?? "");
+    } catch {
+      detail = await response.text();
+    }
+    throw new Error(`Failed to create session: ${response.status}${detail ? ` — ${detail}` : ""}`);
   }
 
   const body = await response.json() as unknown;

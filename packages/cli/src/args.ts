@@ -2,17 +2,20 @@ export interface InitCommand {
   type: "init";
   endpoint?: string;
   apiKey?: string;
+  provider?: string;
 }
 
 export interface RunCommand {
   type: "run";
   repo: string;
   prompt: string;
+  provider?: string;
   planModel?: string;
   execModel?: string;
   maxCost?: string;
   maxTime?: string;
   maxSteps?: number;
+  debug?: boolean;
 }
 
 export interface HelpCommand {
@@ -21,8 +24,11 @@ export interface HelpCommand {
 
 export type Command = InitCommand | RunCommand | HelpCommand;
 
+const runFlags = new Set(["--debug"]);
+
 const runOptions = new Set([
   "--repo",
+  "--provider",
   "--plan-model",
   "--exec-model",
   "--max-cost",
@@ -30,7 +36,7 @@ const runOptions = new Set([
   "--max-steps",
 ]);
 
-const initOptions = new Set(["--endpoint", "--api-key"]);
+const initOptions = new Set(["--endpoint", "--api-key", "--provider"]);
 
 export function parseCommand(argv: string[]): Command {
   const [command, ...rest] = argv;
@@ -57,6 +63,7 @@ function parseInit(argv: string[]): InitCommand {
 
     if (arg === "--endpoint") parsed.endpoint = value;
     if (arg === "--api-key") parsed.apiKey = value;
+    if (arg === "--provider") parsed.provider = value;
   }
 
   return parsed;
@@ -70,6 +77,11 @@ function parseRun(argv: string[]): RunCommand {
     const arg = argv[index];
 
     if (arg.startsWith("--")) {
+      if (runFlags.has(arg)) {
+        if (arg === "--debug") parsed.debug = true;
+        continue;
+      }
+
       if (!runOptions.has(arg)) throw new Error(`Unknown option: ${arg}`);
 
       const value = readOptionValue(argv, index, arg);
@@ -78,6 +90,9 @@ function parseRun(argv: string[]): RunCommand {
       switch (arg) {
         case "--repo":
           parsed.repo = value;
+          break;
+        case "--provider":
+          parsed.provider = value;
           break;
         case "--plan-model":
           parsed.planModel = value;
@@ -109,11 +124,13 @@ function parseRun(argv: string[]): RunCommand {
     type: "run",
     repo: parsed.repo,
     prompt,
+    provider: parsed.provider,
     planModel: parsed.planModel,
     execModel: parsed.execModel,
     maxCost: parsed.maxCost,
     maxTime: parsed.maxTime,
     maxSteps: parsed.maxSteps,
+    debug: parsed.debug,
   };
 }
 
@@ -136,7 +153,7 @@ function parsePositiveInteger(value: string, option: string): number {
 export function usage(): string {
   return [
     "Usage:",
-    "  codevil init [--endpoint URL] [--api-key KEY]",
-    "  codevil run --repo REPO_URL [--plan-model MODEL] [--exec-model MODEL] [--max-cost COST] [--max-time TIME] [--max-steps N] <prompt>",
+    "  codevil init [--endpoint URL] [--api-key KEY] [--provider PROVIDER]",
+    "  codevil run --repo REPO_URL [--provider PROVIDER] [--plan-model MODEL] [--exec-model MODEL] [--max-cost COST] [--max-time TIME] [--max-steps N] [--debug] <prompt>",
   ].join("\n");
 }

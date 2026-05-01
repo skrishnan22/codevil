@@ -6,6 +6,7 @@ import type { RunCommand } from "./args.js";
 import type { readConfig } from "./config.js";
 import { isCompletionEvent, parseEnvelope, renderEvent } from "./events.js";
 import {
+  buildSessionPayload,
   buildWebSocketUrl,
   createSession,
   type CreateSessionResponse,
@@ -16,15 +17,21 @@ type Config = Awaited<ReturnType<typeof readConfig>>;
 
 export interface RunnerIO {
   write(line: string): void;
+  debug(line: string): void;
   promptApproval(): Promise<CLIToDOMessage>;
 }
 
 export async function runSession(
   config: Config,
   command: RunCommand,
-  io: RunnerIO = defaultIO,
+  io: RunnerIO = buildDefaultIO(command.debug),
 ): Promise<CreateSessionResponse> {
+  const payload = buildSessionPayload(command, config);
+  io.debug(`POST ${config.endpoint}/sessions`);
+  io.debug(`  payload: ${JSON.stringify(payload)}`);
+
   const session = await createSession(config, command);
+  io.debug(`  response: ${JSON.stringify(session)}`);
   io.write(`Connected session ${session.session_id}`);
 
   let cursor = 0;
@@ -48,21 +55,37 @@ async function connectUntilClose(
 ): Promise<boolean> {
   return new Promise((resolve, reject) => {
     let completed = false;
-    const ws = new WebSocket(buildWebSocketUrl(wsUrl, cursor), {
+    const url = buildWebSocketUrl(wsUrl, cursor);
+    io.debug(`ws connecting: ${url}`);
+
+    const ws = new WebSocket(url, {
       headers: {
         Authorization: `Bearer ${apiKey}`,
       },
     });
 
+    ws.on("open", () => {
+      io.debug("ws open");
+    });
+
     ws.on("message", (data) => {
-      void handleMessage(data.toString(), ws, io, setCursor).then((isComplete) => {
+      const raw = data.toString();
+      io.debug(`ws ← ${raw}`);
+      void handleMessage(raw, ws, io, setCursor).then((isComplete) => {
         completed = completed || isComplete;
         if (completed) ws.close(1000, "completed");
       }, reject);
     });
 
-    ws.on("error", reject);
-    ws.on("close", () => resolve(completed));
+    ws.on("error", (error) => {
+      io.debug(`ws error: ${error.message}`);
+      reject(error);
+    });
+
+    ws.on("close", (code, reason) => {
+      io.debug(`ws closed: code=${code} reason=${reason.toString()}`);
+      resolve(completed);
+    });
   });
 }
 
@@ -80,15 +103,24 @@ async function handleMessage(
   }
 
   if (envelope.event.type === "plan_ready") {
-    ws.send(JSON.stringify(await io.promptApproval()));
+    const approval = await io.promptApproval();
+    io.debug(`ws → ${JSON.stringify(approval)}`);
+    ws.send(JSON.stringify(approval));
   }
 
   return isCompletionEvent(envelope.event);
 }
 
-const defaultIO: RunnerIO = {
-  write(line: string): void {
-    console.log(line);
-  },
-  promptApproval: promptForApproval,
-};
+function buildDefaultIO(debug?: boolean): RunnerIO {
+  return {
+    write(line: string): void {
+      console.log(line);
+    },
+    debug(line: string): void {
+      if (debug) {
+        console.error(`[debug] ${line}`);
+      }
+    },
+    promptApproval: promptForApproval,
+  };
+}

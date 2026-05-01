@@ -13,11 +13,18 @@ export function getConfigPath(options: ConfigPathOptions = {}): string {
   return options.configPath ?? join(options.home ?? homedir(), ".codevil", "config");
 }
 
-export function createConfig(endpoint: string, apiKey: string): Config {
+export interface CreateConfigOptions {
+  provider?: string;
+}
+
+export function createConfig(endpoint: string, apiKey: string, options: CreateConfigOptions = {}): Config {
   return {
     endpoint: normalizeEndpoint(endpoint),
     api_key: apiKey,
-    defaults: { ...DEFAULT_CONFIG },
+    defaults: {
+      ...DEFAULT_CONFIG,
+      provider: options.provider ?? DEFAULT_CONFIG.provider,
+    },
   };
 }
 

@@ -8,6 +8,8 @@ test("parses run command with repo, prompt, models, and guard options", () => {
     "run",
     "--repo",
     "https://github.com/example/app",
+    "--provider",
+    "anthropic",
     "--plan-model",
     "planner",
     "--exec-model",
@@ -27,11 +29,13 @@ test("parses run command with repo, prompt, models, and guard options", () => {
     type: "run",
     repo: "https://github.com/example/app",
     prompt: "add rate limits",
+    provider: "anthropic",
     planModel: "planner",
     execModel: "executor",
     maxCost: "$5",
     maxTime: "30m",
     maxSteps: 75,
+    debug: undefined,
   });
 });
 
@@ -42,12 +46,15 @@ test("parses init command with optional non-interactive values", () => {
     "https://codevil.example.com/",
     "--api-key",
     "secret",
+    "--provider",
+    "openai",
   ]);
 
   assert.deepEqual(command, {
     type: "init",
     endpoint: "https://codevil.example.com/",
     apiKey: "secret",
+    provider: "openai",
   });
 });
 

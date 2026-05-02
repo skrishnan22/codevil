@@ -47,14 +47,20 @@ test("parses init command with optional non-interactive values", () => {
     "--api-key",
     "secret",
     "--provider",
-    "openai",
+    "opencode-go",
+    "--plan-model",
+    "kimi-k2.6",
+    "--exec-model",
+    "kimi-k2.6",
   ]);
 
   assert.deepEqual(command, {
     type: "init",
     endpoint: "https://codevil.example.com/",
     apiKey: "secret",
-    provider: "openai",
+    provider: "opencode-go",
+    planModel: "kimi-k2.6",
+    execModel: "kimi-k2.6",
   });
 });
 

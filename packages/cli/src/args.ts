@@ -3,6 +3,8 @@ export interface InitCommand {
   endpoint?: string;
   apiKey?: string;
   provider?: string;
+  planModel?: string;
+  execModel?: string;
 }
 
 export interface RunCommand {
@@ -36,7 +38,7 @@ const runOptions = new Set([
   "--max-steps",
 ]);
 
-const initOptions = new Set(["--endpoint", "--api-key", "--provider"]);
+const initOptions = new Set(["--endpoint", "--api-key", "--provider", "--plan-model", "--exec-model"]);
 
 export function parseCommand(argv: string[]): Command {
   const [command, ...rest] = argv;
@@ -64,6 +66,8 @@ function parseInit(argv: string[]): InitCommand {
     if (arg === "--endpoint") parsed.endpoint = value;
     if (arg === "--api-key") parsed.apiKey = value;
     if (arg === "--provider") parsed.provider = value;
+    if (arg === "--plan-model") parsed.planModel = value;
+    if (arg === "--exec-model") parsed.execModel = value;
   }
 
   return parsed;
@@ -153,7 +157,7 @@ function parsePositiveInteger(value: string, option: string): number {
 export function usage(): string {
   return [
     "Usage:",
-    "  codevil init [--endpoint URL] [--api-key KEY] [--provider PROVIDER]",
+    "  codevil init [--endpoint URL] [--api-key KEY] [--provider PROVIDER] [--plan-model MODEL] [--exec-model MODEL]",
     "  codevil run --repo REPO_URL [--provider PROVIDER] [--plan-model MODEL] [--exec-model MODEL] [--max-cost COST] [--max-time TIME] [--max-steps N] [--debug] <prompt>",
   ].join("\n");
 }

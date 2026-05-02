@@ -16,7 +16,11 @@ async function main(argv: string[]): Promise<void> {
   if (command.type === "init") {
     const endpoint = command.endpoint ?? await promptForText("Worker endpoint URL: ");
     const apiKey = command.apiKey ?? await promptForText("API key: ");
-    await writeConfig(createConfig(endpoint, apiKey, { provider: command.provider }));
+    await writeConfig(createConfig(endpoint, apiKey, {
+      provider: command.provider,
+      planModel: command.planModel,
+      execModel: command.execModel,
+    }));
     console.log("Wrote ~/.codevil/config");
     return;
   }

@@ -15,6 +15,8 @@ export function getConfigPath(options: ConfigPathOptions = {}): string {
 
 export interface CreateConfigOptions {
   provider?: string;
+  planModel?: string;
+  execModel?: string;
 }
 
 export function createConfig(endpoint: string, apiKey: string, options: CreateConfigOptions = {}): Config {
@@ -24,6 +26,8 @@ export function createConfig(endpoint: string, apiKey: string, options: CreateCo
     defaults: {
       ...DEFAULT_CONFIG,
       provider: options.provider ?? DEFAULT_CONFIG.provider,
+      plan_model: options.planModel ?? DEFAULT_CONFIG.plan_model,
+      exec_model: options.execModel ?? DEFAULT_CONFIG.exec_model,
     },
   };
 }

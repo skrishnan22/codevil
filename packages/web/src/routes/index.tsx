@@ -17,6 +17,11 @@ const SESSIONS_KEY = "codevil_sessions";
 const MODEL_PREFS_KEY = "codevil_model_prefs";
 
 const MODEL_OPTIONS = [
+  "kimi-k2.6",
+  "kimi-k2.5",
+  "kimi-for-coding",
+  "kimi-k2-thinking",
+  "glm-5.1",
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.3-codex",
@@ -148,6 +153,8 @@ function HomePage() {
               onChange={(e) => setProvider(e.target.value)}
               className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
+              <option value="opencode-go">OpenCode Go</option>
+              <option value="kimi-coding">Kimi For Coding</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
             </select>

@@ -112,6 +112,24 @@ test("maps sandbox protocol messages to CLI events", () => {
   assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "agent_event", event: { type: "turn_start" } }), [
     { type: "agent_event", event: { type: "turn_start" } },
   ]);
+  assert.deepEqual(mapSandboxMessageToCLIEvents({
+    type: "credential_request",
+    request_id: "cred_1",
+    protocol: "https",
+    host: "github.com",
+    path: "acme/app.git",
+  }), [
+    { type: "status", message: "Credential requested for github.com." },
+  ]);
+  assert.deepEqual(mapSandboxMessageToCLIEvents({
+    type: "branch_pushed",
+    branch: "codevil/change",
+    base_branch: "main",
+    pr_title: "Change",
+    pr_body: "Plan",
+  }), [
+    { type: "status", message: "Branch pushed: codevil/change." },
+  ]);
   assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "pr_created", url: "https://github.com/acme/app/pull/1" }), [
     { type: "complete", pr_url: "https://github.com/acme/app/pull/1" },
   ]);

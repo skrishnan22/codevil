@@ -15,12 +15,14 @@ import {
   provisionSandbox,
   readProcessLogs,
 } from "./sandbox.js";
+import { createDraftPullRequest, credentialRequestAllowed } from "./github.js";
 import { redactEvent } from "./redaction.js";
 
 interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
   CODEVIL_API_KEY: string;
   CODEVIL_LLM_KEY?: string;
+  GITHUB_PAT?: string;
 }
 
 interface SessionMeta {
@@ -61,7 +63,7 @@ export class Orchestrator extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.workerEnv = env;
-    this.redactionSecrets = [env.CODEVIL_API_KEY, env.CODEVIL_LLM_KEY].filter((secret): secret is string => Boolean(secret));
+    this.redactionSecrets = [env.CODEVIL_API_KEY, env.CODEVIL_LLM_KEY, env.GITHUB_PAT].filter((secret): secret is string => Boolean(secret));
     this.sql = ctx.storage.sql;
 
     this.sql.exec(`
@@ -183,7 +185,7 @@ export class Orchestrator extends DurableObject<Env> {
     if (typeof message !== "string") return;
 
     if (this.ctx.getWebSockets("sandbox").includes(ws)) {
-      this.handleSandboxSocketMessage(ws, message);
+      await this.handleSandboxSocketMessage(ws, message);
       return;
     }
 
@@ -418,7 +420,7 @@ export class Orchestrator extends DurableObject<Env> {
     ws.send(JSON.stringify({ type: "init", repo: this.meta.repo } satisfies DOToSandboxMessage));
   }
 
-  private handleSandboxSocketMessage(ws: WebSocket, message: string): void {
+  private async handleSandboxSocketMessage(ws: WebSocket, message: string): Promise<void> {
     let parsed: SandboxToDOMessage;
     try {
       parsed = JSON.parse(message);
@@ -456,6 +458,12 @@ export class Orchestrator extends DurableObject<Env> {
         return;
       case "verification_failed":
         this.handleSandboxVerificationFailed(parsed.attempts, parsed.last_error);
+        return;
+      case "credential_request":
+        this.handleCredentialRequest(ws, parsed);
+        return;
+      case "branch_pushed":
+        await this.handleBranchPushed(parsed.branch, parsed.base_branch, parsed.pr_title, parsed.pr_body);
         return;
       case "pr_created":
         if (this.transition("completed")) {
@@ -579,6 +587,62 @@ export class Orchestrator extends DurableObject<Env> {
         commit_message: `Implement ${this.meta.prompt}`,
         pr_title: this.meta.prompt,
         pr_body: this.meta.latest_plan ?? this.meta.prompt,
+      });
+    }
+  }
+
+  private handleCredentialRequest(ws: WebSocket, request: Extract<SandboxToDOMessage, { type: "credential_request" }>): void {
+    if (!this.meta) return;
+
+    if (!this.workerEnv.GITHUB_PAT) {
+      ws.send(JSON.stringify({
+        type: "credential_response",
+        request_id: request.request_id,
+        error: "GitHub credentials are not configured.",
+      } satisfies DOToSandboxMessage));
+      return;
+    }
+
+    if (!credentialRequestAllowed(this.meta.repo, request)) {
+      ws.send(JSON.stringify({
+        type: "credential_response",
+        request_id: request.request_id,
+        error: "Credential request does not match this session repository.",
+      } satisfies DOToSandboxMessage));
+      return;
+    }
+
+    ws.send(JSON.stringify({
+      type: "credential_response",
+      request_id: request.request_id,
+      username: "x-access-token",
+      password: this.workerEnv.GITHUB_PAT,
+    } satisfies DOToSandboxMessage));
+  }
+
+  private async handleBranchPushed(branch: string, baseBranch: string, prTitle: string, prBody: string): Promise<void> {
+    if (!this.meta) return;
+    if (this.meta.state !== "creating_pr") return;
+
+    try {
+      if (!this.workerEnv.GITHUB_PAT) throw new Error("GitHub credentials are not configured.");
+      const prUrl = await createDraftPullRequest({
+        repo: this.meta.repo,
+        token: this.workerEnv.GITHUB_PAT,
+        branch,
+        baseBranch,
+        title: prTitle,
+        body: prBody,
+      });
+
+      if (this.transition("completed")) {
+        this.appendAndBroadcast({ type: "complete", pr_url: prUrl });
+      }
+    } catch (error) {
+      this.transition("failed");
+      this.appendAndBroadcast({
+        type: "error",
+        message: error instanceof Error ? error.message : String(error),
       });
     }
   }

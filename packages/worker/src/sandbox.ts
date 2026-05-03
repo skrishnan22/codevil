@@ -157,6 +157,8 @@ export function mapSandboxMessageToCLIEvents(message: SandboxToDOMessage): DOToC
       }];
     case "credential_request":
       return [{ type: "status", message: `Credential requested for ${message.host}.` }];
+    case "branch_pushed":
+      return [{ type: "status", message: `Branch pushed: ${message.branch}.` }];
     case "pr_created":
       return [{ type: "complete", pr_url: message.url }];
     case "error":

@@ -61,18 +61,21 @@ export interface AgentDriverFactory {
 }
 
 export interface GitDriver {
-  clone(repo: string, destination: string, onProgress: (line: string) => void): Promise<void>;
+  clone(repo: string, destination: string, onProgress: (line: string) => void, credential?: GitCredential): Promise<void>;
   defaultBranch(cwd: string): Promise<string>;
-  createPullRequest(options: CreatePullRequestOptions): Promise<string>;
+  pushBranch(options: PushBranchOptions): Promise<void>;
 }
 
-export interface CreatePullRequestOptions {
+export interface GitCredential {
+  username: string;
+  password: string;
+}
+
+export interface PushBranchOptions {
   cwd: string;
   branch: string;
   commitMessage: string;
-  prTitle: string;
-  prBody: string;
-  baseBranch: string;
+  credential?: GitCredential;
 }
 
 export interface SandboxRuntimeOptions {
@@ -84,6 +87,7 @@ export interface SandboxRuntimeOptions {
   git: GitDriver;
   verifier?: Verifier;
   commandRunner?: CommandRunner;
+  credentialTimeoutMs?: number;
 }
 
 export class SandboxRuntime {
@@ -95,9 +99,15 @@ export class SandboxRuntime {
   private readonly git: GitDriver;
   private readonly verifier: Verifier;
   private readonly commandRunner: CommandRunner;
+  private readonly credentialTimeoutMs: number;
   private repoDir: string | undefined;
+  private repoUrl: string | undefined;
   private defaultBranchName: string | undefined;
   private agent: AgentDriver | undefined;
+  private credentialRequests = new Map<string, {
+    resolve(credential: GitCredential | undefined): void;
+    timeout: ReturnType<typeof setTimeout>;
+  }>();
 
   constructor(options: SandboxRuntimeOptions) {
     this.workspace = options.workspace;
@@ -108,6 +118,7 @@ export class SandboxRuntime {
     this.git = options.git;
     this.commandRunner = options.commandRunner ?? new ShellCommandRunner();
     this.verifier = options.verifier ?? new RepositoryVerifier(this.commandRunner);
+    this.credentialTimeoutMs = options.credentialTimeoutMs ?? 10_000;
   }
 
   async handleMessage(message: DOToSandboxMessage): Promise<void> {
@@ -129,7 +140,7 @@ export class SandboxRuntime {
           await this.handleCreatePullRequest(message);
           return;
         case "credential_response":
-          this.send({ type: "status", message: "Received credential response." });
+          this.handleCredentialResponse(message);
           return;
       }
     } catch (error) {
@@ -147,11 +158,13 @@ export class SandboxRuntime {
   private async handleInit(repo: string): Promise<void> {
     const repoDir = join(this.workspace, "repo");
     this.repoDir = repoDir;
+    this.repoUrl = repo;
 
     this.send({ type: "clone_started" });
+    const credential = await this.requestCredential(repo);
     await this.git.clone(repo, repoDir, (line) => {
       this.send({ type: "clone_progress", line });
-    });
+    }, credential);
 
     await this.setupRepository(repoDir);
 
@@ -275,16 +288,55 @@ export class SandboxRuntime {
   }
 
   private async handleCreatePullRequest(message: Extract<DOToSandboxMessage, { type: "create_pr" }>): Promise<void> {
-    const url = await this.git.createPullRequest({
+    const credential = this.repoUrl ? await this.requestCredential(this.repoUrl) : undefined;
+    await this.git.pushBranch({
       cwd: this.requireRepo(),
       branch: message.branch,
       commitMessage: message.commit_message,
-      prTitle: message.pr_title,
-      prBody: message.pr_body,
-      baseBranch: this.defaultBranchName ?? "main",
+      credential,
     });
 
-    this.send({ type: "pr_created", url });
+    this.send({
+      type: "branch_pushed",
+      branch: message.branch,
+      base_branch: this.defaultBranchName ?? "main",
+      pr_title: message.pr_title,
+      pr_body: message.pr_body,
+    });
+  }
+
+  private async requestCredential(repo: string): Promise<GitCredential | undefined> {
+    if (this.credentialTimeoutMs <= 0) return undefined;
+    const request = credentialRequestFromRepo(repo);
+    if (!request) return undefined;
+
+    const requestId = `cred_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    this.send({ type: "credential_request", request_id: requestId, ...request });
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.credentialRequests.delete(requestId);
+        resolve(undefined);
+      }, this.credentialTimeoutMs);
+
+      this.credentialRequests.set(requestId, { resolve, timeout });
+    });
+  }
+
+  private handleCredentialResponse(message: Extract<DOToSandboxMessage, { type: "credential_response" }>): void {
+    const pending = this.credentialRequests.get(message.request_id);
+    if (!pending) return;
+
+    clearTimeout(pending.timeout);
+    this.credentialRequests.delete(message.request_id);
+
+    if (message.error || !message.username || !message.password) {
+      this.send({ type: "status", message: `Credential request denied: ${message.error ?? "missing credential"}` });
+      pending.resolve(undefined);
+      return;
+    }
+
+    pending.resolve({ username: message.username, password: message.password });
   }
 
   private requireRepo(): string {
@@ -295,6 +347,20 @@ export class SandboxRuntime {
   private requireAgent(): AgentDriver {
     if (!this.agent) throw new Error("Agent session has not been started");
     return this.agent;
+  }
+}
+
+function credentialRequestFromRepo(repo: string): { protocol: "https"; host: string; path: string } | null {
+  try {
+    const url = new URL(repo);
+    if (url.protocol !== "https:") return null;
+    return {
+      protocol: "https",
+      host: url.hostname,
+      path: url.pathname.replace(/^\/+/, ""),
+    };
+  } catch {
+    return null;
   }
 }
 

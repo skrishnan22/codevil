@@ -25,6 +25,7 @@ test("init clones the repo and reports clone progress", async () => {
     send: (message) => sent.push(message),
     agentFactory: () => new FakeAgentDriver(),
     git,
+    credentialTimeoutMs: 0,
   });
 
   await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
@@ -52,6 +53,7 @@ test("init runs repository setup after clone", async () => {
     agentFactory: () => new FakeAgentDriver(),
     git,
     commandRunner,
+    credentialTimeoutMs: 0,
   });
 
   try {
@@ -71,6 +73,39 @@ test("init runs repository setup after clone", async () => {
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
+});
+
+test("init uses credential_response for authenticated GitHub clone", async () => {
+  const sent = [];
+  const git = new FakeGitDriver();
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => new FakeAgentDriver(),
+    git,
+  });
+
+  const init = runtime.handleMessage({ type: "init", repo: "https://github.com/example/app.git" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const request = sent.find((message) => message.type === "credential_request");
+  assert.equal(request.host, "github.com");
+  assert.equal(request.path, "example/app.git");
+
+  await runtime.handleMessage({
+    type: "credential_response",
+    request_id: request.request_id,
+    username: "x-access-token",
+    password: "ghp_secret",
+  });
+  await init;
+
+  assert.deepEqual(git.calls[0], [
+    "clone",
+    "https://github.com/example/app.git",
+    "/workspace/repo",
+    { username: "x-access-token", password: "ghp_secret" },
+  ]);
 });
 
 test("detectSetupCommand prefers explicit setup script, then package manager lockfiles", async () => {
@@ -137,6 +172,7 @@ test("init streams setup command output", async () => {
     agentFactory: () => new FakeAgentDriver(),
     git,
     commandRunner,
+    credentialTimeoutMs: 0,
   });
 
   try {
@@ -180,6 +216,7 @@ test("plan starts a read-only Pi session, forwards agent events, and sends plan_
     send: (message) => sent.push(message),
     agentFactory: () => agent,
     git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
   });
 
   await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
@@ -217,6 +254,7 @@ test("refine_plan reuses the active agent session", async () => {
     send: (message) => sent.push(message),
     agentFactory: () => agent,
     git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
   });
 
   await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
@@ -244,6 +282,7 @@ test("execute switches to coding tools and reports execution completion", async 
     send: (message) => sent.push(message),
     agentFactory: () => agent,
     git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
   });
 
   await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
@@ -281,6 +320,7 @@ test("execute runs verification and retries fixes before reporting completion", 
     agentFactory: () => agent,
     git: new FakeGitDriver(),
     verifier,
+    credentialTimeoutMs: 0,
   });
 
   await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
@@ -322,6 +362,7 @@ test("execute reports verification_failed after five failed attempts", async () 
     agentFactory: () => agent,
     git: new FakeGitDriver(),
     verifier,
+    credentialTimeoutMs: 0,
   });
 
   await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
@@ -337,6 +378,41 @@ test("execute reports verification_failed after five failed attempts", async () 
   });
 });
 
+test("create_pr pushes a branch and reports branch_pushed for DO-owned PR creation", async () => {
+  const sent = [];
+  const git = new FakeGitDriver();
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => new FakeAgentDriver(),
+    git,
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  await runtime.handleMessage({
+    type: "create_pr",
+    branch: "codevil/change",
+    commit_message: "Implement change",
+    pr_title: "Change",
+    pr_body: "Plan",
+  });
+
+  assert.deepEqual(git.calls.slice(-1), [[
+    "pushBranch",
+    "/workspace/repo",
+    "codevil/change",
+    "Implement change",
+  ]]);
+  assert.deepEqual(sent.at(-1), {
+    type: "branch_pushed",
+    branch: "codevil/change",
+    base_branch: "main",
+    pr_title: "Change",
+    pr_body: "Plan",
+  });
+});
+
 class FakeGitDriver {
   calls = [];
   options;
@@ -345,8 +421,8 @@ class FakeGitDriver {
     this.options = options;
   }
 
-  async clone(repo, destination, onProgress) {
-    this.calls.push(["clone", repo, destination]);
+  async clone(repo, destination, onProgress, credential) {
+    this.calls.push(credential ? ["clone", repo, destination, credential] : ["clone", repo, destination]);
     if (this.options.createCodevilSetup) {
       await mkdir(destination, { recursive: true });
       await mkdir(join(destination, ".codevil"), { recursive: true });
@@ -358,6 +434,10 @@ class FakeGitDriver {
   async defaultBranch(cwd) {
     this.calls.push(["defaultBranch", cwd]);
     return "main";
+  }
+
+  async pushBranch(options) {
+    this.calls.push(["pushBranch", options.cwd, options.branch, options.commitMessage]);
   }
 }
 

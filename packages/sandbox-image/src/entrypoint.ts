@@ -4,7 +4,7 @@ import WebSocket from "ws";
 
 import type { DOToSandboxMessage, SandboxToDOMessage } from "@codevil/shared";
 
-import { ShellGitDriver } from "./git-driver.js";
+import { configureDefaultGitIdentity, ShellGitDriver } from "./git-driver.js";
 import { PiAgentDriver } from "./pi-driver.js";
 import { SandboxRuntime } from "./runtime.js";
 import { readAndUnlinkSecret } from "./secrets.js";
@@ -36,6 +36,8 @@ export async function startEntrypoint(env: EntrypointEnv = process.env): Promise
   env = loadEnv(env);
 
   if (!env.CODEVIL_DO_WS_URL) throw new Error("CODEVIL_DO_WS_URL is required");
+
+  await configureDefaultGitIdentity();
 
   console.log("codevil-sandbox: connecting to", env.CODEVIL_DO_WS_URL);
   const llmKey = await readAndUnlinkSecret(env.CODEVIL_LLM_KEY_FILE ?? "/run/secrets/llm_key");
@@ -69,6 +71,10 @@ export async function startEntrypoint(env: EntrypointEnv = process.env): Promise
   ws.on("message", (data) => {
     const message = JSON.parse(data.toString()) as DOToSandboxMessage;
     console.log("codevil-sandbox: received message", message.type);
+    if (message.type === "credential_response") {
+      void runtime.handleMessage(message);
+      return;
+    }
     queue = queue.then(() => runtime.handleMessage(message));
   });
 

@@ -2,18 +2,30 @@ import { mkdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { dirname } from "node:path";
 
-import type { CreatePullRequestOptions, GitDriver } from "./runtime.js";
+import type { GitCredential, GitDriver, PushBranchOptions } from "./runtime.js";
+
+export const DEFAULT_GIT_AUTHOR_NAME = "Codevil Coder";
+export const DEFAULT_GIT_AUTHOR_EMAIL = "coder@codevil.com";
+
+export async function configureDefaultGitIdentity(): Promise<void> {
+  await run("git", ["config", "--global", "user.name", DEFAULT_GIT_AUTHOR_NAME]);
+  await run("git", ["config", "--global", "user.email", DEFAULT_GIT_AUTHOR_EMAIL]);
+}
 
 export class ShellGitDriver implements GitDriver {
   async clone(
     repo: string,
     destination: string,
     onProgress: (line: string) => void,
+    credential?: GitCredential,
   ): Promise<void> {
     await mkdir(dirname(destination), { recursive: true });
-    await run("git", ["clone", "--progress", repo, destination], {
+    await run("git", ["clone", "--progress", credential ? withCredential(repo, credential) : repo, destination], {
       onStderr: onProgress,
     });
+    if (credential) {
+      await run("git", ["remote", "set-url", "origin", repo], { cwd: destination });
+    }
   }
 
   async defaultBranch(cwd: string): Promise<string> {
@@ -21,26 +33,25 @@ export class ShellGitDriver implements GitDriver {
     return result.stdout.trim().replace(/^origin\//, "") || "main";
   }
 
-  async createPullRequest(options: CreatePullRequestOptions): Promise<string> {
+  async pushBranch(options: PushBranchOptions): Promise<void> {
     await run("git", ["checkout", "-b", options.branch], { cwd: options.cwd });
     await run("git", ["add", "-A"], { cwd: options.cwd });
     await run("git", ["commit", "-m", options.commitMessage], { cwd: options.cwd });
+    if (options.credential) {
+      const origin = (await run("git", ["remote", "get-url", "origin"], { cwd: options.cwd })).stdout.trim();
+      await run("git", ["push", "-u", withCredential(origin, options.credential), options.branch], { cwd: options.cwd });
+      return;
+    }
+
     await run("git", ["push", "-u", "origin", options.branch], { cwd: options.cwd });
-
-    const result = await run("gh", [
-      "pr",
-      "create",
-      "--draft",
-      "--base",
-      options.baseBranch,
-      "--title",
-      options.prTitle,
-      "--body",
-      options.prBody,
-    ], { cwd: options.cwd });
-
-    return result.stdout.trim();
   }
+}
+
+function withCredential(repo: string, credential: GitCredential): string {
+  const url = new URL(repo);
+  url.username = credential.username;
+  url.password = credential.password;
+  return url.toString();
 }
 
 interface RunOptions {

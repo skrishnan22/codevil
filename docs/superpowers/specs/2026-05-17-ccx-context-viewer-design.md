@@ -149,12 +149,58 @@ afterAssistantTurn(msg) {
 All handlers are pure `(event, state) → {added, removed}`. State mutation
 happens in one place. Easy to unit-test against captured JSONL fixtures.
 
+### Span model for history
+
+The `history` bucket isn't a flat list. We structure it as a tree of spans,
+adapted from Motus's three-class model (task / model / tool):
+
+- **Task span** — a logical grouping. The root session is one task; each
+  subagent invocation creates a child task span. Tasks have a label
+  (subagent type name, or "main session"), a start/end timestamp, and own a
+  list of child spans.
+- **Model span** — one assistant turn. Owns the assistant message content
+  (text, thinking, tool_use blocks), the `usage` it produced, and any tool
+  spans that fired during the turn. A user message immediately preceding is
+  also attached to the model span as its prompt.
+- **Tool span** — a single `tool_use` paired with its matching `tool_result`.
+  Owns: tool name, input args, result content, `is_error` flag, start/end
+  timestamps.
+
+```ts
+type Span =
+  | { kind: "task"; id: string; label: string; startedAt: number; endedAt?: number; children: Span[] }
+  | { kind: "model"; id: string; turnIndex: number; usage: Usage; content: Block[]; tools: Span[]; startedAt: number; endedAt: number }
+  | { kind: "tool"; id: string; name: string; input: unknown; result: unknown; isError: boolean; startedAt: number; endedAt: number }
+```
+
+The history bucket renders as a navigable span tree in the Current tab's
+drill-down. The Timeline tab collapses model spans into single rows by
+default; expanding a row reveals its tool spans inline.
+
+### Latency tracking
+
+Every JSONL line carries a `timestamp`. We derive latency for each span:
+
+- **Model span latency** — time from preceding user message → first assistant
+  content block. Split into `time_to_first_token` (proxy: time to first
+  non-thinking block) and `total_response_time`.
+- **Tool span latency** — `tool_result.timestamp - tool_use.timestamp`.
+- **Thinking latency** — duration of any thinking block, computed similarly.
+
+Per tool name and per model, we maintain rolling median and MAD across the
+session. Any span with latency > median + 3·MAD is flagged with a small "slow"
+badge in the Timeline. No alerting, just visual surfacing.
+
+Latency is metadata on the span — never affects token attribution or the
+budget bar.
+
 ### Subagents (sidechains)
 
-When `isSidechain: true`, the line routes into `state.subSessions[sidechainId]`
-instead of `state.items`. The parent session's `history` bucket gets a single
-`Subagent: <type>` placeholder ContextItem pointing to that sub-session by
-id. Expanding it in the UI swaps the tree to show the subagent's transcript.
+When `isSidechain: true`, the line routes into a child **task span** rather
+than the main session's span tree. The parent task's children include a
+`task` span labelled `Subagent: <type>` that owns the subagent's entire span
+subtree (its model spans, its tool spans, recursively). Expanding the task
+span in the UI swaps in the subagent's view; collapsing returns to parent.
 
 ## Tokenizer
 
@@ -260,11 +306,14 @@ picker + permission-mode chip + live indicator. Tab strip: **Current** /
 
 ### Timeline tab
 
-Vertical event list, newest at top. Each entry shows timestamp, source-bucket
-color dot, label, and token delta. Compaction events shown as a horizontal
-divider annotated "context shrank by N tokens". Filter chips toggle bucket
-visibility. Clicking an entry focuses the corresponding item in the Current
-tree.
+Vertical span list, newest at top. Each entry shows timestamp, source-bucket
+color dot, label, token delta, and (for spans with measurable duration) a
+latency value with a "slow" badge for outliers. Model spans are shown
+collapsed by default with a "▸ N tools" hint; click to expand inline and
+reveal the tool spans nested underneath, each with its own latency and
+`is_error` indicator. Compaction events shown as a horizontal divider
+annotated "context shrank by N tokens". Filter chips toggle bucket
+visibility.
 
 ### Sessions tab
 
@@ -277,6 +326,11 @@ first user message snippet, total turns, peak context. Click to switch.
 - Click child leaf → detail pane.
 - Search box (⌘K) over all item labels.
 - Keys: `1`/`2`/`3` switch tabs, `j`/`k` move rows, `enter` opens detail.
+- **Synchronized views.** Selecting a span anywhere — Current tree, Timeline,
+  or detail pane — focuses the same span in the other views. A keyboard
+  shortcut (`g`) jumps the Timeline cursor to the currently-focused span.
+  This lets you flip between "where in the budget?" and "when did it
+  happen?" without losing your place.
 
 ## CLI
 
@@ -313,6 +367,8 @@ Browser auto-opens via `open` / `xdg-open` / `start` based on platform.
 | Permission errors reading `~/.claude/projects/`  | Single clear error, exit non-zero                                         |
 | SSE disconnect                                   | Browser auto-reconnects; server replays latest snapshot                   |
 | Attribution drift (`ratio` < 0.5 or > 2.0)       | Show raw counts + "attribution drift" warning banner                      |
+| Tool span with `is_error: true` on its result    | Red `error` badge on the tool span in Timeline and Current tree; detail pane surfaces error payload |
+| Tool span with no matching `tool_result`         | Tool span flagged as `pending` until result arrives; if session ends with it still pending, marked `orphaned` |
 
 ## Testing
 

@@ -1,11 +1,22 @@
 import { create } from "zustand";
-import type { SessionState, DOToCLIEvent, CLIToDOMessage } from "@codevil/shared";
+import type { SessionState, DOToCLIEvent, CLIToDOMessage, PreviewApp } from "@codevil/shared";
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
 import { projectEvents } from "../lib/event-mapper";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
+export type PreviewStatus = "idle" | "starting" | "ready" | "error";
+
+export interface PreviewState {
+  status: PreviewStatus;
+  url: string | null;
+  command: string | null;
+  port: number | null;
+  error: string | null;
+  apps: PreviewApp[];
+  selectedAppKey: string | null;
+}
 
 interface SessionStoreState {
   sessionId: string | null;
@@ -17,6 +28,7 @@ interface SessionStoreState {
   connectionStatus: ConnectionStatus;
   error: string | null;
   planApproved: boolean;
+  preview: PreviewState;
 }
 
 interface SessionStoreActions {
@@ -25,6 +37,10 @@ interface SessionStoreActions {
   approve: () => void;
   abort: () => void;
   refine: (feedback: string) => void;
+  startPreview: () => void;
+  stopPreview: () => void;
+  stopSession: () => void;
+  selectPreviewApp: (appKey: string) => void;
   disconnect: () => void;
   addUserMessage: (content: string) => void;
   reset: () => void;
@@ -42,6 +58,15 @@ const initialState: SessionStoreState = {
   connectionStatus: "disconnected",
   error: null,
   planApproved: false,
+  preview: {
+    status: "idle",
+    url: null,
+    command: null,
+    port: null,
+    error: null,
+    apps: [],
+    selectedAppKey: null,
+  },
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
@@ -86,6 +111,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         cursor: 0,
         error: null,
         planApproved: false,
+        preview: initialState.preview,
       }),
       sessionId,
       wsUrl,
@@ -103,11 +129,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         set((state) => {
           const nextPhase = inferPhase(envelope.event, state.sessionPhase);
           const planApproved = inferPlanApproved(envelope.event, state.planApproved);
+          const preview = reducePreviewState(state.preview, envelope.event);
 
           return {
             cursor: envelope.cursor,
             sessionPhase: nextPhase ?? state.sessionPhase,
             planApproved,
+            preview,
           };
         });
 
@@ -161,6 +189,41 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         },
       ],
     }));
+  },
+
+  startPreview() {
+    const { preview } = get();
+    const appKey = preview.selectedAppKey ?? preview.apps[0]?.key;
+    wsHandle?.send({ type: "preview_start", app_key: appKey });
+    set((state) => ({
+      preview: {
+        ...state.preview,
+        status: "starting",
+        error: null,
+        selectedAppKey: appKey ?? state.preview.selectedAppKey,
+      },
+    }));
+  },
+
+  stopPreview() {
+    wsHandle?.send({ type: "preview_stop" });
+    set((state) => ({
+      preview: {
+        ...initialState.preview,
+        apps: state.preview.apps,
+        selectedAppKey: state.preview.selectedAppKey,
+      },
+    }));
+  },
+
+  selectPreviewApp(appKey) {
+    set((state) => ({
+      preview: { ...state.preview, selectedAppKey: appKey },
+    }));
+  },
+
+  stopSession() {
+    wsHandle?.send({ type: "stop_session" });
   },
 
   disconnect() {
@@ -223,4 +286,51 @@ export function inferPlanApproved(event: DOToCLIEvent, current: boolean): boolea
   if (event.type === "phase" && event.phase === "executing") return true;
   if (event.type === "status" && event.message === "Plan approved. Starting execution.") return true;
   return current;
+}
+
+export function reducePreviewState(current: PreviewState, event: DOToCLIEvent): PreviewState {
+  switch (event.type) {
+    case "preview_starting":
+      return {
+        ...current,
+        status: "starting",
+        url: null,
+        command: event.command,
+        port: event.port,
+        error: null,
+      };
+    case "preview_ready":
+      return {
+        ...current,
+        status: "ready",
+        url: event.url,
+        command: event.command,
+        port: event.port,
+        error: null,
+      };
+    case "preview_error":
+      return {
+        ...current,
+        status: "error",
+        url: null,
+        error: event.message,
+      };
+    case "preview_stopped":
+      return {
+        ...initialState.preview,
+        apps: current.apps,
+        selectedAppKey: current.selectedAppKey,
+      };
+    case "preview_apps": {
+      const apps = event.apps;
+      const stillValid = current.selectedAppKey && apps.some((app) => app.key === current.selectedAppKey);
+      return {
+        ...current,
+        apps,
+        selectedAppKey: stillValid ? current.selectedAppKey : apps[0]?.key ?? null,
+      };
+    }
+    default:
+      return current;
+  }
 }

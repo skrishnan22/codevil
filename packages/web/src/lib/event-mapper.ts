@@ -100,6 +100,37 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
         },
       ];
 
+    case "preview_starting":
+      return [
+        {
+          id: uid(),
+          role: "system",
+          variant: "status",
+          content: `Starting preview: ${event.command}`,
+          timestamp: ts,
+        },
+      ];
+
+    case "preview_ready":
+      return [];
+
+    case "preview_error":
+      return [
+        {
+          id: uid(),
+          role: "system",
+          variant: "error",
+          content: event.message,
+          timestamp: ts,
+        },
+      ];
+
+    case "preview_stopped":
+      return [];
+
+    case "preview_apps":
+      return [];
+
     case "agent_event":
       return mapAgentEventToChat(event.event, ts);
   }

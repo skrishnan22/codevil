@@ -144,16 +144,6 @@
       0 0 0 4px hsl(var(--muted));
   }
 
-  .session-shell {
-    @apply flex flex-1 overflow-hidden;
-    height: calc(100vh - 3.5rem);
-    background-color: hsl(var(--muted) / 0.34);
-    background-image:
-      linear-gradient(hsl(var(--border) / 0.32) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--border) / 0.22) 1px, transparent 1px);
-    background-size: 36px 36px;
-  }
-
   .session-panel {
     @apply flex h-full min-h-0 flex-col bg-background/96;
   }

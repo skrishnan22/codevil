@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "test": "vitest run",
-    "deploy": "pnpm run build && wrangler pages deploy dist"
+    "deploy": "pnpm run build && wrangler pages deploy dist --project-name codevil-ui"
   },
   "dependencies": {
     "@codevil/shared": "workspace:*",

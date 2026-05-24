@@ -1,10 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import { loadConfig } from "@/lib/config";
 import { SessionTopBar } from "@/components/session/session-top-bar";
-import { LeftPane } from "@/components/session/left-pane";
-import { InspectorPane } from "@/components/session/inspector-pane";
+import { StatusStrip } from "@/components/session/StatusStrip";
+import { Timeline } from "@/components/session/Timeline";
+import { ChatInput } from "@/components/session/ChatInput";
+import { PlanSlideOut } from "@/components/session/PlanSlideOut";
+import { LivePreview } from "@/components/session/live-preview";
 
 export const Route = createFileRoute("/session/$id")({
   component: SessionPage,
@@ -13,6 +16,7 @@ export const Route = createFileRoute("/session/$id")({
 function SessionPage() {
   const { id } = Route.useParams();
   const { connectToSession, disconnect } = useSessionStore();
+  const [planOpen, setPlanOpen] = useState(false);
 
   useEffect(() => {
     const config = loadConfig();
@@ -28,9 +32,12 @@ function SessionPage() {
     <div className="session-shell">
       <SessionTopBar />
       <div className="session-body">
-        <LeftPane />
-        <InspectorPane />
+        <StatusStrip />
+        <LivePreview />
+        <Timeline onViewPlan={() => setPlanOpen(true)} />
+        <ChatInput />
       </div>
+      {planOpen && <PlanSlideOut onClose={() => setPlanOpen(false)} />}
     </div>
   );
 }

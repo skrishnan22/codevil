@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { inferPhase, inferPlanApproved, useSessionStore } from "../session-store";
+import { inferPhase, inferPlanApproved, reducePreviewState, useSessionStore } from "../session-store";
 
 describe("session event state inference", () => {
   afterEach(() => {
@@ -17,6 +17,59 @@ describe("session event state inference", () => {
         "awaiting_approval",
       ),
     ).toBe("failed");
+  });
+
+  it("tracks preview readiness and stop events", () => {
+    const idle = { status: "idle" as const, url: null, command: null, port: null, error: null, apps: [], selectedAppKey: null };
+    const starting = reducePreviewState(
+      idle,
+      { type: "preview_starting", command: "pnpm dev -- --host 0.0.0.0", port: 5173 },
+    );
+    expect(starting.status).toBe("starting");
+    expect(starting.command).toBe("pnpm dev -- --host 0.0.0.0");
+    expect(starting.port).toBe(5173);
+
+    const ready = reducePreviewState(starting, {
+      type: "preview_ready",
+      url: "https://preview.example/",
+      command: "pnpm dev -- --host 0.0.0.0",
+      port: 5173,
+    });
+    expect(ready.status).toBe("ready");
+    expect(ready.url).toBe("https://preview.example/");
+
+    expect(reducePreviewState(ready, { type: "preview_stopped" }).status).toBe("idle");
+  });
+
+  it("captures preview apps and defaults the selected app to the first entry", () => {
+    const idle = { status: "idle" as const, url: null, command: null, port: null, error: null, apps: [], selectedAppKey: null };
+    const withApps = reducePreviewState(idle, {
+      type: "preview_apps",
+      apps: [
+        { key: "apps/web", name: "web", cwd: "/workspace/repo/apps/web", framework: "next", command: "npm run dev -- --hostname 0.0.0.0 --port 3001", port: 3001 },
+        { key: "apps/landing", name: "landing", cwd: "/workspace/repo/apps/landing", framework: "next", command: "npm run dev -- --hostname 0.0.0.0 --port 3001", port: 3001 },
+      ],
+    });
+    expect(withApps.apps.length).toBe(2);
+    expect(withApps.selectedAppKey).toBe("apps/web");
+  });
+
+  it("keeps the user's selection when refreshing the app list", () => {
+    const apps = [
+      { key: "apps/web", name: "web", cwd: "/workspace/repo/apps/web", framework: "next" as const, command: "npm run dev", port: 3001 },
+      { key: "apps/landing", name: "landing", cwd: "/workspace/repo/apps/landing", framework: "next" as const, command: "npm run dev", port: 3001 },
+    ];
+    const selected = {
+      status: "idle" as const,
+      url: null,
+      command: null,
+      port: null,
+      error: null,
+      apps,
+      selectedAppKey: "apps/landing",
+    };
+    const refreshed = reducePreviewState(selected, { type: "preview_apps", apps });
+    expect(refreshed.selectedAppKey).toBe("apps/landing");
   });
 
   it("resets stale state when connecting to a different session", () => {

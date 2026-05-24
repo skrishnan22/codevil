@@ -1,5 +1,4 @@
 import { useSessionStore } from "@/stores/session-store";
-import { useCallback, useEffect, useRef, useState } from "react";
 
 interface TurnsListProps {
   filter: string;
@@ -9,30 +8,8 @@ interface TurnsListProps {
 
 export function TurnsList({ filter, selectedCallId, onSelectCall }: TurnsListProps) {
   const { activityLog, sessionPhase } = useSessionStore();
-  const listRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const [followLatest, setFollowLatest] = useState(true);
 
   const isRunning = sessionPhase === "planning" || sessionPhase === "executing";
-
-  const scrollToLatest = useCallback((behavior: ScrollBehavior = "smooth") => {
-    bottomRef.current?.scrollIntoView({ behavior, block: "end" });
-  }, []);
-
-  useEffect(() => {
-    if (followLatest) scrollToLatest("smooth");
-  }, [activityLog.length, filter, followLatest, scrollToLatest]);
-
-  function handleScroll(event: React.UIEvent<HTMLDivElement>) {
-    const element = event.currentTarget;
-    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
-    setFollowLatest(atBottom);
-  }
-
-  function handleJumpToLatest() {
-    setFollowLatest(true);
-    scrollToLatest();
-  }
 
   const getToolIcon = (name: string) => {
     if (name.includes('read') || name.includes('view_file')) return { cls: 'read', char: 'R' };
@@ -55,7 +32,7 @@ export function TurnsList({ filter, selectedCallId, onSelectCall }: TurnsListPro
   });
 
   return (
-    <div className="insp-list scroll" ref={listRef} onScroll={handleScroll}>
+    <div className="insp-list scroll">
       <div className="insp-turn">
         <div className="insp-turn-head">
           <div className={`insp-turn-bullet ${isRunning ? 'pulse' : ''}`}></div>
@@ -110,14 +87,8 @@ export function TurnsList({ filter, selectedCallId, onSelectCall }: TurnsListPro
                <span className="detail-empty-text">No matching traces</span>
              </div>
           )}
-          <div ref={bottomRef} />
         </div>
       </div>
-      {!followLatest && (
-        <button className="jump-latest" type="button" onClick={handleJumpToLatest}>
-          Jump to latest
-        </button>
-      )}
     </div>
   );
 }

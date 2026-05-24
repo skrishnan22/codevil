@@ -3,7 +3,7 @@ import { useSessionStore } from "@/stores/session-store";
 import { loadStoredSession } from "@/lib/session-summary";
 
 export function SessionTopBar() {
-  const { sessionId, sessionPhase, connectionStatus, messages } = useSessionStore();
+  const { sessionId, sessionPhase, connectionStatus, messages, stopSession } = useSessionStore();
   const storedSession = loadStoredSession(sessionId);
   
   const costInfo = [...messages].reverse().find((message) => message.meta?.cost)?.meta?.cost;
@@ -12,6 +12,7 @@ export function SessionTopBar() {
     ? `${formatCompact(costInfo.input_tokens)} → ${formatCompact(costInfo.output_tokens)}`
     : "0 → 0";
   const elapsed = formatElapsed(messages[0]?.timestamp);
+  const model = messages.find((m) => m.meta?.model)?.meta?.model ?? null;
   
   // Status logic
   const isRunning = sessionPhase === "planning" || sessionPhase === "executing";
@@ -55,6 +56,11 @@ export function SessionTopBar() {
       </div>
       
       <div className="topbar-right">
+        {model && (
+          <div className="chip solid">
+            <span className="topbar-key">MODEL</span> {model}
+          </div>
+        )}
         <div className="chip solid">
           <span className="topbar-key">COST</span> {cost}
         </div>
@@ -64,6 +70,19 @@ export function SessionTopBar() {
         <div className="chip solid">
           <span className="topbar-key">ELAPSED</span> {elapsed}
         </div>
+        <button
+          type="button"
+          className="topbar-stop"
+          onClick={() => {
+            if (window.confirm("Stop the sandbox container? This will end the session and tear down the preview.")) {
+              stopSession();
+            }
+          }}
+          disabled={connectionStatus !== "connected" || sessionId === null}
+          title="Stop the sandbox container immediately"
+        >
+          Stop
+        </button>
       </div>
     </header>
   );

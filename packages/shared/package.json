@@ -11,7 +11,11 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm run build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "typescript": "^5.8.0"

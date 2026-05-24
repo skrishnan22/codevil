@@ -96,6 +96,7 @@ async function handleMessage(
   setCursor: (cursor: number) => void,
 ): Promise<boolean> {
   const envelope = parseEnvelope(raw);
+  if (!envelope) return false;
   setCursor(envelope.cursor);
 
   for (const line of renderEvent(envelope.event)) {

@@ -1,19 +1,25 @@
 import type { DOToCLIEvent } from "@codevil/shared";
+import { PersistedDOToCLIEventSchema, parseInbound } from "@codevil/shared";
 
 export interface EventEnvelope {
   cursor: number;
   event: DOToCLIEvent;
 }
 
-export function parseEnvelope(raw: string): EventEnvelope {
+export function parseEnvelope(raw: string): EventEnvelope | null {
   const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed) || typeof parsed.cursor !== "number" || !isRecord(parsed.event)) {
+  if (!isRecord(parsed) || typeof parsed.cursor !== "number") {
     throw new Error("Invalid event envelope");
   }
 
+  // Lenient: CLI may be older than the DO and see event types it doesn't
+  // know about; we still want a tagged object so render code can branch.
+  const event = parseInbound(PersistedDOToCLIEventSchema, parsed.event, "do_to_cli");
+  if (!event) return null;
+
   return {
     cursor: parsed.cursor,
-    event: parsed.event as unknown as DOToCLIEvent,
+    event: event as unknown as DOToCLIEvent,
   };
 }
 
@@ -47,6 +53,17 @@ export function renderEvent(event: DOToCLIEvent): string[] {
       return [`Completed. Draft PR: ${event.pr_url}`];
     case "error":
       return [`Error: ${event.message}`];
+    case "preview_starting":
+      return [`Starting preview: ${event.command} on port ${event.port}`];
+    case "preview_ready":
+      return [`Preview ready: ${event.url}`];
+    case "preview_error":
+      return [`Preview error: ${event.message}`];
+    case "preview_stopped":
+      return ["Preview stopped."];
+    case "preview_apps":
+      if (event.apps.length === 0) return [];
+      return [`Detected preview apps: ${event.apps.map((app) => app.key).join(", ")}`];
   }
 }
 

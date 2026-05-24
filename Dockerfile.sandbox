@@ -25,3 +25,5 @@ RUN apt-get update \
   && npm install -g pnpm@10.28.1
 
 COPY --from=builder /app /app
+
+EXPOSE 5173 8000 8080 3001

@@ -161,6 +161,16 @@ export function mapSandboxMessageToCLIEvents(message: SandboxToDOMessage): DOToC
       return [{ type: "status", message: `Branch pushed: ${message.branch}.` }];
     case "pr_created":
       return [{ type: "complete", pr_url: message.url }];
+    case "preview_starting":
+      return [{ type: "preview_starting", command: message.command, port: message.port }];
+    case "preview_ready":
+      return [{ type: "status", message: `Preview ready on port ${message.port}.` }];
+    case "preview_error":
+      return [{ type: "preview_error", message: message.message }];
+    case "preview_stopped":
+      return [{ type: "preview_stopped" }];
+    case "preview_apps":
+      return [{ type: "preview_apps", apps: message.apps }];
     case "error":
       return [{ type: "error", message: message.message }];
   }

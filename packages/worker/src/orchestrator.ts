@@ -7,7 +7,21 @@ import type {
   SandboxToDOMessage,
   CostInfo,
 } from "@codevil/shared";
-import { DEFAULT_CONFIG, isValidTransition, isTerminalState, MAX_REFINEMENT_ROUNDS } from "@codevil/shared";
+import {
+  DEFAULT_CONFIG,
+  isValidTransition,
+  isTerminalState,
+  MAX_REFINEMENT_ROUNDS,
+  CLIToDOMessageSchema,
+  SandboxToDOMessageSchema,
+  PersistedDOToCLIEventSchema,
+  parseInbound,
+  createTracer,
+  setValidationDropSink,
+  tracerValidationDropSink,
+  type Span,
+  type Tracer,
+} from "@codevil/shared";
 import type { Sandbox } from "@cloudflare/sandbox";
 import {
   buildSandboxWebSocketUrl,
@@ -23,6 +37,7 @@ interface Env {
   CODEVIL_API_KEY: string;
   CODEVIL_LLM_KEY?: string;
   GITHUB_PAT?: string;
+  CODEVIL_PREVIEW_ORIGIN?: string;
 }
 
 interface SessionMeta {
@@ -41,7 +56,12 @@ interface SessionMeta {
   verification_attempts: number;
   cost_total_usd: number;
   latest_plan?: string;
+  preview_token_hash?: string;
+  preview_url?: string;
+  preview_port?: number;
+  preview_active?: boolean;
   created_at: string;
+  expected_close?: boolean;
 }
 
 export interface InitOptions {
@@ -54,11 +74,23 @@ export interface InitOptions {
   max_steps?: number;
 }
 
+// State → phase span name. Phase spans live across multiple WS messages,
+// so we hold the open Span on the DO instance and end it on transition out.
+const PHASE_SPAN_NAMES: Partial<Record<SessionState, string>> = {
+  planning: "phase.plan",
+  refining: "phase.refine",
+  executing: "phase.execute",
+  verifying: "phase.verify",
+  creating_pr: "phase.create_pr",
+};
+
 export class Orchestrator extends DurableObject<Env> {
   private sql: SqlStorage;
   private meta: SessionMeta | null = null;
   private workerEnv: Env;
   private redactionSecrets: string[];
+  private tracer: Tracer | null = null;
+  private phaseSpans = new Map<SessionState, Span>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -119,14 +151,13 @@ export class Orchestrator extends DurableObject<Env> {
         type: "error",
         message: `Session timed out after ${this.meta.max_time}.`,
       });
-      this.closeSandboxSockets("timed out");
+      await this.terminateSandbox("timed out");
       return;
     }
 
     if (this.meta.state === "provisioning_sandbox" && now >= createdAt + 60_000) {
       const logs = await readProcessLogs(this.workerEnv.Sandbox, this.meta.session_id, "codevil-agent");
-      console.error("codevil.sandbox.timeout", {
-        session_id: this.meta.session_id,
+      this.getTracer()?.log("ERROR", "sandbox.timeout", {
         stdout: logs?.stdout ?? "(none)",
         stderr: logs?.stderr ?? "(none)",
       });
@@ -139,7 +170,7 @@ export class Orchestrator extends DurableObject<Env> {
           ? `Sandbox process failed:\n${output}`
           : "Sandbox failed to connect within 60 seconds. No process output captured.",
       });
-      this.closeSandboxSockets("timed out");
+      await this.terminateSandbox("timed out");
       return;
     }
 
@@ -168,8 +199,7 @@ export class Orchestrator extends DurableObject<Env> {
 
   private acceptSandboxWebSocket(): Response {
     this.loadMeta();
-    console.log("codevil.sandbox.ws.connected", {
-      session_id: this.meta?.session_id,
+    this.getTracer()?.log("INFO", "sandbox.ws.connected", {
       state: this.meta?.state,
     });
 
@@ -189,13 +219,15 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
-    let msg: CLIToDOMessage;
+    let raw: unknown;
     try {
-      msg = JSON.parse(message);
+      raw = JSON.parse(message);
     } catch {
       ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
       return;
     }
+    const msg = parseInbound(CLIToDOMessageSchema, raw, "cli_to_do");
+    if (!msg) return;
 
     this.loadMeta();
     if (!this.meta) {
@@ -210,8 +242,17 @@ export class Orchestrator extends DurableObject<Env> {
       case "abort":
         this.handleAbort();
         break;
+      case "stop_session":
+        await this.handleStopSession();
+        break;
       case "refine_plan":
         this.handleRefine(msg.feedback);
+        break;
+      case "preview_start":
+        await this.handlePreviewStart(msg.app_key);
+        break;
+      case "preview_stop":
+        await this.handlePreviewStop();
         break;
       default:
         ws.send(JSON.stringify({ type: "error", message: `Unknown message type` }));
@@ -221,28 +262,29 @@ export class Orchestrator extends DurableObject<Env> {
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     const isSandbox = this.ctx.getWebSockets("sandbox").includes(ws);
     this.loadMeta();
-    console.log("codevil.ws.close", {
-      session_id: this.meta?.session_id,
+    this.getTracer()?.log("INFO", "ws.close", {
       source: isSandbox ? "sandbox" : "cli",
       code,
       reason,
       state: this.meta?.state,
     });
 
-    if (isSandbox && this.meta && !isTerminalState(this.meta.state) && this.meta.state !== "awaiting_approval") {
-      this.transition("failed");
-      this.appendAndBroadcast({
-        type: "error",
-        message: `Sandbox disconnected unexpectedly (code: ${code}, reason: ${reason || "none"}).`,
-      });
+    if (isSandbox && this.meta) {
+      this.revokePreview();
+      if (!this.meta.expected_close && !isTerminalState(this.meta.state) && this.meta.state !== "awaiting_approval") {
+        this.transition("failed");
+        this.appendAndBroadcast({
+          type: "error",
+          message: `Sandbox disconnected unexpectedly (code: ${code}, reason: ${reason || "none"}).`,
+        });
+      }
     }
   }
 
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     const isSandbox = this.ctx.getWebSockets("sandbox").includes(ws);
     this.loadMeta();
-    console.error("codevil.ws.error", {
-      session_id: this.meta?.session_id,
+    this.getTracer()?.log("ERROR", "ws.error", {
       source: isSandbox ? "sandbox" : "cli",
       error: error instanceof Error ? error.message : String(error),
     });
@@ -255,17 +297,60 @@ export class Orchestrator extends DurableObject<Env> {
     this.loadMeta();
     if (!this.meta) return false;
 
-    if (!isValidTransition(this.meta.state, to)) {
+    const from = this.meta.state;
+    if (!isValidTransition(from, to)) {
       this.appendAndBroadcast({
         type: "error",
-        message: `Invalid transition: ${this.meta.state} → ${to}`,
+        message: `Invalid transition: ${from} → ${to}`,
       });
       return false;
     }
 
     this.meta.state = to;
     this.saveMeta();
+
+    // Close span for the state we just left; open one for the state we entered.
+    const leavingSpan = this.phaseSpans.get(from);
+    if (leavingSpan) {
+      this.phaseSpans.delete(from);
+      leavingSpan.end();
+    }
+    const enteringName = PHASE_SPAN_NAMES[to];
+    if (enteringName) {
+      const tracer = this.getTracer();
+      if (tracer) {
+        const span = tracer.startSpan(enteringName, { attributes: { state: to } });
+        this.phaseSpans.set(to, span);
+      }
+    }
+    if (isTerminalState(to)) {
+      // Drop any phase spans still open (e.g. on `failed` from mid-phase).
+      for (const [state, span] of this.phaseSpans) {
+        span.setStatus("ERROR", `terminal: ${to}`);
+        span.end();
+        this.phaseSpans.delete(state);
+      }
+    }
+
+    this.getTracer()?.log("INFO", "state.transition", { from, to });
     return true;
+  }
+
+  private getTracer(): Tracer | null {
+    if (this.tracer) return this.tracer;
+    this.loadMeta();
+    if (!this.meta) return null;
+    this.tracer = createTracer({
+      component: "orchestrator",
+      trace_id: traceIdFromSessionId(this.meta.session_id),
+    });
+    setValidationDropSink(tracerValidationDropSink(this.tracer));
+    return this.tracer;
+  }
+
+  private currentPhaseSpan(): Span | undefined {
+    if (!this.meta) return undefined;
+    return this.phaseSpans.get(this.meta.state);
   }
 
   private handleApprove(): void {
@@ -309,8 +394,38 @@ export class Orchestrator extends DurableObject<Env> {
         type: "status",
         message: "Session aborted by user.",
       });
-      this.closeSandboxSockets("aborted");
+      // Preview stays alive; user can keep iterating in the iframe until they
+      // press "Stop Session" or the container hits idle/max timeout.
     }
+  }
+
+  private async handleStopSession(): Promise<void> {
+    if (!this.meta) return;
+    if (!isTerminalState(this.meta.state)) {
+      this.transition("failed");
+    }
+    this.appendAndBroadcast({
+      type: "status",
+      message: "Stopping sandbox container…",
+    });
+    this.revokePreview();
+    await this.terminateSandbox("stopped by user");
+  }
+
+  private async terminateSandbox(reason: string): Promise<void> {
+    if (!this.meta) return;
+    this.meta.expected_close = true;
+    this.saveMeta();
+    try {
+      const { getSandbox } = await import("@cloudflare/sandbox");
+      const sandbox = getSandbox(this.workerEnv.Sandbox, this.meta.session_id);
+      await sandbox.stop();
+    } catch (error) {
+      this.getTracer()?.log("ERROR", "sandbox.stop.failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    this.closeSandboxSockets(reason);
   }
 
   private handleRefine(feedback: string): void {
@@ -349,35 +464,31 @@ export class Orchestrator extends DurableObject<Env> {
 
     if (!this.transition("provisioning_sandbox")) return;
 
+    const tracer = this.getTracer();
     try {
-      console.log("codevil.sandbox.provision.start", {
-        session_id: this.meta.session_id,
-        provider: this.meta.provider,
-      });
       const wsUrl = buildSandboxWebSocketUrl(this.meta.worker_url, this.meta.session_id);
-      console.log("codevil.sandbox.provision.config", {
-        session_id: this.meta.session_id,
-        wsUrl,
-        provider: this.meta.provider,
-        plan_model: this.meta.plan_model,
-        hasLlmKey: Boolean(this.workerEnv.CODEVIL_LLM_KEY),
-      });
-
-      await provisionSandbox({
-        binding: this.workerEnv.Sandbox,
-        sessionId: this.meta.session_id,
-        wsUrl,
-        apiKey: this.workerEnv.CODEVIL_API_KEY,
-        provider: this.meta.provider,
-        llmKey: this.workerEnv.CODEVIL_LLM_KEY,
-      });
-      console.log("codevil.sandbox.provision.started", {
-        session_id: this.meta.session_id,
-      });
+      await tracer!.span(
+        "sandbox.provision",
+        {
+          attributes: {
+            provider: this.meta.provider,
+            plan_model: this.meta.plan_model,
+            has_llm_key: Boolean(this.workerEnv.CODEVIL_LLM_KEY),
+          },
+        },
+        () =>
+          provisionSandbox({
+            binding: this.workerEnv.Sandbox,
+            sessionId: this.meta!.session_id,
+            wsUrl,
+            apiKey: this.workerEnv.CODEVIL_API_KEY,
+            provider: this.meta!.provider,
+            llmKey: this.workerEnv.CODEVIL_LLM_KEY,
+          }),
+      );
       this.appendAndBroadcast({ type: "status", message: "Sandbox process started." });
     } catch (error) {
-      console.error("codevil.sandbox.provision.failed", {
-        session_id: this.meta.session_id,
+      tracer?.log("ERROR", "sandbox.provision.failed", {
         name: error instanceof Error ? error.name : undefined,
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
@@ -397,16 +508,15 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
-    console.log("codevil.startPlanning", {
-      session_id: this.meta.session_id,
+    const tracer = this.getTracer();
+    tracer?.log("INFO", "start_planning", {
       state: this.meta.state,
       provider: this.meta.provider,
       plan_model: this.meta.plan_model,
     });
 
     if (this.meta.state !== "provisioning_sandbox") {
-      console.error("codevil.startPlanning.unexpected_state", {
-        session_id: this.meta.session_id,
+      tracer?.log("ERROR", "start_planning.unexpected_state", {
         state: this.meta.state,
         expected: "provisioning_sandbox",
       });
@@ -417,21 +527,26 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
-    ws.send(JSON.stringify({ type: "init", repo: this.meta.repo } satisfies DOToSandboxMessage));
+    ws.send(JSON.stringify({
+      type: "init",
+      repo: this.meta.repo,
+      ...(tracer ? { trace_id: tracer.trace_id } : {}),
+    } satisfies DOToSandboxMessage));
   }
 
   private async handleSandboxSocketMessage(ws: WebSocket, message: string): Promise<void> {
-    let parsed: SandboxToDOMessage;
+    let raw: unknown;
     try {
-      parsed = JSON.parse(message);
+      raw = JSON.parse(message);
     } catch {
       ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
       return;
     }
+    const parsed = parseInbound(SandboxToDOMessageSchema, raw, "sandbox_to_do");
+    if (!parsed) return;
 
     this.loadMeta();
-    console.log("codevil.sandbox.message", {
-      session_id: this.meta?.session_id,
+    this.getTracer()?.log("DEBUG", "sandbox.message", {
       type: parsed.type,
       state: this.meta?.state,
     });
@@ -469,6 +584,23 @@ export class Orchestrator extends DurableObject<Env> {
         if (this.transition("completed")) {
           this.appendAndBroadcast({ type: "complete", pr_url: parsed.url });
         }
+        return;
+      case "preview_starting":
+        this.appendAndBroadcast({ type: "preview_starting", command: parsed.command, port: parsed.port });
+        return;
+      case "preview_ready":
+        await this.handleSandboxPreviewReady(parsed.command, parsed.port);
+        return;
+      case "preview_error":
+        this.revokePreview();
+        this.appendAndBroadcast({ type: "preview_error", message: parsed.message });
+        return;
+      case "preview_stopped":
+        this.revokePreview();
+        this.appendAndBroadcast({ type: "preview_stopped" });
+        return;
+      case "preview_apps":
+        this.appendAndBroadcast({ type: "preview_apps", apps: parsed.apps });
         return;
       case "error":
         this.transition("failed");
@@ -659,6 +791,53 @@ export class Orchestrator extends DurableObject<Env> {
     }
   }
 
+  private async handlePreviewStart(appKey?: string): Promise<void> {
+    if (!this.meta) return;
+
+    this.sendToSandbox({
+      type: "preview_start",
+      model: this.meta.plan_model,
+      provider: this.meta.provider,
+      task_prompt: this.meta.prompt,
+      app_key: appKey,
+    });
+  }
+
+  private async handlePreviewStop(): Promise<void> {
+    this.revokePreview();
+    this.sendToSandbox({ type: "preview_stop" });
+  }
+
+  private async handleSandboxPreviewReady(command: string, port: number): Promise<void> {
+    if (!this.meta) return;
+    const token = createPreviewToken(this.meta.session_id);
+    this.meta.preview_token_hash = await hashPreviewToken(token);
+    this.meta.preview_url = buildPreviewUrl({
+      workerOrigin: this.meta.worker_url,
+      previewOrigin: this.workerEnv.CODEVIL_PREVIEW_ORIGIN,
+      sessionId: this.meta.session_id,
+      token,
+    });
+    this.meta.preview_port = port;
+    this.meta.preview_active = true;
+    this.saveMeta();
+    this.appendAndBroadcast({
+      type: "preview_ready",
+      url: this.meta.preview_url,
+      command,
+      port,
+    });
+  }
+
+  private revokePreview(): void {
+    if (!this.meta) return;
+    this.meta.preview_active = false;
+    this.meta.preview_token_hash = undefined;
+    this.meta.preview_url = undefined;
+    this.meta.preview_port = undefined;
+    this.saveMeta();
+  }
+
   private recordCost(cost: CostInfo): boolean {
     if (!this.meta) return false;
 
@@ -684,9 +863,33 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
+    const enriched = this.withTraceContext(message);
     for (const sandbox of sandboxes) {
-      sandbox.send(JSON.stringify(message));
+      sandbox.send(JSON.stringify(enriched));
     }
+  }
+
+  // Attach trace_id + parent_span_id so the sandbox can nest its child spans
+  // under the active phase span. Only meaningful for phase-starting message
+  // types; the schemas accept the fields as optional.
+  private withTraceContext(message: DOToSandboxMessage): DOToSandboxMessage {
+    const tracer = this.getTracer();
+    if (!tracer) return message;
+    if (
+      message.type !== "plan" &&
+      message.type !== "execute" &&
+      message.type !== "refine_plan" &&
+      message.type !== "create_pr" &&
+      message.type !== "preview_start"
+    ) {
+      return message;
+    }
+    const parent = this.currentPhaseSpan()?.context();
+    return {
+      ...message,
+      trace_id: tracer.trace_id,
+      ...(parent ? { parent_span_id: parent.span_id } : {}),
+    };
   }
 
   private closeSandboxSockets(reason: string): void {
@@ -730,6 +933,59 @@ export class Orchestrator extends DurableObject<Env> {
     this.appendAndBroadcast({ type: "status", message: "Waiting for user approval." });
   }
 
+  async fetchPreview(request: Request, token: string): Promise<Response> {
+    this.loadMeta();
+    if (!this.meta || !this.meta.preview_active || !this.meta.preview_port || !this.meta.preview_token_hash) {
+      return new Response("Preview is not active.", { status: 404 });
+    }
+
+    if (isTerminalState(this.meta.state)) {
+      return new Response("Preview session has ended.", { status: 410 });
+    }
+
+    const tokenHash = await hashPreviewToken(token);
+    if (tokenHash !== this.meta.preview_token_hash) {
+      return new Response("Unknown preview token.", { status: 404 });
+    }
+
+    const originalUrl = new URL(request.url);
+    const prefix = `/sessions/${this.meta.session_id}/preview/${token}`;
+    const path = originalUrl.pathname.startsWith(prefix)
+      ? originalUrl.pathname.slice(prefix.length) || "/"
+      : originalUrl.pathname;
+    // Build a clean path (no `/proxy/<port>` prefix) so the dev server sees what the
+    // browser asked for. Sandbox.containerFetch routes the request to the given port.
+    const proxyUrl = new URL(path, "http://localhost");
+    proxyUrl.search = originalUrl.search;
+
+    // `new Request(url, originalRequest)` is the documented pattern for proxying
+    // with URL rewrite. It preserves Cloudflare-internal upgrade semantics that
+    // `new Request(url, { headers, body })` drops, which is what makes HMR work.
+    const proxyRequest = new Request(proxyUrl, request);
+
+    const { getSandbox } = await import("@cloudflare/sandbox");
+    const sandbox = getSandbox(this.workerEnv.Sandbox, this.meta.session_id);
+    // Use sandbox.fetch() (legacy DO fetch protocol) instead of containerFetch
+    // (JSRPC), because JSRPC cannot carry a WebSocket pair across the DO
+    // boundary — HMR upgrades silently lose their socket. The
+    // cf-container-target-port header tells our Sandbox subclass which dev
+    // server port to route to.
+    const portedHeaders = new Headers(proxyRequest.headers);
+    portedHeaders.set("cf-container-target-port", String(this.meta.preview_port));
+    const portedRequest = new Request(proxyRequest, { headers: portedHeaders });
+    const response = await sandbox.fetch(portedRequest);
+
+    // For WebSocket upgrade responses (HMR, Vite HMR, etc.), we must NOT
+    // reconstruct the Response: `new Response(body, init)` does not propagate
+    // the `webSocket` field that carries the established socket pair, so the
+    // upgrade silently fails. Pass the 101 through untouched.
+    if (response.status === 101) return response;
+
+    const patched = new Response(response.body, response);
+    patched.headers.set("Cache-Control", "no-store");
+    return patched;
+  }
+
   // --- Event log ---
 
   private appendAndBroadcast(event: DOToCLIEvent): void {
@@ -754,10 +1010,17 @@ export class Orchestrator extends DurableObject<Env> {
     )) {
       const id = row["id"] as number;
       const eventJson = row["event_json"] as string;
-      ws.send(JSON.stringify({
-        cursor: id,
-        event: JSON.parse(eventJson),
-      }));
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(eventJson);
+      } catch {
+        continue;
+      }
+      // Lenient on replay: only require a tagged object so a schema change
+      // doesn't kill reconnects against history written by a prior deploy.
+      const event = parseInbound(PersistedDOToCLIEventSchema, parsed, "persisted_replay");
+      if (!event) continue;
+      ws.send(JSON.stringify({ cursor: id, event }));
     }
   }
 
@@ -813,4 +1076,57 @@ function parseMaxTimeMs(value: string): number | null {
 function slugify(value: string): string {
   const slug = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return slug.slice(0, 48) || "task";
+}
+
+function createPreviewToken(sessionId: string): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  const random = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${sessionId.replace(/^ses_/, "ses-")}-${random}`;
+}
+
+async function hashPreviewToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function buildPreviewUrl(options: {
+  workerOrigin: string;
+  previewOrigin: string | undefined;
+  sessionId: string;
+  token: string;
+}): string {
+  const origin = normalizeOrigin(options.previewOrigin ?? options.workerOrigin);
+  const url = new URL(origin);
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    url.pathname = `/sessions/${options.sessionId}/preview/${options.token}/`;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  }
+
+  if (!options.previewOrigin || url.hostname.endsWith(".workers.dev")) {
+    const workerUrl = new URL(normalizeOrigin(options.workerOrigin));
+    workerUrl.pathname = `/sessions/${options.sessionId}/preview/${options.token}/`;
+    workerUrl.search = "";
+    workerUrl.hash = "";
+    return workerUrl.toString();
+  }
+
+  url.hostname = `${options.token}.${url.hostname}`;
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function normalizeOrigin(origin: string): string {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(origin) ? origin : `https://${origin}`;
+}
+
+// trace_id is 32 hex chars (16 bytes) per OTLP. Session IDs are
+// "ses_<32-hex>"; strip the prefix so every emit converges on one trace.
+export function traceIdFromSessionId(sessionId: string): string {
+  const hex = sessionId.replace(/^ses_/, "");
+  return /^[0-9a-f]{32}$/i.test(hex) ? hex.toLowerCase() : hex.padEnd(32, "0").slice(0, 32);
 }

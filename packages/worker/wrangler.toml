@@ -1,6 +1,14 @@
 name = "codevil"
 main = "src/index.ts"
 compatibility_date = "2026-04-07"
+workers_dev = true
+
+[vars]
+CODEVIL_PREVIEW_ORIGIN = "https://lexmora.app"
+
+[[routes]]
+pattern = "*.lexmora.app/*"
+zone_name = "lexmora.app"
 
 [observability]
 enabled = true

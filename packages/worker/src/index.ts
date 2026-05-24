@@ -1,5 +1,27 @@
 import { Orchestrator } from "./orchestrator.js";
-import type { Sandbox } from "@cloudflare/sandbox";
+import { Sandbox as BaseSandbox } from "@cloudflare/sandbox";
+
+// Subclass the Cloudflare Sandbox so we can shorten the idle timeout. The base
+// class auto-suspends the container after `sleepAfter` of no traffic.
+export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
+  override sleepAfter = "10m";
+
+  override async fetch(request: Request): Promise<Response> {
+    // The base Sandbox.fetch() routes by URL path/port and ignores the
+    // cf-container-target-port header that switchPort() sets. We need the
+    // header path so callers can use sandbox.fetch(switchPort(req, port)) —
+    // the only way to proxy WebSocket upgrades across the DO boundary, since
+    // containerFetch() is JSRPC and cannot transport a WebSocket pair.
+    const header = request.headers.get("cf-container-target-port");
+    if (header) {
+      const port = Number.parseInt(header, 10);
+      if (Number.isFinite(port)) {
+        return this.containerFetch(request, port);
+      }
+    }
+    return super.fetch(request);
+  }
+}
 
 interface Env {
   ORCHESTRATOR: DurableObjectNamespace<Orchestrator>;
@@ -8,7 +30,6 @@ interface Env {
 }
 
 export { Orchestrator };
-export { Sandbox } from "@cloudflare/sandbox";
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -32,6 +53,16 @@ export default {
 
     const url = new URL(request.url);
     const path = url.pathname;
+
+    const hostPreview = previewTokenFromHost(url.hostname);
+    if (hostPreview) {
+      return handleSessionPreview(request, env, hostPreview.sessionId, hostPreview.token);
+    }
+
+    const previewMatch = path.match(/^\/sessions\/([^/]+)\/preview\/([^/]+)(?:\/.*)?$/);
+    if (previewMatch) {
+      return handleSessionPreview(request, env, previewMatch[1], previewMatch[2]);
+    }
 
     if (!authenticate(request, env.CODEVIL_API_KEY)) {
       return withCors(json({ error: "Unauthorized" }, 401));
@@ -81,6 +112,16 @@ function authenticate(request: Request, apiKey: string): boolean {
   if (tokenParam === apiKey) return true;
 
   return false;
+}
+
+function previewTokenFromHost(hostname: string): { sessionId: string; token: string } | null {
+  const label = hostname.split(".", 1)[0];
+  const match = label.match(/^(ses-[a-f0-9]{32})-[a-f0-9]{24}$/);
+  if (!match) return null;
+  return {
+    sessionId: match[1].replace(/^ses-/, "ses_"),
+    token: label,
+  };
 }
 
 async function handleCreateSession(
@@ -167,6 +208,17 @@ async function handleSandboxWebSocketUpgrade(
   const doId = env.ORCHESTRATOR.idFromName(sessionId);
   const stub = env.ORCHESTRATOR.get(doId);
   return stub.fetch(request);
+}
+
+async function handleSessionPreview(
+  request: Request,
+  env: Env,
+  sessionId: string,
+  token: string,
+): Promise<Response> {
+  const doId = env.ORCHESTRATOR.idFromName(sessionId);
+  const stub = env.ORCHESTRATOR.get(doId);
+  return stub.fetchPreview(request, token);
 }
 
 async function handleLogs(env: Env, sessionId: string): Promise<Response> {

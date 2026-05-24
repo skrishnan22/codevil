@@ -15,6 +15,9 @@ export interface CreatePullRequestOptions {
   body: string;
 }
 
+const TRANSIENT_PR_STATUSES = new Set([429, 500, 502, 503, 504]);
+const PR_RETRY_DELAYS_MS = [500, 1_500, 3_000];
+
 export function parseGitHubRepo(repoUrl: string): GitHubRepo | null {
   try {
     const url = new URL(repoUrl);
@@ -70,19 +73,55 @@ export function buildCreatePullRequestRequest(options: CreatePullRequestOptions)
 
 export async function createDraftPullRequest(options: CreatePullRequestOptions): Promise<string> {
   const { url, init } = buildCreatePullRequestRequest(options);
-  const response = await fetch(url, init);
-  const body = await response.json().catch(() => ({})) as { html_url?: unknown; message?: unknown };
 
-  if (!response.ok) {
-    const message = typeof body.message === "string" ? body.message : response.statusText;
-    throw new Error(`GitHub PR creation failed: ${message}`);
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= PR_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const response = await fetch(url, init);
+      const body = await readGitHubResponseBody(response);
+
+      if (response.ok) {
+        if (typeof body.html_url !== "string") {
+          throw new Error("GitHub PR creation response did not include html_url");
+        }
+        return body.html_url;
+      }
+
+      const message = formatGitHubError(response, body);
+      lastError = new Error(`GitHub PR creation failed: ${message}`);
+      if (!TRANSIENT_PR_STATUSES.has(response.status) || attempt === PR_RETRY_DELAYS_MS.length) {
+        throw lastError;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt === PR_RETRY_DELAYS_MS.length) throw lastError;
+    }
+
+    await sleep(PR_RETRY_DELAYS_MS[attempt]);
   }
 
-  if (typeof body.html_url !== "string") {
-    throw new Error("GitHub PR creation response did not include html_url");
+  throw lastError ?? new Error("GitHub PR creation failed");
+}
+
+async function readGitHubResponseBody(response: Response): Promise<{ html_url?: unknown; message?: unknown }> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return response.json().catch(() => ({})) as Promise<{ html_url?: unknown; message?: unknown }>;
   }
 
-  return body.html_url;
+  const text = await response.text().catch(() => "");
+  return text ? { message: text } : {};
+}
+
+function formatGitHubError(response: Response, body: { message?: unknown }): string {
+  const detail = typeof body.message === "string" && body.message.trim()
+    ? body.message.trim()
+    : response.statusText;
+  return `${response.status} ${detail}`;
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function normalizeRepoPath(path: string | undefined): string | null {

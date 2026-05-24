@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildCreatePullRequestRequest,
   credentialRequestAllowed,
+  createDraftPullRequest,
   parseGitHubRepo,
 } from "../dist/github.js";
 
@@ -63,4 +64,40 @@ test("buildCreatePullRequestRequest creates a GitHub API draft PR request", () =
       }),
     },
   });
+});
+
+test("createDraftPullRequest retries transient GitHub gateway failures", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls === 1) {
+      return new Response(JSON.stringify({ message: "Bad Gateway" }), {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    return new Response(JSON.stringify({ html_url: "https://github.com/acme/private-app/pull/1" }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const url = await createDraftPullRequest({
+      repo: "https://github.com/acme/private-app.git",
+      token: "ghp_secret",
+      branch: "codevil/change",
+      baseBranch: "main",
+      title: "Change",
+      body: "Plan",
+    });
+
+    assert.equal(url, "https://github.com/acme/private-app/pull/1");
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

@@ -5,9 +5,30 @@ import { spawn } from "node:child_process";
 import type {
   CostInfo,
   DOToSandboxMessage,
+  PreviewApp,
+  PreviewFramework,
   SandboxToDOMessage,
 } from "@codevil/shared";
-import { MAX_VERIFICATION_ATTEMPTS } from "@codevil/shared";
+import {
+  MAX_VERIFICATION_ATTEMPTS,
+  PiAgentEventSchema,
+  parseInbound,
+  createTracer,
+  setValidationDropSink,
+  tracerValidationDropSink,
+  type Span,
+  type SpanContext,
+  type Tracer,
+} from "@codevil/shared";
+import {
+  PreviewManager,
+  appToCommand,
+  detectPreviewApps,
+  type PreviewCommand,
+} from "./preview-manager.js";
+export { detectPreviewApps, detectPreviewCommand } from "./preview-manager.js";
+
+const AGENT_PREVIEW_KEY = "agent";
 
 export interface AgentStartOptions {
   cwd: string;
@@ -78,6 +99,16 @@ export interface PushBranchOptions {
   credential?: GitCredential;
 }
 
+type RepoState =
+  | { state: "uninit" }
+  | {
+      state: "ready";
+      dir: string;
+      url: string;
+      defaultBranch: string;
+      apps: PreviewApp[];
+    };
+
 export interface SandboxRuntimeOptions {
   workspace: string;
   provider?: string;
@@ -100,10 +131,10 @@ export class SandboxRuntime {
   private readonly verifier: Verifier;
   private readonly commandRunner: CommandRunner;
   private readonly credentialTimeoutMs: number;
-  private repoDir: string | undefined;
-  private repoUrl: string | undefined;
-  private defaultBranchName: string | undefined;
+  private repo: RepoState = { state: "uninit" };
   private agent: AgentDriver | undefined;
+  private preview: PreviewManager | undefined;
+  private tracer: Tracer | undefined;
   private credentialRequests = new Map<string, {
     resolve(credential: GitCredential | undefined): void;
     timeout: ReturnType<typeof setTimeout>;
@@ -123,24 +154,42 @@ export class SandboxRuntime {
 
   async handleMessage(message: DOToSandboxMessage): Promise<void> {
     try {
+      // Bootstrap or refresh the tracer from any trace_id present on the wire.
+      // Init carries it for clone/setup spans; phase-starting messages carry
+      // both trace_id and parent_span_id so sandbox spans nest under the DO's
+      // phase span.
+      if ("trace_id" in message && message.trace_id) {
+        this.ensureTracer(message.trace_id);
+      }
+      const parent: SpanContext | undefined =
+        "parent_span_id" in message && message.parent_span_id && this.tracer
+          ? { trace_id: this.tracer.trace_id, span_id: message.parent_span_id }
+          : undefined;
+
       switch (message.type) {
         case "init":
           await this.handleInit(message.repo);
           return;
         case "plan":
-          await this.handlePlan(message.prompt, message.model, message.provider);
+          await this.handlePlan(message.prompt, message.model, message.provider, parent);
           return;
         case "refine_plan":
-          await this.handleRefine(message.feedback);
+          await this.handleRefine(message.feedback, parent);
           return;
         case "execute":
-          await this.handleExecute(message.plan, message.model, message.provider);
+          await this.handleExecute(message.plan, message.model, message.provider, parent);
           return;
         case "create_pr":
-          await this.handleCreatePullRequest(message);
+          await this.handleCreatePullRequest(message, parent);
           return;
         case "credential_response":
           this.handleCredentialResponse(message);
+          return;
+        case "preview_start":
+          await this.handlePreviewStart(message.app_key);
+          return;
+        case "preview_stop":
+          await this.handlePreviewStop();
           return;
       }
     } catch (error) {
@@ -151,29 +200,53 @@ export class SandboxRuntime {
     }
   }
 
+  private ensureTracer(traceId: string): Tracer {
+    if (this.tracer && this.tracer.trace_id === traceId) return this.tracer;
+    this.tracer = createTracer({ component: "sandbox", trace_id: traceId });
+    setValidationDropSink(tracerValidationDropSink(this.tracer));
+    return this.tracer;
+  }
+
   async dispose(): Promise<void> {
+    await this.preview?.stop();
     await this.agent?.dispose?.();
   }
 
   private async handleInit(repo: string): Promise<void> {
     const repoDir = join(this.workspace, "repo");
-    this.repoDir = repoDir;
-    this.repoUrl = repo;
 
     this.send({ type: "clone_started" });
     const credential = await this.requestCredential(repo);
-    await this.git.clone(repo, repoDir, (line) => {
-      this.send({ type: "clone_progress", line });
-    }, credential);
+    await this.maybeSpan("sandbox.clone", { attributes: { repo } }, () =>
+      this.git.clone(repo, repoDir, (line) => {
+        this.send({ type: "clone_progress", line });
+      }, credential),
+    );
 
-    await this.setupRepository(repoDir);
+    await this.maybeSpan("sandbox.setup", {}, () => this.setupRepository(repoDir));
 
-    this.defaultBranchName = await this.git.defaultBranch(repoDir);
+    const defaultBranch = await this.git.defaultBranch(repoDir);
     this.send({ type: "clone_complete" });
     this.send({
       type: "status",
-      message: `Repository ready on ${this.defaultBranchName}.`,
+      message: `Repository ready on ${defaultBranch}.`,
     });
+
+    const apps = detectPreviewApps(repoDir);
+    this.repo = { state: "ready", dir: repoDir, url: repo, defaultBranch, apps };
+    this.send({ type: "preview_apps", apps });
+  }
+
+  // Run `fn` inside a span when a tracer exists; otherwise just call it.
+  // Lets the sandbox keep functioning when no DO trace context arrived
+  // (e.g. old orchestrator deploy or future test harnesses).
+  private async maybeSpan<T>(
+    name: string,
+    options: { attributes?: Record<string, unknown>; parent?: SpanContext },
+    fn: () => Promise<T> | T,
+  ): Promise<T> {
+    if (!this.tracer) return fn();
+    return this.tracer.span(name, options, fn);
   }
 
   private async setupRepository(repoDir: string): Promise<void> {
@@ -202,8 +275,9 @@ export class SandboxRuntime {
     prompt: string,
     model: string,
     provider: string | undefined,
+    parent: SpanContext | undefined,
   ): Promise<void> {
-    const repoDir = this.requireRepo();
+    const repoDir = this.requireRepo().dir;
     const agent = this.agentFactory();
     this.agent = agent;
 
@@ -213,16 +287,30 @@ export class SandboxRuntime {
       model,
       provider: provider ?? this.provider,
       llmKey: this.llmKey,
-      onEvent: (event) => this.send({ type: "agent_event", event }),
+      onEvent: (event) => {
+        // Validate Pi events at the SDK boundary. Known shapes narrow; unknown
+        // event types pass through opaquely so a Pi version bump can't kill
+        // the session. Drop+log on truly malformed (non-tagged) events.
+        const validated = parseInbound(PiAgentEventSchema, event, "pi_agent_event");
+        if (!validated) return;
+        this.send({ type: "agent_event", event: validated });
+      },
     });
 
-    const result = await agent.plan(planPrompt(prompt));
+    const result = await this.maybeSpan(
+      "llm.plan",
+      { parent, attributes: { model, provider: provider ?? this.provider } },
+      () => agent.plan(planPrompt(prompt)),
+    );
+    this.capturePreviewCommand(result.plan);
     this.send({ type: "plan_ready", ...result });
   }
 
-  private async handleRefine(feedback: string): Promise<void> {
+  private async handleRefine(feedback: string, parent: SpanContext | undefined): Promise<void> {
     const agent = this.requireAgent();
-    const result = await agent.refine(refinePrompt(feedback));
+    const result = await this.maybeSpan("llm.refine", { parent }, () =>
+      agent.refine(refinePrompt(feedback)),
+    );
     this.send({ type: "plan_ready", ...result });
   }
 
@@ -230,11 +318,20 @@ export class SandboxRuntime {
     plan: string,
     model: string,
     provider: string | undefined,
+    parent: SpanContext | undefined,
   ): Promise<void> {
     const agent = this.requireAgent();
     await agent.switchToExecution(model, provider ?? this.provider);
-    let cost = await agent.execute(executePrompt(plan));
-    const verification = await this.verifyWithRetries(agent);
+    let cost = await this.maybeSpan(
+      "llm.execute",
+      { parent, attributes: { model, provider: provider ?? this.provider } },
+      () => agent.execute(executePrompt(plan)),
+    );
+    const verification = await this.maybeSpan(
+      "sandbox.verify",
+      { parent },
+      () => this.verifyWithRetries(agent),
+    );
     cost = addCost(cost, verification.cost);
 
     if (!verification.success) {
@@ -261,7 +358,7 @@ export class SandboxRuntime {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       this.send({ type: "verification_started", attempt, max_attempts: maxAttempts });
-      const result = await this.verifier.verify(this.requireRepo());
+      const result = await this.verifier.verify(this.requireRepo().dir);
       if (result.success) {
         this.send({
           type: "status",
@@ -287,22 +384,103 @@ export class SandboxRuntime {
     return { success: false, attempts: maxAttempts, lastError, cost: repairCost };
   }
 
-  private async handleCreatePullRequest(message: Extract<DOToSandboxMessage, { type: "create_pr" }>): Promise<void> {
-    const credential = this.repoUrl ? await this.requestCredential(this.repoUrl) : undefined;
-    await this.git.pushBranch({
-      cwd: this.requireRepo(),
-      branch: message.branch,
-      commitMessage: message.commit_message,
-      credential,
-    });
+  private async handleCreatePullRequest(
+    message: Extract<DOToSandboxMessage, { type: "create_pr" }>,
+    parent: SpanContext | undefined,
+  ): Promise<void> {
+    const repo = this.requireRepo();
+    const credential = await this.requestCredential(repo.url);
+    await this.maybeSpan(
+      "sandbox.push_branch",
+      { parent, attributes: { branch: message.branch } },
+      () =>
+        this.git.pushBranch({
+          cwd: repo.dir,
+          branch: message.branch,
+          commitMessage: message.commit_message,
+          credential,
+        }),
+    );
 
     this.send({
       type: "branch_pushed",
       branch: message.branch,
-      base_branch: this.defaultBranchName ?? "main",
+      base_branch: repo.defaultBranch,
       pr_title: message.pr_title,
       pr_body: message.pr_body,
     });
+  }
+
+  private async handlePreviewStart(appKey?: string): Promise<void> {
+    if (this.repo.state !== "ready") {
+      this.send({ type: "preview_error", message: "Repository is not ready for preview yet." });
+      return;
+    }
+    const { dir: repoDir, apps } = this.repo;
+
+    const app = resolveAppForStart(apps, appKey);
+    if (!app) {
+      this.send({
+        type: "preview_error",
+        message: appKey
+          ? `Unknown preview app: ${appKey}.`
+          : apps.length === 0
+            ? "No supported dev-server command detected."
+            : "Select a preview app to start.",
+      });
+      return;
+    }
+
+    if (app.framework === "next") {
+      await this.ensureNextSwcBinary(repoDir, app.cwd);
+    }
+
+    if (!this.preview) {
+      this.preview = new PreviewManager({
+        cwd: repoDir,
+        onStarting: ({ command, port }) => this.send({ type: "preview_starting", command, port }),
+        onReady: ({ command, port }) => this.send({ type: "preview_ready", command, port }),
+        onLog: (line) => this.send({ type: "status", message: `Preview output: ${line}` }),
+        onError: (message) => this.send({ type: "preview_error", message }),
+        onStopped: () => this.send({ type: "preview_stopped" }),
+      });
+    }
+
+    await this.preview.start(appToCommand(app, repoDir));
+  }
+
+  private async ensureNextSwcBinary(repoDir: string, appCwd: string): Promise<void> {
+    const libc = detectLibc();
+    if (!libc) return;
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    const target = `@next/swc-linux-${arch}-${libc}`;
+
+    const candidates = [
+      join(appCwd, "node_modules", target),
+      join(repoDir, "node_modules", target),
+    ];
+    if (candidates.some((path) => existsSync(path))) return;
+
+    this.send({
+      type: "status",
+      message: `Installing missing Next.js SWC binary (${target})…`,
+    });
+    const result = await this.commandRunner.run(`npm install --no-save --force ${target}`, {
+      cwd: repoDir,
+      timeoutMs: 180_000,
+    });
+    if (result.code !== 0) {
+      this.send({
+        type: "status",
+        message: `Failed to install ${target}: ${trimOutput(result.stderr || result.stdout)}`,
+      });
+    }
+  }
+
+
+  private async handlePreviewStop(): Promise<void> {
+    await this.preview?.stop();
+    this.preview = undefined;
   }
 
   private async requestCredential(repo: string): Promise<GitCredential | undefined> {
@@ -339,14 +517,42 @@ export class SandboxRuntime {
     pending.resolve({ username: message.username, password: message.password });
   }
 
-  private requireRepo(): string {
-    if (!this.repoDir) throw new Error("Repository has not been initialized");
-    return this.repoDir;
+  private requireRepo(): Extract<RepoState, { state: "ready" }> {
+    if (this.repo.state !== "ready") {
+      throw new Error("Repository has not been initialized");
+    }
+    return this.repo;
   }
 
   private requireAgent(): AgentDriver {
     if (!this.agent) throw new Error("Agent session has not been started");
     return this.agent;
+  }
+
+  private capturePreviewCommand(output: string): void {
+    const command = parsePreviewSuggestion(output);
+    if (!command) return;
+    if (this.repo.state !== "ready") return;
+    const { dir: repoDir, apps } = this.repo;
+
+    const agentApp: PreviewApp = {
+      key: AGENT_PREVIEW_KEY,
+      name: "Agent-suggested preview",
+      cwd: command.cwd && command.cwd !== "." ? join(repoDir, command.cwd) : repoDir,
+      framework: inferFrameworkFromCommand(command.command),
+      command: command.command,
+      port: command.port,
+    };
+
+    const nextApps = [agentApp, ...apps.filter((app) => app.key !== AGENT_PREVIEW_KEY)];
+    this.repo = { ...this.repo, apps: nextApps };
+    this.send({ type: "preview_apps", apps: nextApps });
+    this.send({
+      type: "status",
+      message: command.cwd && command.cwd !== "."
+        ? `Preview command saved: ${command.command} in ${command.cwd} on port ${command.port}.`
+        : `Preview command saved: ${command.command} on port ${command.port}.`,
+    });
   }
 }
 
@@ -368,6 +574,10 @@ function planPrompt(prompt: string): string {
   return [
     "You are in PLAN MODE.",
     "Explore this repository and create a detailed implementation plan.",
+    "Also identify the best dev server for live preview. Do not start it.",
+    "If there is a relevant UI dev server, include a JSON object anywhere in your response with this exact shape:",
+    "{\"preview\":{\"cwd\":\"relative/path/or/.\",\"command\":\"command to run\",\"port\":5173}}",
+    "The preview command must bind to 0.0.0.0 and use a non-3000 port.",
     "Only output the plan as structured markdown.",
     "",
     prompt,
@@ -401,6 +611,108 @@ function repairPrompt(attempt: number, maxAttempts: number, failure: string): st
     "",
     failure,
   ].join("\n");
+}
+
+export function parsePreviewDiscovery(output: string): PreviewCommand | undefined {
+  const json = extractJsonObject(output);
+  if (!json) return undefined;
+
+  try {
+    const parsed = JSON.parse(json) as { cwd?: unknown; command?: unknown; port?: unknown };
+    if (typeof parsed.command !== "string" || !parsed.command.trim()) return undefined;
+    if (typeof parsed.port !== "number" || !Number.isInteger(parsed.port)) return undefined;
+    if (parsed.port < 1024 || parsed.port > 65535 || parsed.port === 3000) return undefined;
+    if (parsed.cwd !== undefined && typeof parsed.cwd !== "string") return undefined;
+    return {
+      cwd: parsed.cwd?.trim() || ".",
+      command: parsed.command.trim(),
+      port: parsed.port,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function parsePreviewSuggestion(output: string): PreviewCommand | undefined {
+  for (const json of extractJsonCandidates(output)) {
+    try {
+      const parsed = JSON.parse(json) as { preview?: unknown };
+      if (!isRecord(parsed.preview)) continue;
+      const command = parsePreviewCommandShape(parsed.preview);
+      if (command) return command;
+    } catch {
+      continue;
+    }
+  }
+
+  return undefined;
+}
+
+function parsePreviewCommandShape(value: Record<string, unknown>): PreviewCommand | undefined {
+  if (typeof value.command !== "string" || !value.command.trim()) return undefined;
+  if (typeof value.port !== "number" || !Number.isInteger(value.port)) return undefined;
+  if (value.port < 1024 || value.port > 65535 || value.port === 3000) return undefined;
+  if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
+  return {
+    cwd: value.cwd?.trim() || ".",
+    command: value.command.trim(),
+    port: value.port,
+  };
+}
+
+function extractJsonObject(output: string): string | undefined {
+  const fenced = output.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const text = fenced?.[1] ?? output;
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return undefined;
+  return text.slice(start, end + 1);
+}
+
+function extractJsonCandidates(output: string): string[] {
+  const candidates: string[] = [];
+  for (const match of output.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    candidates.push(match[1]);
+  }
+
+  const whole = extractJsonObject(output);
+  if (whole) candidates.push(whole);
+  return candidates;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+export function detectLibc(): "gnu" | "musl" | undefined {
+  if (process.platform !== "linux") return undefined;
+  // glibc: /lib/x86_64-linux-gnu/libc.so.6 on Debian/Ubuntu, /lib64/libc.so.6 on RHEL/Fedora.
+  if (
+    existsSync("/lib/x86_64-linux-gnu/libc.so.6") ||
+    existsSync("/lib/aarch64-linux-gnu/libc.so.6") ||
+    existsSync("/lib64/libc.so.6")
+  ) {
+    return "gnu";
+  }
+  // musl: Alpine ships ld-musl-* alongside libc.so.
+  if (
+    existsSync("/lib/ld-musl-x86_64.so.1") ||
+    existsSync("/lib/ld-musl-aarch64.so.1")
+  ) {
+    return "musl";
+  }
+  return undefined;
+}
+
+function inferFrameworkFromCommand(command: string): PreviewFramework {
+  if (/\bnext\b/i.test(command)) return "next";
+  if (/\bvite\b/i.test(command)) return "vite";
+  if (/react-scripts/i.test(command)) return "react-scripts";
+  if (/manage\.py\s+runserver/i.test(command)) return "django";
+  if (/\brails\b/i.test(command)) return "rails";
+  if (/^\s*make\b/i.test(command)) return "make";
+  if (/^\s*just\b/i.test(command)) return "just";
+  return "npm";
 }
 
 function formatVerificationFailure(result: VerificationResult): string {
@@ -615,4 +927,10 @@ function trimOutput(output: string): string {
   const maxLength = 32 * 1024;
   if (output.length <= maxLength) return output.trim();
   return output.slice(output.length - maxLength).trim();
+}
+
+function resolveAppForStart(apps: PreviewApp[], appKey?: string): PreviewApp | undefined {
+  if (appKey) return apps.find((app) => app.key === appKey);
+  if (apps.length === 1) return apps[0];
+  return apps.find((app) => app.key === AGENT_PREVIEW_KEY);
 }

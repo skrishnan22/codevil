@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import WebSocket from "ws";
 
 import type { DOToSandboxMessage, SandboxToDOMessage } from "@codevil/shared";
+import { DOToSandboxMessageSchema, parseInbound } from "@codevil/shared";
 
 import { configureDefaultGitIdentity, ShellGitDriver } from "./git-driver.js";
 import { PiAgentDriver } from "./pi-driver.js";
@@ -28,6 +29,36 @@ function loadEnv(processEnv: EntrypointEnv): EntrypointEnv {
   } catch {
     return processEnv;
   }
+}
+
+export interface SandboxMessageRuntime {
+  handleMessage(message: DOToSandboxMessage): Promise<void>;
+}
+
+export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): (message: DOToSandboxMessage) => void {
+  let mainQueue = Promise.resolve();
+  let previewQueue = Promise.resolve();
+
+  const enqueue = (
+    queue: Promise<void>,
+    run: () => Promise<void>,
+  ): Promise<void> => queue.then(run, run).catch((error: unknown) => {
+    console.error("codevil-sandbox: message handler failed", error);
+  });
+
+  return (message: DOToSandboxMessage): void => {
+    if (message.type === "credential_response") {
+      void runtime.handleMessage(message);
+      return;
+    }
+
+    if (message.type === "preview_start" || message.type === "preview_stop") {
+      previewQueue = enqueue(previewQueue, () => runtime.handleMessage(message));
+      return;
+    }
+
+    mainQueue = enqueue(mainQueue, () => runtime.handleMessage(message));
+  };
 }
 
 export async function startEntrypoint(env: EntrypointEnv = process.env): Promise<void> {
@@ -57,6 +88,7 @@ export async function startEntrypoint(env: EntrypointEnv = process.env): Promise
     agentFactory: () => new PiAgentDriver(),
     git: new ShellGitDriver(),
   });
+  const dispatch = createSandboxMessageDispatcher(runtime);
 
   ws.on("open", () => {
     console.log("codevil-sandbox: websocket connected");
@@ -67,15 +99,18 @@ export async function startEntrypoint(env: EntrypointEnv = process.env): Promise
     console.error("codevil-sandbox: websocket error", error.message);
   });
 
-  let queue = Promise.resolve();
   ws.on("message", (data) => {
-    const message = JSON.parse(data.toString()) as DOToSandboxMessage;
-    console.log("codevil-sandbox: received message", message.type);
-    if (message.type === "credential_response") {
-      void runtime.handleMessage(message);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(data.toString());
+    } catch {
+      console.error("codevil-sandbox: malformed JSON from DO");
       return;
     }
-    queue = queue.then(() => runtime.handleMessage(message));
+    const message = parseInbound(DOToSandboxMessageSchema, raw, "do_to_sandbox");
+    if (!message) return;
+    console.log("codevil-sandbox: received message", message.type);
+    dispatch(message);
   });
 
   ws.on("close", (code, reason) => {

@@ -7,9 +7,15 @@ import test from "node:test";
 import {
   SandboxRuntime,
   ShellCommandRunner,
+  detectPreviewApps,
+  detectPreviewCommand,
   detectSetupCommand,
   detectVerificationCommand,
+  parsePreviewDiscovery,
+  parsePreviewSuggestion,
 } from "../dist/runtime.js";
+import { createSandboxMessageDispatcher } from "../dist/entrypoint.js";
+import { PreviewManager } from "../dist/preview-manager.js";
 
 const zeroCost = {
   input_tokens: 0,
@@ -39,6 +45,7 @@ test("init clones the repo and reports clone progress", async () => {
     { type: "clone_progress", line: "Cloning https://github.com/example/app into /workspace/repo" },
     { type: "clone_complete" },
     { type: "status", message: "Repository ready on main." },
+    { type: "preview_apps", apps: [] },
   ]);
 });
 
@@ -64,11 +71,12 @@ test("init runs repository setup after clone", async () => {
       join(workspace, "repo"),
       300_000,
     ]]);
-    assert.deepEqual(sent.slice(-4), [
+    assert.deepEqual(sent.slice(-5), [
       { type: "status", message: "Running setup command: bash .codevil/setup.sh" },
       { type: "status", message: "Setup completed." },
       { type: "clone_complete" },
       { type: "status", message: "Repository ready on main." },
+      { type: "preview_apps", apps: [] },
     ]);
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -157,6 +165,241 @@ test("detectSetupCommand uses non-interactive npm install flags", async () => {
   }
 });
 
+test("detectPreviewCommand prefers Vite dev scripts and port 5173", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-vite-"));
+  try {
+    await writeFile(join(workspace, "package.json"), JSON.stringify({
+      scripts: { dev: "vite --host 0.0.0.0" },
+      devDependencies: { vite: "^5.0.0" },
+    }));
+    await writeFile(join(workspace, "pnpm-lock.yaml"), "");
+
+    assert.deepEqual(detectPreviewCommand(workspace), {
+      command: "pnpm dev -- --host 0.0.0.0 --port 5173",
+      port: 5173,
+    });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("detectPreviewApps walks workspace packages and skips the root in monorepos", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-monorepo-"));
+  try {
+    await writeFile(join(workspace, "package.json"), JSON.stringify({
+      name: "viz-notes-d2",
+      private: true,
+      workspaces: ["apps/*"],
+      scripts: { dev: "npm run dev:web" },
+      devDependencies: { vite: "^7.0.0" },
+    }));
+
+    await mkdir(join(workspace, "apps", "web"), { recursive: true });
+    await writeFile(join(workspace, "apps", "web", "package.json"), JSON.stringify({
+      name: "web",
+      scripts: { dev: "next dev" },
+      dependencies: { next: "^16.0.0" },
+    }));
+
+    await mkdir(join(workspace, "apps", "landing"), { recursive: true });
+    await writeFile(join(workspace, "apps", "landing", "package.json"), JSON.stringify({
+      name: "landing",
+      scripts: { dev: "next dev" },
+      dependencies: { next: "^16.0.0" },
+    }));
+
+    await mkdir(join(workspace, "apps", "hero-video"), { recursive: true });
+    await writeFile(join(workspace, "apps", "hero-video", "package.json"), JSON.stringify({
+      name: "hero-video",
+    }));
+
+    const apps = detectPreviewApps(workspace);
+    const keys = apps.map((app) => app.key).sort();
+    assert.deepEqual(keys, ["apps/landing", "apps/web"]);
+
+    const landing = apps.find((app) => app.key === "apps/landing");
+    assert.equal(landing.framework, "next");
+    assert.equal(landing.port, 3001);
+    assert.equal(landing.command, "npm run dev -- --hostname 0.0.0.0 --port 3001");
+
+    // Root package's dev script must not produce a separate app entry.
+    assert.ok(!apps.some((app) => app.cwd === workspace));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("detectPreviewApps reads pnpm-workspace.yaml packages", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-pnpm-monorepo-"));
+  try {
+    await writeFile(join(workspace, "package.json"), JSON.stringify({ name: "root", private: true }));
+    await writeFile(join(workspace, "pnpm-workspace.yaml"), "packages:\n  - 'apps/*'\n");
+
+    await mkdir(join(workspace, "apps", "web"), { recursive: true });
+    await writeFile(join(workspace, "apps", "web", "package.json"), JSON.stringify({
+      name: "web",
+      scripts: { dev: "vite" },
+      devDependencies: { vite: "^5.0.0" },
+    }));
+
+    const apps = detectPreviewApps(workspace);
+    assert.equal(apps.length, 1);
+    assert.equal(apps[0].framework, "vite");
+    assert.equal(apps[0].key, "apps/web");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("detectPreviewCommand remaps Next.js away from port 3000", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-next-"));
+  try {
+    await writeFile(join(workspace, "package.json"), JSON.stringify({
+      scripts: { dev: "next dev" },
+      dependencies: { next: "^15.0.0" },
+    }));
+
+    assert.deepEqual(detectPreviewCommand(workspace), {
+      command: "npm run dev -- --hostname 0.0.0.0 --port 3001",
+      port: 3001,
+    });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("preview_start before repository initialization reports preview_error", async () => {
+  const sent = [];
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => new FakeAgentDriver(),
+    git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "preview_start", model: "planner" });
+
+  assert.deepEqual(sent, [
+    { type: "preview_error", message: "Repository is not ready for preview yet." },
+  ]);
+});
+
+test("sandbox dispatcher lets preview messages bypass blocked main work", async () => {
+  const calls = [];
+  let releasePlan;
+  const runtime = {
+    async handleMessage(message) {
+      calls.push(message.type);
+      if (message.type === "plan") {
+        await new Promise((resolve) => {
+          releasePlan = resolve;
+        });
+      }
+    },
+  };
+  const dispatch = createSandboxMessageDispatcher(runtime);
+
+  dispatch({ type: "plan", prompt: "slow", model: "planner" });
+  await new Promise((resolve) => setImmediate(resolve));
+  dispatch({ type: "preview_start", model: "planner" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, ["plan", "preview_start"]);
+
+  releasePlan();
+  await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("PreviewManager includes recent process output when startup times out", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-timeout-"));
+  const errors = [];
+  const logs = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 50,
+    onStarting() {},
+    onReady() {},
+    onStopped() {},
+    onLog: (line) => logs.push(line),
+    onError: (message) => errors.push(message),
+  });
+
+  try {
+    await manager.start({
+      command: "node -e \"console.error('missing env key'); setTimeout(() => {}, 1000)\"",
+      port: 59999,
+    });
+
+    assert.deepEqual(logs, ["missing env key"]);
+    assert.match(errors[0], /Preview server did not become healthy on port 59999/);
+    assert.match(errors[0], /Recent preview output:/);
+    assert.match(errors[0], /missing env key/);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager treats an accepted TCP connection as ready", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-tcp-ready-"));
+  const ready = [];
+  const errors = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 1_000,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped() {},
+    onError: (message) => errors.push(message),
+  });
+
+  try {
+    await manager.start({
+      command: "node -e \"require('net').createServer(() => {}).listen(59998, '127.0.0.1')\"",
+      port: 59998,
+    });
+
+    assert.equal(errors.length, 0);
+    assert.equal(ready.length, 1);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("parsePreviewDiscovery accepts fenced JSON with cwd, command, and port", () => {
+  assert.deepEqual(parsePreviewDiscovery([
+    "```json",
+    "{\"cwd\":\"packages/web\",\"command\":\"pnpm dev -- --host 0.0.0.0 --port 5173\",\"port\":5173}",
+    "```",
+  ].join("\n")), {
+    cwd: "packages/web",
+    command: "pnpm dev -- --host 0.0.0.0 --port 5173",
+    port: 5173,
+  });
+});
+
+test("parsePreviewDiscovery rejects reserved port 3000", () => {
+  assert.equal(parsePreviewDiscovery("{\"cwd\":\".\",\"command\":\"pnpm dev\",\"port\":3000}"), undefined);
+});
+
+test("parsePreviewSuggestion finds preview JSON after unrelated fenced content", () => {
+  assert.deepEqual(parsePreviewSuggestion([
+    "## Plan",
+    "```json",
+    "{\"unrelated\":true}",
+    "```",
+    "```json",
+    "{\"preview\":{\"cwd\":\"apps/landing\",\"command\":\"npm run dev:landing -- --hostname 0.0.0.0 --port 5173\",\"port\":5173}}",
+    "```",
+  ].join("\n")), {
+    cwd: "apps/landing",
+    command: "npm run dev:landing -- --hostname 0.0.0.0 --port 5173",
+    port: 5173,
+  });
+});
+
 test("init streams setup command output", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-runtime-output-"));
   const sent = [];
@@ -233,7 +476,7 @@ test("plan starts a read-only Pi session, forwards agent events, and sends plan_
   assert.equal(planCall[0], "plan");
   assert.match(planCall[1], /You are in PLAN MODE/);
   assert.match(planCall[1], /add rate limits/);
-  assert.deepEqual(sent.slice(4), [
+  assert.deepEqual(sent.slice(5), [
     { type: "agent_event", event: { type: "agent_start" } },
     {
       type: "plan_ready",
@@ -241,6 +484,83 @@ test("plan starts a read-only Pi session, forwards agent events, and sends plan_
       cost: { input_tokens: 10, output_tokens: 20, total_cost_usd: 0.03 },
     },
   ]);
+});
+
+test("plan captures a preview command suggested by the main agent", async () => {
+  const sent = [];
+  const agent = new FakeAgentDriver({
+    plan: {
+      plan: [
+        "## Plan",
+        "",
+        "```json",
+        "{\"preview\":{\"cwd\":\"apps/landing\",\"command\":\"npx next dev -p 5173 -H 0.0.0.0\",\"port\":5173}}",
+        "```",
+      ].join("\n"),
+      cost: zeroCost,
+    },
+  });
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => agent,
+    git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  await runtime.handleMessage({ type: "plan", prompt: "work on landing page", model: "planner" });
+
+  assert.deepEqual(sent.at(-2), {
+    type: "status",
+    message: "Preview command saved: npx next dev -p 5173 -H 0.0.0.0 in apps/landing on port 5173.",
+  });
+  assert.equal(sent.at(-1).type, "plan_ready");
+});
+
+test("preview_start uses the cached main-agent preview command without a discovery agent", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-cached-preview-"));
+  const sent = [];
+  let createdAgents = 0;
+  const planningAgent = new FakeAgentDriver({
+    plan: {
+      plan: [
+        "## Plan",
+        "",
+        "{\"preview\":{\"cwd\":\".\",\"command\":\"node -e \\\"require('net').createServer(() => {}).listen(59997, '127.0.0.1')\\\"\",\"port\":59997}}",
+      ].join("\n"),
+      cost: zeroCost,
+    },
+  });
+  const runtime = new SandboxRuntime({
+    workspace,
+    send: (message) => sent.push(message),
+    agentFactory: () => {
+      createdAgents += 1;
+      if (createdAgents > 1) throw new Error("preview_start should not create a discovery agent");
+      return planningAgent;
+    },
+    git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
+  });
+
+  try {
+    await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+    await runtime.handleMessage({ type: "plan", prompt: "work on landing page", model: "planner" });
+    await runtime.handleMessage({ type: "preview_start", model: "planner" });
+
+    assert.equal(createdAgents, 1);
+    assert.deepEqual(sent.at(-1), {
+      type: "preview_ready",
+      command: "node -e \"require('net').createServer(() => {}).listen(59997, '127.0.0.1')\"",
+      port: 59997,
+    });
+
+    await runtime.handleMessage({ type: "preview_stop" });
+  } finally {
+    await runtime.dispose();
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test("refine_plan reuses the active agent session", async () => {
@@ -423,8 +743,8 @@ class FakeGitDriver {
 
   async clone(repo, destination, onProgress, credential) {
     this.calls.push(credential ? ["clone", repo, destination, credential] : ["clone", repo, destination]);
+    await mkdir(destination, { recursive: true }).catch(() => {});
     if (this.options.createCodevilSetup) {
-      await mkdir(destination, { recursive: true });
       await mkdir(join(destination, ".codevil"), { recursive: true });
       await writeFile(join(destination, ".codevil", "setup.sh"), "#!/bin/bash\n");
     }

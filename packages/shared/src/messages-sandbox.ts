@@ -25,6 +25,15 @@ export const PlanMessageSchema = z.object({
   ...TraceContextFields,
 });
 
+export const AgentTurnMessageSchema = z.object({
+  type: z.literal("agent_turn"),
+  run_id: z.string(),
+  prompt: z.string(),
+  model: z.string(),
+  provider: z.string().optional(),
+  ...TraceContextFields,
+});
+
 export const ExecuteMessageSchema = z.object({
   type: z.literal("execute"),
   plan: z.string(),
@@ -56,6 +65,13 @@ export const CredentialResponseMessageSchema = z.object({
   error: z.string().optional(),
 });
 
+export const CreatePRResponseMessageSchema = z.object({
+  type: z.literal("create_pr_response"),
+  request_id: z.string(),
+  url: z.string().optional(),
+  error: z.string().optional(),
+});
+
 export const PreviewStartSandboxMessageSchema = z.object({
   type: z.literal("preview_start"),
   model: z.string().optional(),
@@ -71,21 +87,25 @@ export const PreviewStopSandboxMessageSchema = z.object({
 
 export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   InitMessageSchema,
+  AgentTurnMessageSchema,
   PlanMessageSchema,
   ExecuteMessageSchema,
   RefinePlanSandboxMessageSchema,
   CreatePRMessageSchema,
   CredentialResponseMessageSchema,
+  CreatePRResponseMessageSchema,
   PreviewStartSandboxMessageSchema,
   PreviewStopSandboxMessageSchema,
 ]);
 
 export type InitMessage = z.infer<typeof InitMessageSchema>;
+export type AgentTurnMessage = z.infer<typeof AgentTurnMessageSchema>;
 export type PlanMessage = z.infer<typeof PlanMessageSchema>;
 export type ExecuteMessage = z.infer<typeof ExecuteMessageSchema>;
 export type RefinePlanSandboxMessage = z.infer<typeof RefinePlanSandboxMessageSchema>;
 export type CreatePRMessage = z.infer<typeof CreatePRMessageSchema>;
 export type CredentialResponseMessage = z.infer<typeof CredentialResponseMessageSchema>;
+export type CreatePRResponseMessage = z.infer<typeof CreatePRResponseMessageSchema>;
 export type PreviewStartSandboxMessage = z.infer<typeof PreviewStartSandboxMessageSchema>;
 export type PreviewStopSandboxMessage = z.infer<typeof PreviewStopSandboxMessageSchema>;
 export type DOToSandboxMessage = z.infer<typeof DOToSandboxMessageSchema>;
@@ -121,6 +141,24 @@ export const SandboxPlanReadySchema = z.object({
   type: z.literal("plan_ready"),
   plan: z.string(),
   cost: CostInfoSchema,
+});
+
+export const AgentTurnCompleteSchema = z.object({
+  type: z.literal("agent_turn_complete"),
+  run_id: z.string(),
+  response: z.string(),
+  cost: CostInfoSchema,
+});
+
+export const CreatePRRequestSchema = z.object({
+  type: z.literal("create_pr_request"),
+  run_id: z.string(),
+  request_id: z.string(),
+  branch: z.string(),
+  base_branch: z.string(),
+  title: z.string(),
+  body: z.string(),
+  draft: z.boolean(),
 });
 
 export const ExecutionCompleteSchema = z.object({
@@ -206,6 +244,8 @@ export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [
   SandboxStatusSchema,
   SandboxCloneProgressSchema,
   SandboxPlanReadySchema,
+  AgentTurnCompleteSchema,
+  CreatePRRequestSchema,
   ExecutionCompleteSchema,
   SandboxVerificationStartedSchema,
   SandboxVerificationRetryingSchema,
@@ -227,6 +267,8 @@ export type SandboxCloneComplete = z.infer<typeof SandboxCloneCompleteSchema>;
 export type SandboxStatus = z.infer<typeof SandboxStatusSchema>;
 export type SandboxCloneProgress = z.infer<typeof SandboxCloneProgressSchema>;
 export type SandboxPlanReady = z.infer<typeof SandboxPlanReadySchema>;
+export type AgentTurnComplete = z.infer<typeof AgentTurnCompleteSchema>;
+export type CreatePRRequest = z.infer<typeof CreatePRRequestSchema>;
 export type ExecutionComplete = z.infer<typeof ExecutionCompleteSchema>;
 export type SandboxVerificationStarted = z.infer<typeof SandboxVerificationStartedSchema>;
 export type SandboxVerificationRetrying = z.infer<typeof SandboxVerificationRetryingSchema>;

@@ -72,13 +72,38 @@ test("Sandbox→DO: credential_request requires host", () => {
   assert.equal(drops.length, 1);
 });
 
-test("DO→Sandbox: plan message parses with optional provider", () => {
+test("DO→Sandbox: agent turn parses with optional provider", () => {
   const result = parseInbound(
     DOToSandboxMessageSchema,
-    { type: "plan", prompt: "do x", model: "claude-sonnet-4-6" },
+    { type: "agent_turn", run_id: "run_1", prompt: "do x", model: "claude-sonnet-4-6" },
     "do_to_sandbox",
   );
-  assert.equal(result?.type, "plan");
+  assert.equal(result?.type, "agent_turn");
+});
+
+test("Sandbox→DO: agent turn completion and PR request parse", () => {
+  const completed = parseInbound(
+    SandboxToDOMessageSchema,
+    { type: "agent_turn_complete", run_id: "run_1", response: "Done", cost: { input_tokens: 1, output_tokens: 2, total_cost_usd: 0 } },
+    "sandbox_to_do",
+  );
+  const request = parseInbound(
+    SandboxToDOMessageSchema,
+    {
+      type: "create_pr_request",
+      run_id: "run_1",
+      request_id: "pr_1",
+      branch: "codevil/fix",
+      base_branch: "main",
+      title: "Fix bug",
+      body: "Done",
+      draft: true,
+    },
+    "sandbox_to_do",
+  );
+
+  assert.equal(completed?.type, "agent_turn_complete");
+  assert.equal(request?.type, "create_pr_request");
 });
 
 test("DO→CLI: agent_event opaque payload accepted", () => {

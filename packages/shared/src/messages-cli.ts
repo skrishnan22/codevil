@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CostInfoSchema } from "./cost.js";
 import { PreviewAppSchema } from "./preview.js";
+import { ParticipantIdentitySchema } from "./room.js";
 
 // --- DO → CLI events ---
 
@@ -12,6 +13,9 @@ export const SessionCreatedEventSchema = z.object({
 export const StatusEventSchema = z.object({
   type: z.literal("status"),
   message: z.string(),
+  // Optional display name of the teammate whose action produced this event
+  // (multiplayer attribution). Absent for system-generated status events.
+  actor: z.string().optional(),
 });
 
 export const CloneProgressEventSchema = z.object({
@@ -53,6 +57,9 @@ export const CompleteEventSchema = z.object({
 export const ErrorEventSchema = z.object({
   type: z.literal("error"),
   message: z.string(),
+  // Optional display name of the teammate the error refers to (multiplayer
+  // attribution), e.g. naming whoever already decided on a plan.
+  actor: z.string().optional(),
 });
 
 export const PreviewStartingEventSchema = z.object({
@@ -82,6 +89,76 @@ export const PreviewAppsEventSchema = z.object({
   apps: z.array(PreviewAppSchema),
 });
 
+export const RoomReadyEventSchema = z.object({
+  type: z.literal("room_ready"),
+  repo: z.string(),
+});
+
+export const ParticipantJoinedEventSchema = z.object({
+  type: z.literal("participant_joined"),
+  participant: ParticipantIdentitySchema,
+});
+
+export const ParticipantLeftEventSchema = z.object({
+  type: z.literal("participant_left"),
+  participant: ParticipantIdentitySchema,
+});
+
+export const HumanMessageEventSchema = z.object({
+  type: z.literal("human_message"),
+  id: z.string(),
+  actor: ParticipantIdentitySchema,
+  text: z.string(),
+  created_at: z.string(),
+});
+
+export const AgentRequestEventSchema = z.object({
+  type: z.literal("agent_request"),
+  run_id: z.string(),
+  actor: ParticipantIdentitySchema,
+  text: z.string(),
+  created_at: z.string(),
+});
+
+export const AgentRequestQueuedEventSchema = z.object({
+  type: z.literal("agent_request_queued"),
+  run_id: z.string(),
+  position: z.number(),
+});
+
+export const AgentRunStartedEventSchema = z.object({
+  type: z.literal("agent_run_started"),
+  run_id: z.string(),
+  actor: ParticipantIdentitySchema,
+  text: z.string(),
+});
+
+export const ApprovalRequestedEventSchema = z.object({
+  type: z.literal("approval_requested"),
+  run_id: z.string(),
+  plan: z.string(),
+  cost: CostInfoSchema,
+  refinement_round: z.number(),
+});
+
+export const AgentRunCompletedEventSchema = z.object({
+  type: z.literal("agent_run_completed"),
+  run_id: z.string(),
+  pr_url: z.string().optional(),
+});
+
+export const AgentRunFailedEventSchema = z.object({
+  type: z.literal("agent_run_failed"),
+  run_id: z.string(),
+  message: z.string(),
+});
+
+export const AgentResponseEventSchema = z.object({
+  type: z.literal("agent_response"),
+  run_id: z.string(),
+  text: z.string(),
+});
+
 export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   StatusEventSchema,
@@ -97,6 +174,17 @@ export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   PreviewErrorEventSchema,
   PreviewStoppedEventSchema,
   PreviewAppsEventSchema,
+  RoomReadyEventSchema,
+  ParticipantJoinedEventSchema,
+  ParticipantLeftEventSchema,
+  HumanMessageEventSchema,
+  AgentRequestEventSchema,
+  AgentRequestQueuedEventSchema,
+  AgentRunStartedEventSchema,
+  ApprovalRequestedEventSchema,
+  AgentRunCompletedEventSchema,
+  AgentRunFailedEventSchema,
+  AgentResponseEventSchema,
 ]);
 
 // Lenient variant for replaying persisted history from DO SQLite.
@@ -119,6 +207,17 @@ export type PreviewReadyEvent = z.infer<typeof PreviewReadyEventSchema>;
 export type PreviewErrorEvent = z.infer<typeof PreviewErrorEventSchema>;
 export type PreviewStoppedEvent = z.infer<typeof PreviewStoppedEventSchema>;
 export type PreviewAppsEvent = z.infer<typeof PreviewAppsEventSchema>;
+export type RoomReadyEvent = z.infer<typeof RoomReadyEventSchema>;
+export type ParticipantJoinedEvent = z.infer<typeof ParticipantJoinedEventSchema>;
+export type ParticipantLeftEvent = z.infer<typeof ParticipantLeftEventSchema>;
+export type HumanMessageEvent = z.infer<typeof HumanMessageEventSchema>;
+export type AgentRequestEvent = z.infer<typeof AgentRequestEventSchema>;
+export type AgentRequestQueuedEvent = z.infer<typeof AgentRequestQueuedEventSchema>;
+export type AgentRunStartedEvent = z.infer<typeof AgentRunStartedEventSchema>;
+export type ApprovalRequestedEvent = z.infer<typeof ApprovalRequestedEventSchema>;
+export type AgentRunCompletedEvent = z.infer<typeof AgentRunCompletedEventSchema>;
+export type AgentRunFailedEvent = z.infer<typeof AgentRunFailedEventSchema>;
+export type AgentResponseEvent = z.infer<typeof AgentResponseEventSchema>;
 export type DOToCLIEvent = z.infer<typeof DOToCLIEventSchema>;
 
 // --- CLI → DO messages ---
@@ -149,6 +248,32 @@ export const StopSessionMessageSchema = z.object({
   type: z.literal("stop_session"),
 });
 
+export const HumanChatMessageSchema = z.object({
+  type: z.literal("human_message"),
+  text: z.string().trim().min(1).max(20_000),
+});
+
+export const AgentRequestMessageSchema = z.object({
+  type: z.literal("agent_request"),
+  text: z.string().trim().min(1).max(20_000),
+});
+
+export const ApproveRunMessageSchema = z.object({
+  type: z.literal("approve_run"),
+  run_id: z.string(),
+});
+
+export const RefineRunMessageSchema = z.object({
+  type: z.literal("refine_run"),
+  run_id: z.string(),
+  feedback: z.string().trim().min(1).max(20_000),
+});
+
+export const AbortRunMessageSchema = z.object({
+  type: z.literal("abort_run"),
+  run_id: z.string(),
+});
+
 export const CLIToDOMessageSchema = z.discriminatedUnion("type", [
   ApproveMessageSchema,
   AbortMessageSchema,
@@ -156,6 +281,11 @@ export const CLIToDOMessageSchema = z.discriminatedUnion("type", [
   PreviewStartMessageSchema,
   PreviewStopMessageSchema,
   StopSessionMessageSchema,
+  HumanChatMessageSchema,
+  AgentRequestMessageSchema,
+  ApproveRunMessageSchema,
+  RefineRunMessageSchema,
+  AbortRunMessageSchema,
 ]);
 
 export type ApproveMessage = z.infer<typeof ApproveMessageSchema>;
@@ -164,4 +294,9 @@ export type RefinePlanMessage = z.infer<typeof RefinePlanMessageSchema>;
 export type PreviewStartMessage = z.infer<typeof PreviewStartMessageSchema>;
 export type PreviewStopMessage = z.infer<typeof PreviewStopMessageSchema>;
 export type StopSessionMessage = z.infer<typeof StopSessionMessageSchema>;
+export type HumanChatMessage = z.infer<typeof HumanChatMessageSchema>;
+export type AgentRequestMessage = z.infer<typeof AgentRequestMessageSchema>;
+export type ApproveRunMessage = z.infer<typeof ApproveRunMessageSchema>;
+export type RefineRunMessage = z.infer<typeof RefineRunMessageSchema>;
+export type AbortRunMessage = z.infer<typeof AbortRunMessageSchema>;
 export type CLIToDOMessage = z.infer<typeof CLIToDOMessageSchema>;

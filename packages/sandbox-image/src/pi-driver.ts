@@ -2,15 +2,24 @@ import { getModels, type KnownProvider, type Model } from "@mariozechner/pi-ai";
 import {
   AuthStorage,
   createAgentSession,
+  defineTool,
   ModelRegistry,
   SessionManager,
   SettingsManager,
   type AgentSession,
+  type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 
 import type { CostInfo } from "@codevil/shared";
 
-import type { AgentDriver, AgentStartOptions, PlanResult } from "./runtime.js";
+import type {
+  AgentDriver,
+  AgentStartOptions,
+  CreatePullRequestToolOptions,
+  PlanResult,
+  TurnResult,
+} from "./runtime.js";
 
 const zeroCost: CostInfo = {
   input_tokens: 0,
@@ -45,13 +54,23 @@ export class PiAgentDriver implements AgentDriver {
       model,
       authStorage,
       modelRegistry,
+      customTools: [createPullRequestTool(options.createPullRequest)],
       sessionManager: SessionManager.inMemory(options.cwd),
       settingsManager: SettingsManager.inMemory({
         compaction: { enabled: false },
         retry: { enabled: true, maxRetries: 5 },
       }),
     });
-    session.setActiveToolsByName(["read", "grep", "find", "ls"]);
+    session.setActiveToolsByName([
+      "read",
+      "grep",
+      "find",
+      "ls",
+      "bash",
+      "edit",
+      "write",
+      "create_pull_request",
+    ]);
 
     session.subscribe((event) => {
       const delta = extractAssistantDeltaFromEvent(event);
@@ -66,27 +85,31 @@ export class PiAgentDriver implements AgentDriver {
     this.modelRegistry = modelRegistry;
   }
 
-  async plan(prompt: string): Promise<PlanResult> {
+  async turn(prompt: string): Promise<TurnResult> {
     const session = this.requireSession();
     this.latestAssistantText = "";
     this.streamedAssistantText = "";
     await session.prompt(prompt);
     await waitForQueuedAgentEvents(session);
     return {
-      plan: this.latestAssistantText || latestAssistantText(session.messages) || this.streamedAssistantText.trim(),
+      response: this.latestAssistantText || latestAssistantText(session.messages) || this.streamedAssistantText.trim(),
       cost: zeroCost,
     };
   }
 
-  async refine(feedback: string): Promise<PlanResult> {
-    const session = this.requireSession();
-    this.latestAssistantText = "";
-    this.streamedAssistantText = "";
-    await session.prompt(feedback);
-    await waitForQueuedAgentEvents(session);
+  async plan(prompt: string): Promise<PlanResult> {
+    const result = await this.turn(prompt);
     return {
-      plan: this.latestAssistantText || latestAssistantText(session.messages) || this.streamedAssistantText.trim(),
-      cost: zeroCost,
+      plan: result.response,
+      cost: result.cost,
+    };
+  }
+
+  async refine(feedback: string): Promise<PlanResult> {
+    const result = await this.turn(feedback);
+    return {
+      plan: result.response,
+      cost: result.cost,
     };
   }
 
@@ -184,6 +207,35 @@ function assistantText(message: unknown): string {
 
 function findKnownModel(provider: KnownProvider, modelId: string): Model<any> | undefined {
   return getModels(provider).find((model) => model.id === modelId);
+}
+
+function createPullRequestTool(
+  createPullRequest: (options: CreatePullRequestToolOptions) => Promise<{ url: string }>,
+): ToolDefinition {
+  return defineTool({
+    name: "create_pull_request",
+    label: "Create pull request",
+    description: "Commit the current repository changes, push a branch, and create a pull request. Use only when the user asks for a pull request.",
+    promptSnippet: "Create a pull request when explicitly requested.",
+    promptGuidelines: [
+      "Use create_pull_request only when the user explicitly asks to create or open a pull request.",
+      "Do not create a pull request automatically after making changes.",
+    ],
+    parameters: Type.Object({
+      title: Type.String({ description: "Pull request title" }),
+      body: Type.String({ description: "Pull request description" }),
+      branch: Type.Optional(Type.String({ description: "Branch name; generated when omitted" })),
+      commit_message: Type.Optional(Type.String({ description: "Commit message; defaults to the pull request title" })),
+      draft: Type.Optional(Type.Boolean({ description: "Whether to create a draft pull request; defaults to true" })),
+    }),
+    async execute(_toolCallId, params) {
+      const result = await createPullRequest(params);
+      return {
+        content: [{ type: "text", text: `Pull request created: ${result.url}` }],
+        details: result,
+      };
+    },
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -36,29 +36,37 @@ test("extracts streamed assistant text from Pi message_update deltas", () => {
   assert.equal(text, "## Plan\n");
 });
 
-test("starts read-only but can unlock execution tools later", async () => {
+test("starts with coding tools and the create_pull_request tool active", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "codevil-pi-driver-"));
   const driver = new PiAgentDriver();
+  const createPullRequestCalls = [];
 
   try {
     await driver.start({
       cwd,
-      mode: "read-only",
+      mode: "coding",
       provider: "anthropic",
       model: "claude-3-5-haiku-20241022",
       llmKey: "test-key",
       onEvent: () => {},
+      createPullRequest: async (options) => {
+        createPullRequestCalls.push(options);
+        return { url: "https://github.com/example/app/pull/1" };
+      },
     });
 
     const session = driver.session;
-    assert.deepEqual(session.getActiveToolNames().sort(), ["find", "grep", "ls", "read"]);
-    assert.ok(session.getAllTools().some((tool) => tool.name === "bash"));
-    assert.ok(session.getAllTools().some((tool) => tool.name === "edit"));
-    assert.ok(session.getAllTools().some((tool) => tool.name === "write"));
-
-    await driver.switchToExecution("claude-3-5-haiku-20241022", "anthropic");
-
-    assert.deepEqual(session.getActiveToolNames().sort(), ["bash", "edit", "read", "write"]);
+    assert.deepEqual(session.getActiveToolNames().sort(), [
+      "bash",
+      "create_pull_request",
+      "edit",
+      "find",
+      "grep",
+      "ls",
+      "read",
+      "write",
+    ]);
+    assert.ok(session.getAllTools().some((tool) => tool.name === "create_pull_request"));
   } finally {
     driver.dispose();
     await rm(cwd, { recursive: true, force: true });

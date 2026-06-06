@@ -47,7 +47,7 @@ export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): 
   });
 
   return (message: DOToSandboxMessage): void => {
-    if (message.type === "credential_response") {
+    if (message.type === "credential_response" || message.type === "create_pr_response") {
       void runtime.handleMessage(message);
       return;
     }

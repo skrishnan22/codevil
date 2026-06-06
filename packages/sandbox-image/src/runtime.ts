@@ -32,11 +32,25 @@ const AGENT_PREVIEW_KEY = "agent";
 
 export interface AgentStartOptions {
   cwd: string;
-  mode: "read-only";
+  mode: "coding";
   model: string;
   provider: string;
   llmKey?: string;
   onEvent(event: unknown): void;
+  createPullRequest(options: CreatePullRequestToolOptions): Promise<{ url: string }>;
+}
+
+export interface CreatePullRequestToolOptions {
+  title: string;
+  body: string;
+  branch?: string;
+  commit_message?: string;
+  draft?: boolean;
+}
+
+export interface TurnResult {
+  response: string;
+  cost: CostInfo;
 }
 
 export interface PlanResult {
@@ -46,6 +60,7 @@ export interface PlanResult {
 
 export interface AgentDriver {
   start(options: AgentStartOptions): Promise<void>;
+  turn(prompt: string): Promise<TurnResult>;
   plan(prompt: string): Promise<PlanResult>;
   refine(feedback: string): Promise<PlanResult>;
   switchToExecution(model: string, provider?: string): Promise<void>;
@@ -133,10 +148,16 @@ export class SandboxRuntime {
   private readonly credentialTimeoutMs: number;
   private repo: RepoState = { state: "uninit" };
   private agent: AgentDriver | undefined;
+  private activeRunId: string | undefined;
   private preview: PreviewManager | undefined;
   private tracer: Tracer | undefined;
   private credentialRequests = new Map<string, {
     resolve(credential: GitCredential | undefined): void;
+    timeout: ReturnType<typeof setTimeout>;
+  }>();
+  private pullRequestRequests = new Map<string, {
+    resolve(result: { url: string }): void;
+    reject(error: Error): void;
     timeout: ReturnType<typeof setTimeout>;
   }>();
 
@@ -170,6 +191,9 @@ export class SandboxRuntime {
         case "init":
           await this.handleInit(message.repo);
           return;
+        case "agent_turn":
+          await this.handleAgentTurn(message.run_id, message.prompt, message.model, message.provider, parent);
+          return;
         case "plan":
           await this.handlePlan(message.prompt, message.model, message.provider, parent);
           return;
@@ -184,6 +208,9 @@ export class SandboxRuntime {
           return;
         case "credential_response":
           this.handleCredentialResponse(message);
+          return;
+        case "create_pr_response":
+          this.handleCreatePRResponse(message);
           return;
         case "preview_start":
           await this.handlePreviewStart(message.app_key);
@@ -283,7 +310,7 @@ export class SandboxRuntime {
 
     await agent.start({
       cwd: repoDir,
-      mode: "read-only",
+      mode: "coding",
       model,
       provider: provider ?? this.provider,
       llmKey: this.llmKey,
@@ -295,6 +322,7 @@ export class SandboxRuntime {
         if (!validated) return;
         this.send({ type: "agent_event", event: validated });
       },
+      createPullRequest: (options) => this.createPullRequest(options),
     });
 
     const result = await this.maybeSpan(
@@ -304,6 +332,91 @@ export class SandboxRuntime {
     );
     this.capturePreviewCommand(result.plan);
     this.send({ type: "plan_ready", ...result });
+  }
+
+  private async handleAgentTurn(
+    runId: string,
+    prompt: string,
+    model: string,
+    provider: string | undefined,
+    parent: SpanContext | undefined,
+  ): Promise<void> {
+    const repoDir = this.requireRepo().dir;
+    if (!this.agent) {
+      const agent = this.agentFactory();
+      await agent.start({
+        cwd: repoDir,
+        mode: "coding",
+        model,
+        provider: provider ?? this.provider,
+        llmKey: this.llmKey,
+        onEvent: (event) => {
+          const validated = parseInbound(PiAgentEventSchema, event, "pi_agent_event");
+          if (validated) this.send({ type: "agent_event", event: validated });
+        },
+        createPullRequest: (options) => this.createPullRequest(options),
+      });
+      this.agent = agent;
+    }
+
+    this.activeRunId = runId;
+    try {
+      const result = await this.maybeSpan(
+        "llm.agent_turn",
+        { parent, attributes: { run_id: runId, model, provider: provider ?? this.provider } },
+        () => this.requireAgent().turn(prompt),
+      );
+      this.capturePreviewCommand(result.response);
+      this.send({ type: "agent_turn_complete", run_id: runId, ...result });
+    } finally {
+      this.activeRunId = undefined;
+    }
+  }
+
+  private async createPullRequest(options: CreatePullRequestToolOptions): Promise<{ url: string }> {
+    const repo = this.requireRepo();
+    const runId = this.activeRunId;
+    if (!runId) throw new Error("Pull requests can only be created during an active agent turn");
+    const branch = options.branch?.trim() || `codevil/${slugify(options.title)}-${Date.now()}`;
+    const credential = await this.requestCredential(repo.url);
+    await this.git.pushBranch({
+      cwd: repo.dir,
+      branch,
+      commitMessage: options.commit_message?.trim() || options.title,
+      credential,
+    });
+
+    const requestId = `pr_${crypto.randomUUID().replace(/-/g, "")}`;
+    this.send({
+      type: "create_pr_request",
+      run_id: runId,
+      request_id: requestId,
+      branch,
+      base_branch: repo.defaultBranch,
+      title: options.title,
+      body: options.body,
+      draft: options.draft ?? true,
+    });
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pullRequestRequests.delete(requestId);
+        reject(new Error("Timed out waiting for pull request creation"));
+      }, 60_000);
+      this.pullRequestRequests.set(requestId, { resolve, reject, timeout });
+    });
+  }
+
+  private handleCreatePRResponse(message: Extract<DOToSandboxMessage, { type: "create_pr_response" }>): void {
+    const pending = this.pullRequestRequests.get(message.request_id);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    this.pullRequestRequests.delete(message.request_id);
+    if (message.error || !message.url) {
+      pending.reject(new Error(message.error ?? "Pull request creation did not return a URL"));
+      return;
+    }
+    pending.resolve({ url: message.url });
   }
 
   private async handleRefine(feedback: string, parent: SpanContext | undefined): Promise<void> {
@@ -733,6 +846,14 @@ function zeroCost(): CostInfo {
     output_tokens: 0,
     total_cost_usd: 0,
   };
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "change";
 }
 
 export class RepositoryVerifier implements Verifier {

@@ -311,6 +311,32 @@ test("sandbox dispatcher lets preview messages bypass blocked main work", async 
   await new Promise((resolve) => setImmediate(resolve));
 });
 
+test("sandbox dispatcher lets create_pr_response resolve a tool call during an active turn", async () => {
+  const calls = [];
+  let releaseTurn;
+  const runtime = {
+    async handleMessage(message) {
+      calls.push(message.type);
+      if (message.type === "agent_turn") {
+        await new Promise((resolve) => {
+          releaseTurn = resolve;
+        });
+      }
+      if (message.type === "create_pr_response") {
+        releaseTurn();
+      }
+    },
+  };
+  const dispatch = createSandboxMessageDispatcher(runtime);
+
+  dispatch({ type: "agent_turn", run_id: "run_1", prompt: "open a PR", model: "coder" });
+  await new Promise((resolve) => setImmediate(resolve));
+  dispatch({ type: "create_pr_response", request_id: "pr_1", url: "https://github.com/acme/app/pull/1" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, ["agent_turn", "create_pr_response"]);
+});
+
 test("PreviewManager includes recent process output when startup times out", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-timeout-"));
   const errors = [];
@@ -446,11 +472,11 @@ test("ShellCommandRunner returns timeout failures", async () => {
   assert.match(result.stderr, /timed out/);
 });
 
-test("plan starts a read-only Pi session, forwards agent events, and sends plan_ready", async () => {
+test("agent_turn starts a coding Pi session, forwards events, and sends the final response", async () => {
   const sent = [];
   const agent = new FakeAgentDriver({
-    plan: {
-      plan: "## Plan\n\n1. Test",
+    turn: {
+      response: "The rate limiter is configured in src/rate-limit.ts.",
       cost: { input_tokens: 10, output_tokens: 20, total_cost_usd: 0.03 },
     },
   });
@@ -463,27 +489,99 @@ test("plan starts a read-only Pi session, forwards agent events, and sends plan_
   });
 
   await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
-  await runtime.handleMessage({ type: "plan", prompt: "add rate limits", model: "planner" });
+  await runtime.handleMessage({ type: "agent_turn", run_id: "run_1", prompt: "where are rate limits configured?", model: "coder" });
 
-  const [startCall, planCall] = agent.calls;
+  const [startCall, turnCall] = agent.calls;
   assert.equal(startCall[0], "start");
   assert.equal(startCall[1].cwd, "/workspace/repo");
-  assert.equal(startCall[1].mode, "read-only");
-  assert.equal(startCall[1].model, "planner");
+  assert.equal(startCall[1].mode, "coding");
+  assert.equal(startCall[1].model, "coder");
   assert.equal(startCall[1].provider, "anthropic");
   assert.equal(startCall[1].llmKey, undefined);
   assert.equal(typeof startCall[1].onEvent, "function");
-  assert.equal(planCall[0], "plan");
-  assert.match(planCall[1], /You are in PLAN MODE/);
-  assert.match(planCall[1], /add rate limits/);
+  assert.equal(typeof startCall[1].createPullRequest, "function");
+  assert.deepEqual(turnCall, ["turn", "where are rate limits configured?"]);
   assert.deepEqual(sent.slice(5), [
     { type: "agent_event", event: { type: "agent_start" } },
     {
-      type: "plan_ready",
-      plan: "## Plan\n\n1. Test",
+      type: "agent_turn_complete",
+      run_id: "run_1",
+      response: "The rate limiter is configured in src/rate-limit.ts.",
       cost: { input_tokens: 10, output_tokens: 20, total_cost_usd: 0.03 },
     },
   ]);
+});
+
+test("agent_turn reuses the active Pi session for follow-up questions", async () => {
+  const sent = [];
+  const agent = new FakeAgentDriver({
+    turn: [
+      { response: "First answer", cost: zeroCost },
+      { response: "Follow-up answer", cost: zeroCost },
+    ],
+  });
+  let createdAgents = 0;
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => {
+      createdAgents++;
+      return agent;
+    },
+    git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  await runtime.handleMessage({ type: "agent_turn", run_id: "run_1", prompt: "explain auth", model: "coder" });
+  await runtime.handleMessage({ type: "agent_turn", run_id: "run_2", prompt: "what calls it?", model: "coder" });
+
+  assert.equal(createdAgents, 1);
+  assert.deepEqual(agent.calls.filter(([name]) => name === "turn"), [
+    ["turn", "explain auth"],
+    ["turn", "what calls it?"],
+  ]);
+});
+
+test("create_pull_request callback pushes and waits for the worker PR response", async () => {
+  const sent = [];
+  const git = new FakeGitDriver();
+  let finishTurn;
+  const agent = new FakeAgentDriver({
+    turn: new Promise((resolve) => {
+      finishTurn = resolve;
+    }),
+  });
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => agent,
+    git,
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  const turn = runtime.handleMessage({ type: "agent_turn", run_id: "run_1", prompt: "fix it and open a PR", model: "coder" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const createPr = agent.calls.find(([name]) => name === "start")[1].createPullRequest;
+  const pending = createPr({
+    title: "Fix bug",
+    body: "Fixes the bug",
+    branch: "codevil/fix-bug",
+    commit_message: "Fix bug",
+    draft: true,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const request = sent.find((message) => message.type === "create_pr_request");
+  assert.equal(request.run_id, "run_1");
+  assert.equal(request.branch, "codevil/fix-bug");
+  await runtime.handleMessage({ type: "create_pr_response", request_id: request.request_id, url: "https://github.com/example/app/pull/1" });
+
+  assert.deepEqual(await pending, { url: "https://github.com/example/app/pull/1" });
+  finishTurn({ response: "Opened PR", cost: zeroCost });
+  await turn;
 });
 
 test("plan captures a preview command suggested by the main agent", async () => {
@@ -808,6 +906,13 @@ class FakeAgentDriver {
     this.calls.push(["plan", prompt]);
     this.onEvent?.({ type: "agent_start" });
     return this.responses.plan;
+  }
+
+  async turn(prompt) {
+    this.calls.push(["turn", prompt]);
+    this.onEvent?.({ type: "agent_start" });
+    if (Array.isArray(this.responses.turn)) return this.responses.turn.shift();
+    return this.responses.turn;
   }
 
   async refine(feedback) {

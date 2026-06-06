@@ -47,10 +47,6 @@ function buildTraceGroup(entries: ActivityEntry[]): TraceGroupData {
 function deriveTimeline(
   activityLog: ActivityEntry[],
   messages: ChatMessage[],
-  onViewPlan: () => void,
-  approve: () => void,
-  abort: () => void,
-  planApproved: boolean,
 ): TimelineItemData[] {
   const items: TimelineItemData[] = [];
 
@@ -74,33 +70,7 @@ function deriveTimeline(
 
   function emitMessage(msg: ChatMessage) {
     if (msg.variant === "plan") {
-      if (!planApproved) {
-        const attention: AttentionData = {
-          id: `attn-plan-${msg.id}`,
-          kind: "approval-needed",
-          title: "Plan ready — approval needed",
-          description: "Approve the implementation plan to start execution, or review it first.",
-          actions: [
-            { label: "Approve & execute", primary: true, handler: approve },
-            { label: "View plan", handler: onViewPlan },
-            { label: "Abort", handler: abort },
-          ],
-        };
-        items.push({ id: attention.id, type: "attention", data: attention });
-      }
-
-      // Also emit a milestone for when plan is approved (shown always for history)
-      const milestone: MilestoneData = {
-        id: `ms-plan-${msg.id}`,
-        kind: "plan-approved",
-        title: "Implementation plan created",
-        subtitle: msg.meta?.refinement_round
-          ? `Refinement round ${msg.meta.refinement_round}`
-          : undefined,
-        timestamp: msg.timestamp,
-        action: { label: "View plan", handler: onViewPlan },
-      };
-      items.push({ id: milestone.id, type: "milestone", data: milestone });
+      items.push({ id: `msg-${msg.id}`, type: "message", data: msg });
       return;
     }
 
@@ -192,11 +162,11 @@ function deriveTimeline(
 // ─── Timeline component ─────────────────────────────────────────────────────
 
 interface TimelineProps {
-  onViewPlan: () => void;
+  onOpenActivity: (id: string) => void;
 }
 
-export function Timeline({ onViewPlan }: TimelineProps) {
-  const { activityLog, messages, approve, abort, planApproved } = useSessionStore();
+export function Timeline({ onOpenActivity }: TimelineProps) {
+  const { activityLog, messages } = useSessionStore();
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isNearBottom, setIsNearBottom] = useState(true);
@@ -211,9 +181,8 @@ export function Timeline({ onViewPlan }: TimelineProps) {
   }, []);
 
   const items = useMemo(
-    () => deriveTimeline(activityLog, messages, onViewPlan, approve, abort, planApproved),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activityLog, messages, planApproved],
+    () => deriveTimeline(activityLog, messages),
+    [activityLog, messages],
   );
 
   const contentKey = useMemo(() => {
@@ -277,6 +246,7 @@ export function Timeline({ onViewPlan }: TimelineProps) {
       onScroll={handleScroll}
       aria-label="Session timeline"
     >
+      <div className="conversation-label">Conversation</div>
       <div className="timeline-inner">
         {items.length === 0 ? (
           <div className="timeline-empty">
@@ -289,7 +259,7 @@ export function Timeline({ onViewPlan }: TimelineProps) {
               key={item.id}
               item={item}
               highlight={item.id === latestAttentionId}
-              onViewPlan={onViewPlan}
+              onOpenActivity={onOpenActivity}
             />
           ))
         )}

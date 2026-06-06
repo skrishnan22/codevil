@@ -1,3 +1,10 @@
+import type {
+  AgentRunState,
+  RoomState,
+  SandboxState,
+  SessionSummary as SharedSessionSummary,
+} from "@codevil/shared";
+
 export type ChatMessageRole = "user" | "assistant" | "system";
 
 export interface ChatMessage {
@@ -16,9 +23,13 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   meta?: ChatMessageMeta;
+  // Display name of the teammate whose action produced this message
+  // (multiplayer attribution); absent for system-generated messages.
+  actor?: string;
 }
 
 export interface ChatMessageMeta {
+  run_id?: string;
   cost?: { input_tokens: number; output_tokens: number; total_cost_usd: number };
   refinement_round?: number;
   pr_url?: string;
@@ -60,23 +71,21 @@ export interface ActivityEntry {
 export interface SessionConfig {
   endpoint: string;
   apiKey: string;
+  participantId?: string;
+  // Optional self-declared display name for multiplayer attribution.
+  displayName?: string;
 }
 
 export interface NewSessionParams {
-  prompt: string;
   repo: string;
   provider?: string;
   planModel?: string;
   execModel?: string;
   maxCost?: string;
-  maxTime?: string;
+  maxSessionTime?: string;
+  maxIdleTime?: string;
   maxSteps?: number;
 }
 
-export interface SessionSummary {
-  id: string;
-  prompt: string;
-  repo: string;
-  state: string;
-  createdAt: number;
-}
+export type SessionSummary = SharedSessionSummary;
+export type { RoomState, SandboxState, AgentRunState };

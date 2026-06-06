@@ -7,19 +7,23 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function getMessageClass(msg: ChatMessage): string {
-  if (msg.role === "user") return "user";
-  if (msg.variant === "error" || msg.variant === "verification_failed") return "error";
-  if (msg.variant === "complete") return "complete";
-  return "agent";
-}
-
-function getMessageSender(msg: ChatMessage): string {
-  if (msg.role === "user") return "You";
-  if (msg.variant === "error") return "Error";
-  if (msg.variant === "verification_failed") return "Verification";
-  if (msg.variant === "complete") return "Agent";
-  return "Agent";
+export function getTimelineMessagePresentation(msg: ChatMessage): {
+  kind: "human" | "agent" | "system";
+  sender: string;
+  avatarLabel: string | null;
+} {
+  if (msg.role === "user") {
+    const sender = msg.actor || "You";
+    return {
+      kind: "human",
+      sender,
+      avatarLabel: sender.slice(0, 1).toUpperCase(),
+    };
+  }
+  if (msg.role === "assistant") {
+    return { kind: "agent", sender: "Codevil", avatarLabel: "C" };
+  }
+  return { kind: "system", sender: "System", avatarLabel: null };
 }
 
 function getMessageContent(msg: ChatMessage): string {
@@ -41,16 +45,16 @@ export type TimelineItemData =
 interface TimelineItemProps {
   item: TimelineItemData;
   highlight?: boolean;
-  onViewPlan?: () => void;
+  onOpenActivity?: (id: string) => void;
 }
 
-export function TimelineItem({ item, highlight, onViewPlan }: TimelineItemProps) {
+export function TimelineItem({ item, highlight, onOpenActivity }: TimelineItemProps) {
   if (item.type === "milestone") {
     return <MilestoneCard milestone={item.data} />;
   }
 
   if (item.type === "trace-group") {
-    return <TraceGroup group={item.data} />;
+    return <TraceGroup group={item.data} onOpenActivity={onOpenActivity} />;
   }
 
   if (item.type === "attention") {
@@ -59,19 +63,27 @@ export function TimelineItem({ item, highlight, onViewPlan }: TimelineItemProps)
 
   // message
   const msg = item.data;
-  const cls = getMessageClass(msg);
-  const sender = getMessageSender(msg);
+  const presentation = getTimelineMessagePresentation(msg);
   const content = getMessageContent(msg);
-  const avatarLabel = cls === "user" ? "U" : "A";
+
+  if (presentation.kind === "system") {
+    return (
+      <div className="timeline-system" id={`msg-${msg.id}`}>
+        <span className="timeline-system-dot" aria-hidden="true" />
+        <span className="timeline-system-content">{content}</span>
+        <span className="timeline-system-time">{formatTime(msg.timestamp)}</span>
+      </div>
+    );
+  }
 
   return (
-    <div className={`timeline-msg ${cls}`} id={`msg-${msg.id}`}>
-      <div className={`timeline-msg-avatar${cls === "user" ? " user" : ""}`} aria-hidden="true">
-        {avatarLabel}
+    <div className={`timeline-msg ${presentation.kind}`} id={`msg-${msg.id}`}>
+      <div className={`timeline-msg-avatar ${presentation.kind}`} aria-hidden="true">
+        {presentation.avatarLabel}
       </div>
       <div className="timeline-msg-body">
         <div className="timeline-msg-meta">
-          <span className="timeline-msg-sender">{sender}</span>
+          <span className="timeline-msg-sender">{presentation.sender}</span>
           <span>·</span>
           <span>{formatTime(msg.timestamp)}</span>
         </div>

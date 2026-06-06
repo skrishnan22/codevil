@@ -19,6 +19,15 @@ describe("session event state inference", () => {
     ).toBe("failed");
   });
 
+  it("starts general agent requests in the executing phase", () => {
+    expect(inferPhase({
+      type: "agent_run_started",
+      run_id: "run_123",
+      actor: { id: "usr_123", name: "Alice" },
+      text: "explain auth",
+    }, "ready")).toBe("executing");
+  });
+
   it("tracks preview readiness and stop events", () => {
     const idle = { status: "idle" as const, url: null, command: null, port: null, error: null, apps: [], selectedAppKey: null };
     const starting = reducePreviewState(
@@ -129,6 +138,96 @@ describe("session event state inference", () => {
       expect(useSessionStore.getState().activityLog).toEqual([]);
       expect(useSessionStore.getState().sessionPhase).toBeNull();
       expect(useSessionStore.getState().planApproved).toBe(false);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("sends human chat messages over the websocket", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+      sent: string[] = [];
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      constructor(url: string) {
+        this.url = url;
+        sockets.push(this);
+      }
+
+      send(message: string) {
+        this.sent.push(message);
+      }
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com", apiKey: "key", participantId: "usr_123", displayName: "Alice" },
+        "ses_new",
+        "https://example.com/sessions/ses_new/ws",
+      );
+
+      useSessionStore.getState().sendHumanMessage(" hello room ");
+
+      expect(JSON.parse(sockets[0].sent[0])).toEqual({
+        type: "human_message",
+        text: "hello room",
+      });
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("sends @codevil messages as agent requests", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+      sent: string[] = [];
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      constructor(url: string) {
+        this.url = url;
+        sockets.push(this);
+      }
+
+      send(message: string) {
+        this.sent.push(message);
+      }
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com", apiKey: "key", participantId: "usr_123", displayName: "Alice" },
+        "ses_new",
+        "https://example.com/sessions/ses_new/ws",
+      );
+
+      useSessionStore.getState().sendRoomMessage("@codevil fix the failing test");
+
+      expect(JSON.parse(sockets[0].sent[0])).toEqual({
+        type: "agent_request",
+        text: "fix the failing test",
+      });
     } finally {
       globalThis.WebSocket = originalWebSocket;
     }

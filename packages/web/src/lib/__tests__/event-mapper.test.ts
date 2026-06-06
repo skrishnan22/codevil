@@ -21,19 +21,80 @@ describe("mapEventToChat", () => {
     expect(messages[0].content).toBe("Provisioning sandbox...");
   });
 
+  it("carries the actor from an attributed status event", () => {
+    const event: DOToCLIEvent = {
+      type: "status",
+      message: "Plan approved. Starting execution.",
+      actor: "Alice",
+    };
+    const messages = mapEventToChat(event);
+    expect(messages[0].actor).toBe("Alice");
+  });
+
+  it("leaves actor undefined for an unattributed status event", () => {
+    const event: DOToCLIEvent = { type: "status", message: "Cloning repo." };
+    const messages = mapEventToChat(event);
+    expect(messages[0].actor).toBeUndefined();
+  });
+
+  it("maps room_ready to a room-ready status message", () => {
+    const event: DOToCLIEvent = { type: "room_ready", repo: "github.com/acme/app" };
+    const messages = mapEventToChat(event);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].variant).toBe("status");
+    expect(messages[0].content).toBe("Room ready for github.com/acme/app");
+  });
+
+  it("keeps participant join and leave noise out of conversation", () => {
+    const joined = mapEventToChat({
+      type: "participant_joined",
+      participant: { id: "usr_123", name: "Alice" },
+    });
+    const left = mapEventToChat({
+      type: "participant_left",
+      participant: { id: "usr_123", name: "Alice" },
+    });
+
+    expect(joined).toEqual([]);
+    expect(left).toEqual([]);
+  });
+
+  it("maps human messages to user chat messages with actor attribution", () => {
+    const messages = mapEventToChat({
+      type: "human_message",
+      id: "msg_123",
+      actor: { id: "usr_123", name: "Alice" },
+      text: "hello room",
+      created_at: "2026-06-03T00:00:00.000Z",
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("user");
+    expect(messages[0].variant).toBe("text");
+    expect(messages[0].content).toBe("hello room");
+    expect(messages[0].actor).toBe("Alice");
+  });
+
+  it("carries the actor from an attributed error event", () => {
+    const event: DOToCLIEvent = {
+      type: "error",
+      message: "Alice already approved this plan.",
+      actor: "Alice",
+    };
+    const messages = mapEventToChat(event);
+    expect(messages[0].actor).toBe("Alice");
+  });
+
   it("does not render awaiting approval status separately from the plan card", () => {
     const event: DOToCLIEvent = { type: "status", message: "Waiting for user approval." };
     const messages = mapEventToChat(event);
     expect(messages).toHaveLength(0);
   });
 
-  it("maps phase to a phase badge message", () => {
+  it("keeps phase events out of conversation", () => {
     const event: DOToCLIEvent = { type: "phase", phase: "planning", model: "claude-sonnet-4-6" };
     const messages = mapEventToChat(event);
-    expect(messages).toHaveLength(1);
-    expect(messages[0].variant).toBe("phase");
-    expect(messages[0].meta?.phase).toBe("planning");
-    expect(messages[0].meta?.model).toBe("claude-sonnet-4-6");
+    expect(messages).toEqual([]);
   });
 
   it("maps plan_ready to a plan message", () => {
@@ -49,6 +110,79 @@ describe("mapEventToChat", () => {
     expect(messages[0].content).toBe("## Plan\n\n1. Do X");
     expect(messages[0].meta?.cost?.total_cost_usd).toBe(0.01);
     expect(messages[0].meta?.refinement_round).toBe(0);
+  });
+
+  it("maps approval_requested to a plan message scoped to the run", () => {
+    const event: DOToCLIEvent = {
+      type: "approval_requested",
+      run_id: "run_123",
+      plan: "## Plan\n\n1. Do X",
+      cost: { input_tokens: 1000, output_tokens: 500, total_cost_usd: 0.01 },
+      refinement_round: 0,
+    };
+    const messages = mapEventToChat(event);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].variant).toBe("plan");
+    expect(messages[0].content).toBe("## Plan\n\n1. Do X");
+    expect(messages[0].meta?.run_id).toBe("run_123");
+  });
+
+  it("maps agent request queue events to room status messages", () => {
+    const requested = mapEventToChat({
+      type: "agent_request",
+      run_id: "run_123",
+      actor: { id: "usr_123", name: "Alice" },
+      text: "fix the bug",
+      created_at: "2026-06-03T00:00:00.000Z",
+    });
+    const queued = mapEventToChat({
+      type: "agent_request_queued",
+      run_id: "run_124",
+      position: 2,
+    });
+    const started = mapEventToChat({
+      type: "agent_run_started",
+      run_id: "run_123",
+      actor: { id: "usr_123", name: "Alice" },
+      text: "fix the bug",
+    });
+
+    expect(requested[0].role).toBe("user");
+    expect(requested[0].actor).toBe("Alice");
+    expect(requested[0].content).toBe("@codevil fix the bug");
+    expect(queued[0].content).toBe("Queued agent request #2.");
+    expect(started).toEqual([]);
+  });
+
+  it("keeps run completion out of chat and maps failures", () => {
+    const completed = mapEventToChat({
+      type: "agent_run_completed",
+      run_id: "run_123",
+      pr_url: "https://github.com/user/repo/pull/1",
+    });
+    const failed = mapEventToChat({
+      type: "agent_run_failed",
+      run_id: "run_123",
+      message: "tests failed",
+    });
+
+    expect(completed).toEqual([]);
+    expect(failed[0].variant).toBe("error");
+    expect(failed[0].content).toBe("tests failed");
+  });
+
+  it("maps the final agent response to one assistant message", () => {
+    const messages = mapEventToChat({
+      type: "agent_response",
+      run_id: "run_123",
+      text: "Rate limits are configured in src/rate-limit.ts.",
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("assistant");
+    expect(messages[0].variant).toBe("text");
+    expect(messages[0].content).toBe("Rate limits are configured in src/rate-limit.ts.");
+    expect(messages[0].meta?.run_id).toBe("run_123");
   });
 
   it("maps complete to a complete message with pr_url", () => {
@@ -67,15 +201,13 @@ describe("mapEventToChat", () => {
     expect(messages[0].content).toBe("Something broke");
   });
 
-  it("maps meaningful completed agent tools to durable tool summaries", () => {
+  it("keeps completed agent tools out of conversation", () => {
     const event: DOToCLIEvent = {
       type: "agent_event",
       event: { type: "tool_execution_end", tool: "bash", args: { command: "npm test" }, success: true },
     };
     const messages = mapEventToChat(event);
-    expect(messages).toHaveLength(1);
-    expect(messages[0].variant).toBe("tool_summary");
-    expect(messages[0].meta?.tool_name).toBe("bash");
+    expect(messages).toEqual([]);
   });
 
   it("does not put low-signal read-only tools in the durable timeline", () => {
@@ -155,7 +287,7 @@ describe("projectEvent", () => {
     expect(second.activityLog[0].thinking?.text).toBe("Reading files.");
   });
 
-  it("promotes agent markdown headings into durable progress timeline events", () => {
+  it("keeps markdown heading deltas out of durable conversation messages", () => {
     const projected = projectEvent(
       { messages: [], activityLog: [] },
       {
@@ -170,34 +302,55 @@ describe("projectEvent", () => {
       },
     );
 
-    expect(projected.messages).toHaveLength(1);
-    expect(projected.messages[0].variant).toBe("progress");
-    expect(projected.messages[0].content).toBe("Inspecting package.json");
+    expect(projected.messages).toHaveLength(0);
+    expect(projected.activityLog).toHaveLength(1);
+    expect(projected.activityLog[0].kind).toBe("thinking");
   });
 
-  it("does not duplicate the same promoted progress heading", () => {
-    const first = projectEvent(
+  it("keeps agent_end final assistant text in activity only", () => {
+    const projected = projectEvent(
       { messages: [], activityLog: [] },
       {
         type: "agent_event",
         event: {
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "**Inspecting package.json**" },
-        },
-      },
-    );
-    const second = projectEvent(
-      first,
-      {
-        type: "agent_event",
-        event: {
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: "\n\n**Inspecting package.json**" },
+          type: "agent_end",
+          messages: [
+            { role: "assistant", content: "I updated the checkout page and verified the tests." },
+          ],
         },
       },
     );
 
-    expect(second.messages).toHaveLength(1);
+    expect(projected.messages).toHaveLength(0);
+    expect(projected.activityLog.at(-1)?.event?.label).toBe("Agent finished");
+  });
+
+  it("does not promote agent_end text when a plan message exists", () => {
+    const projected = projectEvent(
+      {
+        messages: [
+          {
+            id: "plan_1",
+            role: "assistant",
+            variant: "plan",
+            content: "## Plan\n\n1. Update checkout.",
+            timestamp: 1,
+          },
+        ],
+        activityLog: [],
+      },
+      {
+        type: "agent_event",
+        event: {
+          type: "agent_end",
+          messages: [
+            { role: "assistant", content: "## Plan\n\n1. Update checkout." },
+          ],
+        },
+      },
+    );
+
+    expect(projected.messages).toHaveLength(1);
   });
 
   it("updates a running tool entry when the matching tool ends", () => {
@@ -210,8 +363,7 @@ describe("projectEvent", () => {
       { type: "agent_event", event: { type: "tool_execution_end", tool: "bash", args: { command: "pnpm test" }, result: "PASS", success: true } },
     );
 
-    expect(ended.messages).toHaveLength(1);
-    expect(ended.messages[0].variant).toBe("tool_summary");
+    expect(ended.messages).toHaveLength(0);
     expect(ended.activityLog).toHaveLength(1);
     expect(ended.activityLog[0].status).toBe("success");
     expect(ended.activityLog[0].tool?.result).toBe("PASS");
@@ -305,7 +457,20 @@ describe("mapEventToActivity", () => {
     const entries = mapEventToActivity(event);
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe("phase_divider");
-    expect(entries[0].phase?.label).toContain("Executing");
+    expect(entries[0].phase?.label).toContain("Agent turn");
+  });
+
+  it("maps agent run start to activity instead of conversation", () => {
+    const event: DOToCLIEvent = {
+      type: "agent_run_started",
+      run_id: "run_123",
+      actor: { id: "usr_123", name: "Alice" },
+      text: "fix the test",
+    };
+
+    expect(mapEventToChat(event)).toEqual([]);
+    expect(mapEventToActivity(event)[0].event?.label).toBe("Agent run started");
+    expect(mapEventToActivity(event)[0].event?.detail).toBe("fix the test");
   });
 
   it("returns empty array for events with no activity representation", () => {

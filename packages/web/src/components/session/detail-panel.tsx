@@ -11,12 +11,12 @@ export function DetailPanel({ selectedCallId }: DetailPanelProps) {
   if (!selectedCallId) {
     return (
       <div className="insp-detail scroll">
-        <div className="detail-empty">
-          <div className="detail-empty-glyph">⌖</div>
-          <div className="detail-empty-text">Click any tool call to inspect</div>
+          <div className="detail-empty">
+            <div className="detail-empty-glyph">⌖</div>
+          <div className="detail-empty-text">Select activity to inspect</div>
+          </div>
         </div>
-      </div>
-    );
+      );
   }
 
   const entry = activityLog.find(e => e.id === selectedCallId);
@@ -37,7 +37,7 @@ export function DetailPanel({ selectedCallId }: DetailPanelProps) {
       <div className="insp-detail scroll">
         <div className="detail">
           <div className="detail-head">
-            <div className="detail-crumbs">trace &rsaquo; {entry.id.slice(-6)}</div>
+            <div className="detail-crumbs">activity &rsaquo; {entry.id.slice(-6)}</div>
             <div className="detail-titlerow">
               <div className="tool-icon tool-icon-lg agent">✦</div>
               <div>
@@ -79,7 +79,7 @@ export function DetailPanel({ selectedCallId }: DetailPanelProps) {
       <div className="insp-detail scroll">
         <div className="detail">
           <div className="detail-head">
-            <div className="detail-crumbs">trace &rsaquo; {entry.id.slice(-6)}</div>
+            <div className="detail-crumbs">activity &rsaquo; {entry.id.slice(-6)}</div>
             <div className="detail-titlerow">
               <div className={`tool-icon tool-icon-lg ${icon.cls}`}>{icon.char}</div>
               <div style={{ minWidth: 0 }}>
@@ -134,6 +134,53 @@ export function DetailPanel({ selectedCallId }: DetailPanelProps) {
             </div>
           </div>
 
+        </div>
+      </div>
+    );
+  }
+
+  if (entry.kind === "event" && entry.event) {
+    return (
+      <div className="insp-detail scroll">
+        <div className="detail">
+          <div className="detail-head">
+            <div className="detail-crumbs">activity &rsaquo; {entry.id.slice(-6)}</div>
+            <div className="detail-titlerow">
+              <div className="tool-icon tool-icon-lg agent">E</div>
+              <div>
+                <h3 className="detail-title">{entry.event.label}</h3>
+                <div className="detail-sub">event &middot; {entry.status}</div>
+              </div>
+            </div>
+          </div>
+          {entry.event.detail && (
+            <div className="detail-section">
+              <div className="detail-section-head">
+                <span className="detail-section-label">Detail</span>
+                <span className="detail-section-eyebrow">event</span>
+              </div>
+              <div className="detail-section-body">{entry.event.detail}</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (entry.kind === "phase_divider" && entry.phase) {
+    return (
+      <div className="insp-detail scroll">
+        <div className="detail">
+          <div className="detail-head">
+            <div className="detail-crumbs">activity &rsaquo; phase</div>
+            <div className="detail-titlerow">
+              <div className="tool-icon tool-icon-lg agent">P</div>
+              <div>
+                <h3 className="detail-title">{entry.phase.label}</h3>
+                <div className="detail-sub">agent phase</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );

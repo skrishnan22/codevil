@@ -35,6 +35,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
           variant: "status",
           content: event.message,
           timestamp: ts,
+          actor: event.actor,
         },
       ];
 
@@ -42,16 +43,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
       return [];
 
     case "phase":
-      return [
-        {
-          id: uid(),
-          role: "system",
-          variant: "phase",
-          content: `${capitalize(event.phase)} with ${event.model}`,
-          timestamp: ts,
-          meta: { phase: event.phase, model: event.model },
-        },
-      ];
+      return [];
 
     case "plan_ready":
       return [
@@ -62,6 +54,22 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
           content: event.plan,
           timestamp: ts,
           meta: { cost: event.cost, refinement_round: event.refinement_round },
+        },
+      ];
+
+    case "approval_requested":
+      return [
+        {
+          id: uid(),
+          role: "assistant",
+          variant: "plan",
+          content: event.plan,
+          timestamp: ts,
+          meta: {
+            run_id: event.run_id,
+            cost: event.cost,
+            refinement_round: event.refinement_round,
+          },
         },
       ];
 
@@ -97,6 +105,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
           variant: "error",
           content: event.message,
           timestamp: ts,
+          actor: event.actor,
         },
       ];
 
@@ -131,30 +140,98 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "preview_apps":
       return [];
 
-    case "agent_event":
-      return mapAgentEventToChat(event.event, ts);
-  }
-}
-
-function mapAgentEventToChat(raw: unknown, ts: number): ChatMessage[] {
-  if (!isRecord(raw) || typeof raw.type !== "string") return [];
-
-  switch (raw.type) {
-    case "tool_execution_end": {
-      const toolName = readToolName(raw);
-      if (isLowSignalTool(toolName) && raw.isError !== true && raw.success !== false) return [];
-      const summary = summarizeTool(toolName, raw.args);
+    case "room_ready":
       return [
         {
           id: uid(),
           role: "system",
-          variant: "tool_summary",
-          content: summary,
+          variant: "status",
+          content: `Room ready for ${event.repo}`,
           timestamp: ts,
-          meta: { tool_name: toolName },
         },
       ];
-    }
+
+    case "participant_joined":
+    case "participant_left":
+      return [];
+
+    case "human_message":
+      return [
+        {
+          id: event.id,
+          role: "user",
+          variant: "text",
+          content: event.text,
+          timestamp: Date.parse(event.created_at) || ts,
+          actor: event.actor.name,
+        },
+      ];
+
+    case "agent_request":
+      return [
+        {
+          id: event.run_id,
+          role: "user",
+          variant: "text",
+          content: `@codevil ${event.text}`,
+          timestamp: Date.parse(event.created_at) || ts,
+          actor: event.actor.name,
+          meta: { run_id: event.run_id },
+        },
+      ];
+
+    case "agent_request_queued":
+      return [
+        {
+          id: uid(),
+          role: "system",
+          variant: "status",
+          content: `Queued agent request #${event.position}.`,
+          timestamp: ts,
+          meta: { run_id: event.run_id },
+        },
+      ];
+
+    case "agent_run_started":
+      return [];
+
+    case "agent_response":
+      return [
+        {
+          id: uid(),
+          role: "assistant",
+          variant: "text",
+          content: event.text,
+          timestamp: ts,
+          meta: { run_id: event.run_id },
+        },
+      ];
+
+    case "agent_run_completed":
+      return [];
+
+    case "agent_run_failed":
+      return [
+        {
+          id: uid(),
+          role: "system",
+          variant: "error",
+          content: event.message,
+          timestamp: ts,
+          meta: { run_id: event.run_id },
+        },
+      ];
+
+    case "agent_event":
+      return mapAgentEventToChat(event.event);
+  }
+}
+
+function mapAgentEventToChat(raw: unknown): ChatMessage[] {
+  if (!isRecord(raw) || typeof raw.type !== "string") return [];
+
+  switch (raw.type) {
+    case "tool_execution_end":
     case "message_update":
       return [];
     default:
@@ -174,13 +251,18 @@ export function mapEventToActivity(event: DOToCLIEvent): ActivityEntry[] {
           status: "success",
           timestamp: ts,
           phase: {
-            label: `${capitalize(event.phase)} with ${event.model}`,
+            label: event.phase === "executing"
+              ? `Agent turn with ${event.model}`
+              : `${capitalize(event.phase)} with ${event.model}`,
           },
         },
       ];
 
     case "agent_event":
       return mapAgentEventToActivity(event.event, ts);
+
+    case "agent_run_started":
+      return [eventEntry("Agent run started", ts, event.text)];
 
     default:
       return [];
@@ -278,35 +360,9 @@ export function projectEvents(
 }
 
 function projectMessages(messages: ChatMessage[], event: DOToCLIEvent): ChatMessage[] {
-  const progress = extractProgressMessage(event, messages);
-  if (progress) return [...messages, progress];
-
   const mapped = mapEventToChat(event);
   if (mapped.length === 0) return messages;
   return [...messages, ...mapped];
-}
-
-function extractProgressMessage(
-  event: DOToCLIEvent,
-  messages: ChatMessage[],
-): ChatMessage | null {
-  if (event.type !== "agent_event") return null;
-  const raw = event.event;
-  if (!isRecord(raw) || raw.type !== "message_update") return null;
-
-  const heading = extractMarkdownHeading(readMessageDelta(raw));
-  if (!heading) return null;
-  if (messages.some((message) => message.variant === "progress" && message.content === heading)) {
-    return null;
-  }
-
-  return {
-    id: uid(),
-    role: "system",
-    variant: "progress",
-    content: heading,
-    timestamp: Date.now(),
-  };
 }
 
 function projectActivity(activityLog: ActivityEntry[], event: DOToCLIEvent): ActivityEntry[] {
@@ -432,24 +488,6 @@ function readMessageDelta(raw: Record<string, unknown>): string {
     return assistantEvent.delta;
   }
   return "";
-}
-
-function extractMarkdownHeading(text: string): string | null {
-  const boldHeading = text.match(/(?:^|\n)\s*\*\*([^*\n]{4,120})\*\*/);
-  if (boldHeading?.[1]) return cleanupHeading(boldHeading[1]);
-
-  const markdownHeading = text.match(/(?:^|\n)\s*#{1,4}\s+(.{4,120})/);
-  if (markdownHeading?.[1]) return cleanupHeading(markdownHeading[1]);
-
-  return null;
-}
-
-function cleanupHeading(heading: string): string {
-  return heading.replace(/[`*_]/g, "").replace(/\s+/g, " ").trim();
-}
-
-function isLowSignalTool(name: string): boolean {
-  return name === "ls" || name === "find" || name === "grep" || name === "read";
 }
 
 function eventEntry(label: string, timestamp: number, detail?: string): ActivityEntry {

@@ -25,6 +25,12 @@ export function SessionTopBar() {
   if (isError) {
     statusText = "failed";
     statusClass = "dot err";
+  } else if (connectionStatus === "connecting") {
+    statusText = "connecting";
+    statusClass = "dot info pulse";
+  } else if (connectionStatus === "disconnected") {
+    statusText = "disconnected";
+    statusClass = "dot idle";
   } else if (isRunning) {
     statusText = "running";
     statusClass = "dot info pulse";

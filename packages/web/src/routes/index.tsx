@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { loadConfig } from "@/lib/config";
-import { createSession } from "@/lib/api-client";
+import { createSession, listSessions } from "@/lib/api-client";
 import { DEFAULT_CONFIG } from "@codevil/shared";
 import type { SessionSummary } from "@/types";
 
@@ -13,7 +13,6 @@ export const Route = createFileRoute("/")({
   component: HomePage,
 });
 
-const SESSIONS_KEY = "codevil_sessions";
 const MODEL_PREFS_KEY = "codevil_model_prefs";
 
 const MODEL_OPTIONS = [
@@ -34,18 +33,6 @@ interface ModelPrefs {
   provider: string;
   planModel: string;
   execModel: string;
-}
-
-function loadSessions(): SessionSummary[] {
-  try {
-    return JSON.parse(localStorage.getItem(SESSIONS_KEY) ?? "[]");
-  } catch {
-    return [];
-  }
-}
-
-function saveSessions(sessions: SessionSummary[]): void {
-  localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
 }
 
 function loadModelPrefs(): ModelPrefs {
@@ -71,7 +58,6 @@ function saveModelPrefs(prefs: ModelPrefs): void {
 
 function HomePage() {
   const navigate = useNavigate();
-  const [prompt, setPrompt] = useState("");
   const [repo, setRepo] = useState("");
   const [provider, setProvider] = useState(DEFAULT_CONFIG.provider);
   const [planModel, setPlanModel] = useState(DEFAULT_CONFIG.plan_model);
@@ -81,12 +67,23 @@ function HomePage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
 
   useEffect(() => {
-    setSessions(loadSessions());
     const prefs = loadModelPrefs();
     setProvider(prefs.provider);
     setPlanModel(prefs.planModel);
     setExecModel(prefs.execModel);
+    void refreshSessions();
   }, []);
+
+  async function refreshSessions() {
+    const config = loadConfig();
+    if (!config) return;
+    try {
+      const result = await listSessions(config);
+      setSessions(result.sessions);
+    } catch {
+      /* The create form already surfaces config/API errors. */
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -102,16 +99,8 @@ function HomePage() {
     try {
       const modelPrefs = { provider, planModel, execModel };
       saveModelPrefs(modelPrefs);
-      const session = await createSession(config, { prompt, repo, ...modelPrefs });
-      const summary: SessionSummary = {
-        id: session.session_id,
-        prompt,
-        repo,
-        state: "initializing",
-        createdAt: Date.now(),
-      };
-      const updated = [summary, ...loadSessions()];
-      saveSessions(updated);
+      const session = await createSession(config, { repo, ...modelPrefs });
+      setSessions((current) => [session.summary, ...current.filter((s) => s.id !== session.session_id)]);
       navigate({ to: "/session/$id", params: { id: session.session_id } });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -122,7 +111,7 @@ function HomePage() {
 
   return (
     <div className="mx-auto max-w-3xl p-8">
-      <h1 className="text-2xl font-bold">New Session</h1>
+      <h1 className="text-2xl font-bold">New Room</h1>
       <form onSubmit={handleSubmit} className="mt-6 grid gap-4">
         <div className="grid gap-2">
           <Label htmlFor="repo">Repository</Label>
@@ -131,16 +120,6 @@ function HomePage() {
             placeholder="github.com/user/repo"
             value={repo}
             onChange={(e) => setRepo(e.target.value)}
-            required
-          />
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="prompt">Task</Label>
-          <Input
-            id="prompt"
-            placeholder="Describe what you want to build or change..."
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
             required
           />
         </div>
@@ -192,14 +171,13 @@ function HomePage() {
           type="submit"
           disabled={
             loading ||
-            !prompt.trim() ||
             !repo.trim() ||
             !provider.trim() ||
             !planModel.trim() ||
             !execModel.trim()
           }
         >
-          {loading ? "Creating..." : "Start Session"}
+          {loading ? "Creating..." : "Create Room"}
         </Button>
       </form>
 
@@ -214,10 +192,10 @@ function HomePage() {
                 onClick={() => navigate({ to: "/session/$id", params: { id: s.id } })}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium">{s.prompt}</p>
+                  <p className="truncate font-medium">{s.title}</p>
                   <p className="truncate text-sm text-muted-foreground">{s.repo}</p>
                 </div>
-                <Badge variant="outline" className="ml-4 shrink-0">{s.state}</Badge>
+                <Badge variant="outline" className="ml-4 shrink-0">{s.sandbox_state}</Badge>
               </button>
             ))}
           </div>

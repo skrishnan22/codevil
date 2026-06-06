@@ -9,6 +9,7 @@ interface TraceGroupData {
 
 interface TraceGroupProps {
   group: TraceGroupData;
+  onOpenActivity?: (id: string) => void;
 }
 
 function getToolBadgeClass(toolName: string): string {
@@ -37,7 +38,7 @@ function getThinkingPreview(entries: ActivityEntry[]): string | null {
   return thinking.thinking.text.replace(/\s+/g, " ").trim();
 }
 
-export function TraceGroup({ group }: TraceGroupProps) {
+export function TraceGroup({ group, onOpenActivity }: TraceGroupProps) {
   const [expanded, setExpanded] = useState(false);
   const { entries, summary } = group;
   const thinkingPreview = getThinkingPreview(entries);
@@ -51,43 +52,56 @@ export function TraceGroup({ group }: TraceGroupProps) {
 
   return (
     <div className="trace-group">
-      <button
-        id={`trace-group-${group.id}`}
-        className="trace-group-header"
-        onClick={() => setExpanded((v) => !v)}
-        type="button"
-        aria-expanded={expanded}
-      >
-        <span className="trace-group-count">{entries.length}</span>
-        <span className="trace-group-summary">
-          <span className="trace-group-summary-chips">
-            {chips.map((chip) => (
-              <span key={chip.label} className="trace-group-chip">
-                {chip.cls && (
-                  <span className={`tool-icon ${chip.cls}`} aria-hidden="true">
-                    {chip.cls === "read" ? "R" : chip.cls === "write" ? "W" : chip.cls === "bash" ? "$" : "✦"}
-                  </span>
-                )}
-                {chip.label}
-              </span>
-            ))}
-          </span>
-          {thinkingPreview && (
-            <span className="trace-group-thinking-preview">{thinkingPreview}</span>
-          )}
-        </span>
-        <svg
-          className={`trace-group-chevron${expanded ? " open" : ""}`}
-          width="12"
-          height="12"
-          viewBox="0 0 12 12"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          aria-hidden="true"
+      <div className="trace-group-header-row">
+        <button
+          id={`trace-group-${group.id}`}
+          className="trace-group-header"
+          onClick={() => setExpanded((v) => !v)}
+          type="button"
+          aria-expanded={expanded}
         >
-          <path d="M2 4L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
+          <span className="trace-group-count">{entries.length}</span>
+          <span className="trace-group-summary">
+            <span className="trace-group-summary-chips">
+              {chips.map((chip) => (
+                <span key={chip.label} className="trace-group-chip">
+                  {chip.cls && (
+                    <span className={`tool-icon ${chip.cls}`} aria-hidden="true">
+                      {chip.cls === "read" ? "R" : chip.cls === "write" ? "W" : chip.cls === "bash" ? "$" : "A"}
+                    </span>
+                  )}
+                  {chip.label}
+                </span>
+              ))}
+            </span>
+            {thinkingPreview && (
+              <span className="trace-group-thinking-preview">{thinkingPreview}</span>
+            )}
+          </span>
+          <svg
+            className={`trace-group-chevron${expanded ? " open" : ""}`}
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path d="M2 4L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        {onOpenActivity && (
+          <button
+            type="button"
+            className="trace-group-open-activity"
+            onClick={() => onOpenActivity(group.id)}
+            aria-label="Open activity details"
+            title="Open in Activity"
+          >
+            Activity
+          </button>
+        )}
+      </div>
 
       {expanded && (
         <div className="trace-group-calls">
@@ -95,10 +109,10 @@ export function TraceGroup({ group }: TraceGroupProps) {
             if (entry.kind === "thinking") {
               return (
                 <div key={entry.id} className="trace-call-row">
-                  <span className="tool-icon agent" aria-hidden="true">✦</span>
-                  <span className="trace-call-type">think</span>
+                  <span className="tool-icon agent" aria-hidden="true">A</span>
+                  <span className="trace-call-type">stream</span>
                   <span className="trace-call-title">
-                    {entry.thinking?.text?.slice(0, 80).trim() ?? "Thinking…"}
+                    {entry.thinking?.text?.slice(0, 80).trim() ?? "Assistant stream"}
                   </span>
                   <span className={`trace-call-status ${entry.status}`}>{entry.status}</span>
                 </div>

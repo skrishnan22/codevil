@@ -9,18 +9,35 @@ export interface WSClientOptions {
   wsUrl: string;
   apiKey: string;
   initialCursor?: number;
+  displayName?: string;
+  participantId?: string;
   onEvent: (envelope: EventEnvelope) => void;
   onOpen?: () => void;
   onClose?: (code: number, reason: string) => void;
   onError?: (error: Event) => void;
+  onReconnecting?: (attempt: number, delayMs: number) => void;
 }
 
-export function buildWebSocketUrl(wsUrl: string, apiKey: string, cursor: number): string {
+export function buildWebSocketUrl(
+  wsUrl: string,
+  apiKey: string,
+  cursor: number,
+  displayName?: string,
+  participantId?: string,
+): string {
   const url = new URL(wsUrl);
   if (url.protocol === "https:") url.protocol = "wss:";
   if (url.protocol === "http:") url.protocol = "ws:";
   url.searchParams.set("token", apiKey);
   url.searchParams.set("cursor", cursor.toString());
+  if (participantId && participantId.trim().length > 0) {
+    url.searchParams.set("participant_id", participantId.trim());
+  }
+  // Self-declared multiplayer display name; omitted when blank so the server
+  // falls back to "Anonymous".
+  if (displayName && displayName.trim().length > 0) {
+    url.searchParams.set("name", displayName.trim());
+  }
   return url.toString();
 }
 
@@ -36,29 +53,66 @@ export function connectWebSocket(options: WSClientOptions): {
   send: (msg: CLIToDOMessage) => void;
   close: () => void;
 } {
-  const url = buildWebSocketUrl(options.wsUrl, options.apiKey, options.initialCursor ?? 0);
-  const ws = new WebSocket(url);
+  let ws: WebSocket | null = null;
+  let cursor = options.initialCursor ?? 0;
+  let reconnectAttempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let explicitlyClosed = false;
+  const outbox: CLIToDOMessage[] = [];
 
-  ws.onopen = () => options.onOpen?.();
+  function open(): void {
+    const url = buildWebSocketUrl(
+      options.wsUrl,
+      options.apiKey,
+      cursor,
+      options.displayName,
+      options.participantId,
+    );
+    ws = new WebSocket(url);
 
-  ws.onmessage = (e) => {
-    if (typeof e.data === "string") {
-      const envelope = parseEnvelope(e.data);
+    ws.onopen = () => {
+      reconnectAttempt = 0;
+      options.onOpen?.();
+      const pending = outbox.splice(0);
+      for (const message of pending) {
+        ws?.send(JSON.stringify(message));
+      }
+    };
+
+    ws.onmessage = (event) => {
+      if (typeof event.data !== "string") return;
+      const envelope = parseEnvelope(event.data);
+      cursor = Math.max(cursor, envelope.cursor);
       options.onEvent(envelope);
-    }
-  };
+    };
 
-  ws.onclose = (e) => options.onClose?.(e.code, e.reason);
-  ws.onerror = (e) => options.onError?.(e);
+    ws.onclose = (event) => {
+      if (explicitlyClosed) {
+        options.onClose?.(event.code, event.reason);
+        return;
+      }
+      const delayMs = Math.min(500 * 2 ** reconnectAttempt, 5_000);
+      reconnectAttempt++;
+      options.onReconnecting?.(reconnectAttempt, delayMs);
+      reconnectTimer = setTimeout(open, delayMs);
+    };
+    ws.onerror = (event) => options.onError?.(event);
+  }
+
+  open();
 
   return {
     send(msg: CLIToDOMessage) {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify(msg));
+      } else {
+        outbox.push(msg);
       }
     },
     close() {
-      ws.close(1000, "client closed");
+      explicitlyClosed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close(1000, "client closed");
     },
   };
 }

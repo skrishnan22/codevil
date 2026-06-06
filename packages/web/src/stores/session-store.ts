@@ -43,6 +43,8 @@ interface SessionStoreActions {
   selectPreviewApp: (appKey: string) => void;
   disconnect: () => void;
   addUserMessage: (content: string) => void;
+  sendRoomMessage: (content: string) => void;
+  sendHumanMessage: (content: string) => void;
   reset: () => void;
 }
 
@@ -122,6 +124,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       wsUrl,
       apiKey: config.apiKey,
       initialCursor,
+      displayName: config.displayName,
+      participantId: config.participantId,
       onOpen() {
         set({ connectionStatus: "connected" });
       },
@@ -162,7 +166,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         set({ connectionStatus: "disconnected" });
       },
       onError() {
-        set({ connectionStatus: "error" });
+        // The socket close handler performs automatic reconnection.
+      },
+      onReconnecting() {
+        set({ connectionStatus: "connecting" });
       },
     });
   },
@@ -248,6 +255,23 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }));
   },
 
+  sendHumanMessage(content) {
+    const text = content.trim();
+    if (!text) return;
+    wsHandle?.send({ type: "human_message", text });
+  },
+
+  sendRoomMessage(content) {
+    const text = content.trim();
+    if (!text) return;
+    const request = parseAgentMention(text);
+    if (request) {
+      wsHandle?.send({ type: "agent_request", text: request });
+      return;
+    }
+    wsHandle?.send({ type: "human_message", text });
+  },
+
   reset() {
     wsHandle?.close();
     wsHandle = null;
@@ -266,7 +290,14 @@ export function inferPhase(
     case "phase":
       return event.phase === "planning" ? "planning" : "executing";
     case "plan_ready":
+    case "approval_requested":
       return "awaiting_approval";
+    case "agent_run_started":
+      return "executing";
+    case "agent_run_completed":
+      return "ready";
+    case "agent_run_failed":
+      return "ready";
     case "complete":
       return "completed";
     case "verification_failed":
@@ -285,6 +316,7 @@ export function inferPhase(
 export function inferPlanApproved(event: DOToCLIEvent, current: boolean): boolean {
   if (event.type === "phase" && event.phase === "executing") return true;
   if (event.type === "status" && event.message === "Plan approved. Starting execution.") return true;
+  if (event.type === "agent_run_started" || event.type === "approval_requested") return false;
   return current;
 }
 
@@ -333,4 +365,10 @@ export function reducePreviewState(current: PreviewState, event: DOToCLIEvent): 
     default:
       return current;
   }
+}
+
+export function parseAgentMention(text: string): string | null {
+  const match = text.trim().match(/^@codevil(?:\s+(.+))?$/i);
+  if (!match) return null;
+  return match[1]?.trim() || null;
 }

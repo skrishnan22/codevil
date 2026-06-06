@@ -66,6 +66,20 @@ test("buildCreatePullRequestRequest creates a GitHub API draft PR request", () =
   });
 });
 
+test("buildCreatePullRequestRequest can create a ready pull request", () => {
+  const request = buildCreatePullRequestRequest({
+    repo: "https://github.com/acme/private-app.git",
+    token: "ghp_secret",
+    branch: "codevil/change",
+    baseBranch: "main",
+    title: "Change",
+    body: "Plan",
+    draft: false,
+  });
+
+  assert.equal(JSON.parse(request.init.body).draft, false);
+});
+
 test("createDraftPullRequest retries transient GitHub gateway failures", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;

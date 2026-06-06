@@ -39,6 +39,11 @@ class_name = "Orchestrator"
 name = "Sandbox"
 class_name = "Sandbox"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "codevil"
+database_id = "f497dece-7db6-441d-8eaf-cc57e02fb56a"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Orchestrator"]

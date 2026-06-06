@@ -13,6 +13,7 @@ export interface CreatePullRequestOptions {
   baseBranch: string;
   title: string;
   body: string;
+  draft?: boolean;
 }
 
 const TRANSIENT_PR_STATUSES = new Set([429, 500, 502, 503, 504]);
@@ -65,7 +66,7 @@ export function buildCreatePullRequestRequest(options: CreatePullRequestOptions)
         body: options.body,
         head: options.branch,
         base: options.baseBranch,
-        draft: true,
+        draft: options.draft ?? true,
       }),
     },
   };

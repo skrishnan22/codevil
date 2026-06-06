@@ -5,3 +5,7 @@ dist/
 .dev.vars
 **/bin
 .superpowers/
+.agents/skills
+.claude/skills
+redesign
+docs/

@@ -113,6 +113,22 @@ test("maps sandbox protocol messages to CLI events", () => {
     { type: "agent_event", event: { type: "turn_start" } },
   ]);
   assert.deepEqual(mapSandboxMessageToCLIEvents({
+    type: "agent_turn_complete",
+    run_id: "run_1",
+    response: "Done",
+    cost: { input_tokens: 1, output_tokens: 1, total_cost_usd: 0.01 },
+  }), []);
+  assert.deepEqual(mapSandboxMessageToCLIEvents({
+    type: "create_pr_request",
+    run_id: "run_1",
+    request_id: "pr_1",
+    branch: "codevil/change",
+    base_branch: "main",
+    title: "Change",
+    body: "Details",
+    draft: true,
+  }), []);
+  assert.deepEqual(mapSandboxMessageToCLIEvents({
     type: "credential_request",
     request_id: "cred_1",
     protocol: "https",

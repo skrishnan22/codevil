@@ -1,5 +1,14 @@
 import { Orchestrator } from "./orchestrator.js";
 import { Sandbox as BaseSandbox } from "@cloudflare/sandbox";
+import {
+  buildSessionSummary,
+  normalizeCreateSessionBody,
+  recentSessionsSelect,
+  sessionByIdSelect,
+  sessionDirectoryFailureUpdate,
+  sessionDirectoryInsert,
+  type SessionDirectoryRow,
+} from "./session-directory.js";
 
 // Subclass the Cloudflare Sandbox so we can shorten the idle timeout. The base
 // class auto-suspends the container after `sleepAfter` of no traffic.
@@ -26,6 +35,7 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
 interface Env {
   ORCHESTRATOR: DurableObjectNamespace<Orchestrator>;
   Sandbox: DurableObjectNamespace<Sandbox>;
+  DB: D1Database;
   CODEVIL_API_KEY: string;
 }
 
@@ -71,6 +81,15 @@ export default {
     // POST /sessions — create a new session
     if (path === "/sessions" && request.method === "POST") {
       return withCors(await handleCreateSession(request, env));
+    }
+
+    if (path === "/sessions" && request.method === "GET") {
+      return withCors(await handleListSessions(request, env));
+    }
+
+    const sessionInfoMatch = path.match(/^\/sessions\/([^/]+)$/);
+    if (sessionInfoMatch && request.method === "GET") {
+      return withCors(await handleGetSession(request, env, sessionInfoMatch[1]));
     }
 
     // GET /sessions/:id/ws — WebSocket upgrade
@@ -128,41 +147,64 @@ async function handleCreateSession(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  let body: {
-    prompt: string;
-    repo: string;
-    provider?: string;
-    plan_model?: string;
-    exec_model?: string;
-    max_cost?: string;
-    max_time?: string;
-    max_steps?: number;
-  };
+  let body: unknown;
   try {
     body = await request.json();
   } catch {
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  if (!body.prompt || !body.repo) {
-    return json({ error: "Missing required fields: prompt, repo" }, 400);
+  let normalized: ReturnType<typeof normalizeCreateSessionBody>;
+  try {
+    normalized = normalizeCreateSessionBody(body);
+  } catch (error) {
+    return json({
+      error: "Invalid session body",
+      detail: error instanceof Error ? error.message : String(error),
+    }, 400);
   }
 
   const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;
+  const now = new Date().toISOString();
+  const row: SessionDirectoryRow = {
+    id: sessionId,
+    repo: normalized.repo,
+    title: normalized.title,
+    provider: normalized.provider,
+    plan_model: normalized.plan_model,
+    exec_model: normalized.exec_model,
+    max_cost: normalized.max_cost,
+    max_session_time: normalized.max_session_time,
+    max_idle_time: normalized.max_idle_time,
+    max_steps: normalized.max_steps,
+    room_state: "initializing",
+    sandbox_state: "not_started",
+    created_by_id: normalized.created_by?.id,
+    created_by_name: normalized.created_by?.name,
+    created_at: now,
+    updated_at: now,
+    last_event_at: now,
+  };
+  const insert = sessionDirectoryInsert(row);
+  await env.DB.prepare(insert.sql).bind(...insert.bindings).run();
+
   const doId = env.ORCHESTRATOR.idFromName(sessionId);
   const stub = env.ORCHESTRATOR.get(doId);
 
   try {
-    await stub.init(sessionId, body.prompt, body.repo, {
+    await stub.init(sessionId, normalized.title, normalized.repo, {
       worker_url: new URL("/", request.url).toString().replace(/\/$/, ""),
-      provider: body.provider,
-      plan_model: body.plan_model,
-      exec_model: body.exec_model,
-      max_cost: body.max_cost,
-      max_time: body.max_time,
-      max_steps: body.max_steps,
+      provider: normalized.provider,
+      plan_model: normalized.plan_model,
+      exec_model: normalized.exec_model,
+      max_cost: normalized.max_cost,
+      max_time: normalized.max_session_time,
+      max_steps: normalized.max_steps,
     });
   } catch (error) {
+    const failedAt = new Date().toISOString();
+    const failure = sessionDirectoryFailureUpdate(sessionId, failedAt);
+    await env.DB.prepare(failure.sql).bind(...failure.bindings).run();
     console.error("session.init.failed", {
       session_id: sessionId,
       error: error instanceof Error ? error.message : String(error),
@@ -177,7 +219,48 @@ async function handleCreateSession(
   return json({
     session_id: sessionId,
     ws_url: new URL(`/sessions/${sessionId}/ws`, request.url).toString(),
+    summary: buildSessionSummary(row),
   }, 201);
+}
+
+async function handleListSessions(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const rawLimit = Number.parseInt(url.searchParams.get("limit") ?? "50", 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 100) : 50;
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const select = recentSessionsSelect(cutoff, limit);
+  const result = await env.DB
+    .prepare(select.sql)
+    .bind(...select.bindings)
+    .all<SessionDirectoryRow>();
+
+  return json({
+    sessions: (result.results ?? []).map(buildSessionSummary),
+  }, 200);
+}
+
+async function handleGetSession(
+  request: Request,
+  env: Env,
+  sessionId: string,
+): Promise<Response> {
+  const select = sessionByIdSelect(sessionId);
+  const row = await env.DB
+    .prepare(select.sql)
+    .bind(...select.bindings)
+    .first<SessionDirectoryRow>();
+
+  if (!row) {
+    return json({ error: "Session not found" }, 404);
+  }
+
+  return json({
+    session: buildSessionSummary(row),
+    ws_url: new URL(`/sessions/${sessionId}/ws`, request.url).toString(),
+  }, 200);
 }
 
 async function handleWebSocketUpgrade(

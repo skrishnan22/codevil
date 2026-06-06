@@ -145,6 +145,8 @@ export function mapSandboxMessageToCLIEvents(message: SandboxToDOMessage): DOToC
       return [{ type: "clone_progress", line: message.line }];
     case "agent_event":
       return [{ type: "agent_event", event: message.event }];
+    case "agent_turn_complete":
+    case "create_pr_request":
     case "plan_ready":
       return [];
     case "execution_complete":

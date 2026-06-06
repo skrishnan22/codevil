@@ -6,6 +6,8 @@ import type {
   DOToSandboxMessage,
   SandboxToDOMessage,
   CostInfo,
+  ParticipantIdentity,
+  AgentRunState,
 } from "@codevil/shared";
 import {
   DEFAULT_CONFIG,
@@ -31,9 +33,22 @@ import {
 } from "./sandbox.js";
 import { createDraftPullRequest, credentialRequestAllowed } from "./github.js";
 import { redactEvent } from "./redaction.js";
+import {
+  sanitizeDisplayName,
+  sanitizeParticipantId,
+  describeDecisionRejection,
+  type LastDecision,
+} from "./multiplayer.js";
+import {
+  createAgentRun,
+  enqueueAgentRun,
+  finishActiveAgentRun,
+  type AgentRun,
+} from "./agent-runs.js";
 
 interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
+  DB: D1Database;
   CODEVIL_API_KEY: string;
   CODEVIL_LLM_KEY?: string;
   GITHUB_PAT?: string;
@@ -56,12 +71,17 @@ interface SessionMeta {
   verification_attempts: number;
   cost_total_usd: number;
   latest_plan?: string;
+  active_run?: AgentRun | null;
+  queued_runs: AgentRun[];
   preview_token_hash?: string;
   preview_url?: string;
   preview_port?: number;
   preview_active?: boolean;
   created_at: string;
   expected_close?: boolean;
+  // Most recent plan decision (approve/refine), for attributing late/rejected
+  // decisions to whoever already acted. See multiplayer.ts.
+  last_decision?: LastDecision;
 }
 
 export interface InitOptions {
@@ -127,6 +147,8 @@ export class Orchestrator extends DurableObject<Env> {
       refinement_round: 0,
       verification_attempts: 0,
       cost_total_usd: 0,
+      active_run: null,
+      queued_runs: [],
       created_at: new Date().toISOString(),
     };
     this.saveMeta();
@@ -188,11 +210,19 @@ export class Orchestrator extends DurableObject<Env> {
     const cursorParam = url.searchParams.get("cursor");
     const cursor = cursorParam ? parseInt(cursorParam, 10) : 0;
 
+    // Self-declared multiplayer display name, captured once at connect time.
+    const participant: ParticipantIdentity = {
+      id: sanitizeParticipantId(url.searchParams.get("participant_id")),
+      name: sanitizeDisplayName(url.searchParams.get("name")),
+    };
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
     this.ctx.acceptWebSocket(server, ["cli"]);
+    server.serializeAttachment({ participant });
     this.replayEvents(server, cursor);
+    this.appendAndBroadcast({ type: "participant_joined", participant });
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -206,7 +236,7 @@ export class Orchestrator extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server, ["sandbox"]);
-    this.startPlanning(server);
+    this.initializeSandboxConnection(server);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -235,18 +265,36 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
+    const participant = this.participantFromSocket(ws);
+    const actor = participant.name;
+
     switch (msg.type) {
+      case "human_message":
+        this.handleHumanMessage(msg.text, participant);
+        break;
+      case "agent_request":
+        this.handleAgentRequest(msg.text, participant);
+        break;
       case "approve":
-        this.handleApprove();
+        this.handleApprove(actor);
+        break;
+      case "approve_run":
+        this.handleApprove(actor, msg.run_id);
         break;
       case "abort":
-        this.handleAbort();
+        this.handleAbort(actor);
+        break;
+      case "abort_run":
+        this.handleAbort(actor, msg.run_id);
         break;
       case "stop_session":
         await this.handleStopSession();
         break;
       case "refine_plan":
-        this.handleRefine(msg.feedback);
+        this.handleRefine(msg.feedback, actor);
+        break;
+      case "refine_run":
+        this.handleRefine(msg.feedback, actor, msg.run_id);
         break;
       case "preview_start":
         await this.handlePreviewStart(msg.app_key);
@@ -278,6 +326,14 @@ export class Orchestrator extends DurableObject<Env> {
           message: `Sandbox disconnected unexpectedly (code: ${code}, reason: ${reason || "none"}).`,
         });
       }
+      return;
+    }
+
+    if (!isSandbox) {
+      this.appendAndBroadcast({
+        type: "participant_left",
+        participant: this.participantFromSocket(ws),
+      });
     }
   }
 
@@ -353,21 +409,31 @@ export class Orchestrator extends DurableObject<Env> {
     return this.phaseSpans.get(this.meta.state);
   }
 
-  private handleApprove(): void {
+  private participantFromSocket(ws: WebSocket): ParticipantIdentity {
+    const attachment = ws.deserializeAttachment() as { participant?: Partial<ParticipantIdentity> } | null;
+    return {
+      id: sanitizeParticipantId(attachment?.participant?.id),
+      name: sanitizeDisplayName(attachment?.participant?.name),
+    };
+  }
+
+  private handleApprove(actor: string, runId?: string): void {
     if (!this.meta) return;
 
+    if (!this.ensureActiveRun(runId)) return;
+
     if (this.meta.state !== "awaiting_approval") {
-      this.appendAndBroadcast({
-        type: "error",
-        message: `Cannot approve in state: ${this.meta.state}`,
-      });
+      this.appendAndBroadcast(this.decisionRejection("approve", `Cannot approve in state: ${this.meta.state}`));
       return;
     }
 
     if (this.transition("executing")) {
+      this.setActiveRunState("executing");
+      this.recordDecision({ actor, action: "approve", refinement_round: this.meta.refinement_round });
       this.appendAndBroadcast({
         type: "status",
         message: "Plan approved. Starting execution.",
+        actor,
       });
       this.sendToSandbox({
         type: "execute",
@@ -378,8 +444,83 @@ export class Orchestrator extends DurableObject<Env> {
     }
   }
 
-  private handleAbort(): void {
+  private handleHumanMessage(text: string, actor: ParticipantIdentity): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    this.appendAndBroadcast({
+      type: "human_message",
+      id: `msg_${crypto.randomUUID().replace(/-/g, "")}`,
+      actor,
+      text: trimmed,
+      created_at: new Date().toISOString(),
+    });
+    this.updateDirectory({});
+  }
+
+  private handleAgentRequest(text: string, actor: ParticipantIdentity): void {
     if (!this.meta) return;
+
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    const run = createAgentRun({
+      actor,
+      text: trimmed,
+      now: new Date().toISOString(),
+    });
+
+    this.appendAndBroadcast({
+      type: "agent_request",
+      run_id: run.id,
+      actor,
+      text: run.text,
+      created_at: run.created_at,
+    });
+
+    if (!this.meta.active_run && this.meta.state !== "ready") {
+      this.meta.queued_runs = [...this.meta.queued_runs, run];
+      this.saveMeta();
+      this.appendAndBroadcast({
+        type: "agent_request_queued",
+        run_id: run.id,
+        position: this.meta.queued_runs.length,
+      });
+      this.updateDirectory({});
+      return;
+    }
+
+    const next = enqueueAgentRun({
+      active: this.meta.active_run ?? null,
+      queue: this.meta.queued_runs,
+    }, run);
+
+    this.meta.active_run = next.active;
+    this.meta.queued_runs = next.queue;
+    this.saveMeta();
+
+    if (next.queued) {
+      this.appendAndBroadcast({
+        type: "agent_request_queued",
+        run_id: next.queued.run.id,
+        position: next.queued.position,
+      });
+      this.updateDirectory({});
+      return;
+    }
+
+    if (next.started) {
+      this.startAgentRun(next.started);
+    }
+  }
+
+  // Abort is an always-available kill switch, not a plan decision — it is
+  // deliberately NOT gated by first-action-wins (so aborting during execution
+  // is valid, not a "lost race").
+  private handleAbort(actor: string, runId?: string): void {
+    if (!this.meta) return;
+
+    if (!this.ensureActiveRun(runId)) return;
 
     if (isTerminalState(this.meta.state)) {
       this.appendAndBroadcast({
@@ -389,11 +530,21 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
-    if (this.transition("failed")) {
+    const activeRunId = this.meta.active_run?.id;
+    if (this.transition("ready")) {
       this.appendAndBroadcast({
         type: "status",
-        message: "Session aborted by user.",
+        message: "Agent run cancelled.",
+        actor,
       });
+      if (activeRunId) {
+        this.appendAndBroadcast({
+          type: "agent_run_failed",
+          run_id: activeRunId,
+          message: "Agent run cancelled.",
+        });
+      }
+      this.finishRunAndDrainQueue("cancelled");
       // Preview stays alive; user can keep iterating in the iframe until they
       // press "Stop Session" or the container hits idle/max timeout.
     }
@@ -428,14 +579,13 @@ export class Orchestrator extends DurableObject<Env> {
     this.closeSandboxSockets(reason);
   }
 
-  private handleRefine(feedback: string): void {
+  private handleRefine(feedback: string, actor: string, runId?: string): void {
     if (!this.meta) return;
 
+    if (!this.ensureActiveRun(runId)) return;
+
     if (this.meta.state !== "awaiting_approval") {
-      this.appendAndBroadcast({
-        type: "error",
-        message: `Cannot refine in state: ${this.meta.state}`,
-      });
+      this.appendAndBroadcast(this.decisionRejection("refine", `Cannot refine in state: ${this.meta.state}`));
       return;
     }
 
@@ -448,14 +598,161 @@ export class Orchestrator extends DurableObject<Env> {
     }
 
     if (this.transition("refining")) {
+      this.setActiveRunState("thinking");
+      // Record the decision against the round being refined (before the
+      // increment) so a same-round rejection can be attributed correctly.
+      this.recordDecision({ actor, action: "refine", refinement_round: this.meta.refinement_round });
       this.meta.refinement_round++;
       this.saveMeta();
       this.appendAndBroadcast({
         type: "status",
         message: `Refining plan (round ${this.meta.refinement_round}/${MAX_REFINEMENT_ROUNDS}): ${feedback}`,
+        actor,
       });
       this.sendToSandbox({ type: "refine_plan", feedback });
     }
+  }
+
+  private ensureActiveRun(runId?: string): boolean {
+    if (!this.meta) return false;
+    const active = this.meta.active_run;
+    if (!active) {
+      this.appendAndBroadcast({ type: "error", message: "No active agent run." });
+      return false;
+    }
+    if (runId && active.id !== runId) {
+      this.appendAndBroadcast({
+        type: "error",
+        message: `Run ${runId} is not active.`,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  private startAgentRun(run: AgentRun): void {
+    if (!this.meta) return;
+
+    this.meta.active_run = run;
+    this.meta.prompt = run.text;
+    this.meta.latest_plan = undefined;
+    this.meta.refinement_round = 0;
+    this.meta.verification_attempts = 0;
+    this.meta.last_decision = undefined;
+    this.saveMeta();
+
+    if (this.meta.state !== "ready") {
+      this.appendAndBroadcast({
+        type: "agent_run_failed",
+        run_id: run.id,
+        message: `Cannot start agent run in state: ${this.meta.state}`,
+      });
+      this.finishRunAndDrainQueue("failed");
+      return;
+    }
+
+    if (!this.transition("executing")) {
+      this.failActiveRunAndReturnReady(`Cannot start agent run in state: ${this.meta.state}`);
+      return;
+    }
+
+    this.setActiveRunState("executing");
+    this.appendAndBroadcast({
+      type: "agent_run_started",
+      run_id: run.id,
+      actor: run.actor,
+      text: run.text,
+    });
+    this.appendAndBroadcast({
+      type: "phase",
+      phase: "executing",
+      model: this.meta.exec_model,
+    });
+    this.sendToSandbox({
+      type: "agent_turn",
+      run_id: run.id,
+      prompt: run.text,
+      model: this.meta.exec_model,
+      provider: this.meta.provider,
+    });
+  }
+
+  private setActiveRunState(state: AgentRunState): void {
+    if (!this.meta?.active_run) return;
+    this.meta.active_run = { ...this.meta.active_run, state };
+    this.saveMeta();
+    this.updateDirectory({ active_run_state: state });
+  }
+
+  private finishRunAndDrainQueue(finalState: AgentRunState): void {
+    if (!this.meta) return;
+    if (this.meta.active_run) {
+      this.meta.active_run = { ...this.meta.active_run, state: finalState };
+    }
+    const next = finishActiveAgentRun({
+      active: this.meta.active_run ?? null,
+      queue: this.meta.queued_runs,
+    });
+    this.meta.active_run = next.active;
+    this.meta.queued_runs = next.queue;
+    this.saveMeta();
+    this.updateDirectory({ active_run_state: next.active?.state ?? null });
+
+    if (next.started) {
+      this.startAgentRun(next.started);
+    }
+  }
+
+  private failActiveRunAndReturnReady(message: string): void {
+    if (!this.meta?.active_run) return;
+    const runId = this.meta.active_run.id;
+    this.appendAndBroadcast({
+      type: "agent_run_failed",
+      run_id: runId,
+      message,
+    });
+    if (this.meta.state !== "ready" && isValidTransition(this.meta.state, "ready")) {
+      this.transition("ready");
+    }
+    this.finishRunAndDrainQueue("failed");
+  }
+
+  private completeActiveRun(prUrl?: string): void {
+    if (!this.meta?.active_run) return;
+    const runId = this.meta.active_run.id;
+
+    if (this.meta.state !== "ready" && isValidTransition(this.meta.state, "ready")) {
+      this.transition("ready");
+    }
+    this.appendAndBroadcast({
+      type: "agent_run_completed",
+      run_id: runId,
+      ...(prUrl ? { pr_url: prUrl } : {}),
+    });
+    this.finishRunAndDrainQueue("completed");
+  }
+
+  // Persist the most recent plan decision so a later, rejected decision can name
+  // whoever already acted on this plan.
+  private recordDecision(decision: LastDecision): void {
+    if (!this.meta) return;
+    this.meta.last_decision = decision;
+    this.saveMeta();
+  }
+
+  // Build an attributed rejection event for a too-late plan decision, falling
+  // back to the generic state-only message when no same-round decider is known.
+  private decisionRejection(
+    attemptedAction: "approve" | "refine",
+    fallbackMessage: string,
+  ): { type: "error"; message: string; actor?: string } {
+    const attribution = this.meta
+      ? describeDecisionRejection(attemptedAction, this.meta.last_decision ?? null, this.meta.refinement_round)
+      : null;
+    if (attribution) {
+      return { type: "error", message: attribution.message, actor: attribution.actor };
+    }
+    return { type: "error", message: fallbackMessage };
   }
 
   private async provisionSessionSandbox(): Promise<void> {
@@ -463,6 +760,7 @@ export class Orchestrator extends DurableObject<Env> {
     if (!this.meta) return;
 
     if (!this.transition("provisioning_sandbox")) return;
+    this.updateDirectory({ sandbox_state: "provisioning" });
 
     const tracer = this.getTracer();
     try {
@@ -501,22 +799,22 @@ export class Orchestrator extends DurableObject<Env> {
     }
   }
 
-  private startPlanning(ws: WebSocket): void {
+  private initializeSandboxConnection(ws: WebSocket): void {
     this.loadMeta();
     if (!this.meta) {
-      console.error("codevil.startPlanning.no_meta");
+      console.error("codevil.initializeSandboxConnection.no_meta");
       return;
     }
 
     const tracer = this.getTracer();
-    tracer?.log("INFO", "start_planning", {
+    tracer?.log("INFO", "start_sandbox_init", {
       state: this.meta.state,
       provider: this.meta.provider,
       plan_model: this.meta.plan_model,
     });
 
     if (this.meta.state !== "provisioning_sandbox") {
-      tracer?.log("ERROR", "start_planning.unexpected_state", {
+      tracer?.log("ERROR", "sandbox_init.unexpected_state", {
         state: this.meta.state,
         expected: "provisioning_sandbox",
       });
@@ -546,10 +844,6 @@ export class Orchestrator extends DurableObject<Env> {
     if (!parsed) return;
 
     this.loadMeta();
-    this.getTracer()?.log("DEBUG", "sandbox.message", {
-      type: parsed.type,
-      state: this.meta?.state,
-    });
     if (!this.meta) return;
 
     switch (parsed.type) {
@@ -561,6 +855,12 @@ export class Orchestrator extends DurableObject<Env> {
         return;
       case "plan_ready":
         this.handleSandboxPlanReady(parsed.plan, parsed.cost);
+        return;
+      case "agent_turn_complete":
+        this.handleSandboxAgentTurnComplete(parsed.run_id, parsed.response, parsed.cost);
+        return;
+      case "create_pr_request":
+        await this.handleCreatePullRequestRequest(ws, parsed);
         return;
       case "verification_started":
         this.handleSandboxVerificationStarted(parsed.attempt, parsed.max_attempts);
@@ -581,9 +881,7 @@ export class Orchestrator extends DurableObject<Env> {
         await this.handleBranchPushed(parsed.branch, parsed.base_branch, parsed.pr_title, parsed.pr_body);
         return;
       case "pr_created":
-        if (this.transition("completed")) {
-          this.appendAndBroadcast({ type: "complete", pr_url: parsed.url });
-        }
+        this.completeActiveRun(parsed.url);
         return;
       case "preview_starting":
         this.appendAndBroadcast({ type: "preview_starting", command: parsed.command, port: parsed.port });
@@ -603,8 +901,12 @@ export class Orchestrator extends DurableObject<Env> {
         this.appendAndBroadcast({ type: "preview_apps", apps: parsed.apps });
         return;
       case "error":
-        this.transition("failed");
-        this.appendAndBroadcast({ type: "error", message: parsed.message });
+        if (this.meta.active_run && this.meta.state === "executing") {
+          this.failActiveRunAndReturnReady(parsed.message);
+        } else {
+          this.transition("failed");
+          this.appendAndBroadcast({ type: "error", message: parsed.message });
+        }
         return;
       default:
         for (const event of mapSandboxMessageToCLIEvents(parsed)) {
@@ -616,25 +918,22 @@ export class Orchestrator extends DurableObject<Env> {
   private handleSandboxCloneStarted(): void {
     if (!this.meta) return;
     if (this.meta.state !== "provisioning_sandbox") return;
-    this.transition("cloning_repo");
+    if (this.transition("cloning_repo")) {
+      this.updateDirectory({ sandbox_state: "cloning" });
+    }
   }
 
   private handleSandboxCloneComplete(): void {
     if (!this.meta) return;
     if (this.meta.state !== "cloning_repo") return;
 
-    if (this.transition("planning")) {
-      this.appendAndBroadcast({
-        type: "phase",
-        phase: "planning",
-        model: this.meta.plan_model,
-      });
-      this.sendToSandbox({
-        type: "plan",
-        prompt: this.meta.prompt,
-        model: this.meta.plan_model,
-        provider: this.meta.provider,
-      });
+    if (this.transition("ready")) {
+      this.updateDirectory({ room_state: "ready", sandbox_state: "ready" });
+      this.appendAndBroadcast({ type: "status", message: "Repository cloned. Room is ready." });
+      this.appendAndBroadcast({ type: "room_ready", repo: this.meta.repo });
+      if (!this.meta.active_run && this.meta.queued_runs.length > 0) {
+        this.finishRunAndDrainQueue("completed");
+      }
     }
   }
 
@@ -648,8 +947,10 @@ export class Orchestrator extends DurableObject<Env> {
 
     if (this.meta.state === "planning") {
       if (this.transition("awaiting_approval")) {
+        this.setActiveRunState("awaiting_approval");
         this.appendAndBroadcast({
-          type: "plan_ready",
+          type: "approval_requested",
+          run_id: this.meta.active_run?.id ?? "run_unknown",
           plan,
           cost,
           refinement_round: this.meta.refinement_round,
@@ -661,8 +962,10 @@ export class Orchestrator extends DurableObject<Env> {
 
     if (this.meta.state === "refining") {
       if (this.transition("awaiting_approval")) {
+        this.setActiveRunState("awaiting_approval");
         this.appendAndBroadcast({
-          type: "plan_ready",
+          type: "approval_requested",
+          run_id: this.meta.active_run?.id ?? "run_unknown",
           plan,
           cost,
           refinement_round: this.meta.refinement_round,
@@ -672,12 +975,26 @@ export class Orchestrator extends DurableObject<Env> {
     }
   }
 
+  private handleSandboxAgentTurnComplete(runId: string, response: string, cost: CostInfo): void {
+    if (!this.meta?.active_run || this.meta.state !== "executing") return;
+    if (this.meta.active_run.id !== runId) return;
+    if (!this.recordCost(cost)) return;
+
+    this.appendAndBroadcast({
+      type: "agent_response",
+      run_id: this.meta.active_run.id,
+      text: response,
+    });
+    this.completeActiveRun();
+  }
+
   private handleSandboxVerificationStarted(attempt: number, maxAttempts: number): void {
     if (!this.meta) return;
     if (this.meta.state === "executing" || this.meta.state === "retrying") {
       this.meta.verification_attempts = attempt;
       this.saveMeta();
       if (this.transition("verifying")) {
+        this.setActiveRunState("verifying");
         this.appendAndBroadcast({
           type: "status",
           message: `Verification started (attempt ${attempt}/${maxAttempts}).`,
@@ -699,6 +1016,7 @@ export class Orchestrator extends DurableObject<Env> {
     this.meta.verification_attempts = attempt;
     this.saveMeta();
     if (this.transition("retrying")) {
+      this.setActiveRunState("executing");
       this.appendAndBroadcast({
         type: "status",
         message: `Verification failed on attempt ${attempt}/${maxAttempts}. Asking agent to fix it.`,
@@ -712,13 +1030,15 @@ export class Orchestrator extends DurableObject<Env> {
     if (this.meta.state !== "verifying") return;
 
     if (this.transition("creating_pr")) {
+      this.setActiveRunState("publishing");
       this.appendAndBroadcast({ type: "status", message: "Execution completed. Creating pull request." });
+      const runPrompt = this.meta.active_run?.text ?? this.meta.prompt;
       this.sendToSandbox({
         type: "create_pr",
-        branch: `codevil/${slugify(this.meta.prompt)}-${Date.now()}`,
-        commit_message: `Implement ${this.meta.prompt}`,
-        pr_title: this.meta.prompt,
-        pr_body: this.meta.latest_plan ?? this.meta.prompt,
+        branch: `codevil/${slugify(runPrompt)}-${Date.now()}`,
+        commit_message: `Implement ${runPrompt}`,
+        pr_title: runPrompt,
+        pr_body: this.meta.latest_plan ?? runPrompt,
       });
     }
   }
@@ -752,6 +1072,40 @@ export class Orchestrator extends DurableObject<Env> {
     } satisfies DOToSandboxMessage));
   }
 
+  private async handleCreatePullRequestRequest(
+    ws: WebSocket,
+    request: Extract<SandboxToDOMessage, { type: "create_pr_request" }>,
+  ): Promise<void> {
+    if (!this.meta) return;
+
+    try {
+      if (this.meta.state !== "executing" || this.meta.active_run?.id !== request.run_id) {
+        throw new Error(`Agent run ${request.run_id} is no longer active.`);
+      }
+      if (!this.workerEnv.GITHUB_PAT) throw new Error("GitHub credentials are not configured.");
+      const url = await createDraftPullRequest({
+        repo: this.meta.repo,
+        token: this.workerEnv.GITHUB_PAT,
+        branch: request.branch,
+        baseBranch: request.base_branch,
+        title: request.title,
+        body: request.body,
+        draft: request.draft,
+      });
+      ws.send(JSON.stringify({
+        type: "create_pr_response",
+        request_id: request.request_id,
+        url,
+      } satisfies DOToSandboxMessage));
+    } catch (error) {
+      ws.send(JSON.stringify({
+        type: "create_pr_response",
+        request_id: request.request_id,
+        error: error instanceof Error ? error.message : String(error),
+      } satisfies DOToSandboxMessage));
+    }
+  }
+
   private async handleBranchPushed(branch: string, baseBranch: string, prTitle: string, prBody: string): Promise<void> {
     if (!this.meta) return;
     if (this.meta.state !== "creating_pr") return;
@@ -767,15 +1121,9 @@ export class Orchestrator extends DurableObject<Env> {
         body: prBody,
       });
 
-      if (this.transition("completed")) {
-        this.appendAndBroadcast({ type: "complete", pr_url: prUrl });
-      }
+      this.completeActiveRun(prUrl);
     } catch (error) {
-      this.transition("failed");
-      this.appendAndBroadcast({
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      this.failActiveRunAndReturnReady(error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -787,7 +1135,7 @@ export class Orchestrator extends DurableObject<Env> {
         attempts,
         last_error: lastError,
       });
-      this.transition("failed");
+      this.failActiveRunAndReturnReady(lastError);
     }
   }
 
@@ -877,6 +1225,7 @@ export class Orchestrator extends DurableObject<Env> {
     if (!tracer) return message;
     if (
       message.type !== "plan" &&
+      message.type !== "agent_turn" &&
       message.type !== "execute" &&
       message.type !== "refine_plan" &&
       message.type !== "create_pr" &&
@@ -921,8 +1270,9 @@ export class Orchestrator extends DurableObject<Env> {
     const steps: { state: SessionState; event: DOToCLIEvent }[] = [
       { state: "provisioning_sandbox", event: { type: "status", message: "Provisioning sandbox..." } },
       { state: "cloning_repo", event: { type: "clone_progress", line: "Cloning into '/workspace'..." } },
-      { state: "planning", event: { type: "phase", phase: "planning", model: "claude-sonnet-4-6" } },
-      { state: "awaiting_approval", event: { type: "plan_ready", plan: "## Test Plan\n\n1. Step one\n2. Step two", cost: { input_tokens: 1000, output_tokens: 500, total_cost_usd: 0.01 }, refinement_round: 0 } },
+      { state: "ready", event: { type: "room_ready", repo: this.meta.repo } },
+      { state: "executing", event: { type: "phase", phase: "executing", model: "claude-sonnet-4-6" } },
+      { state: "ready", event: { type: "agent_response", run_id: "run_test", text: "The repository is ready. Ask me a question or request a code change." } },
     ];
 
     for (const step of steps) {
@@ -930,7 +1280,6 @@ export class Orchestrator extends DurableObject<Env> {
         this.appendAndBroadcast(step.event);
       }
     }
-    this.appendAndBroadcast({ type: "status", message: "Waiting for user approval." });
   }
 
   async fetchPreview(request: Request, token: string): Promise<Response> {
@@ -984,6 +1333,39 @@ export class Orchestrator extends DurableObject<Env> {
     const patched = new Response(response.body, response);
     patched.headers.set("Cache-Control", "no-store");
     return patched;
+  }
+
+  private updateDirectory(patch: {
+    room_state?: string;
+    sandbox_state?: string;
+    active_run_state?: string | null;
+  }): void {
+    this.loadMeta();
+    if (!this.meta) return;
+
+    const now = new Date().toISOString();
+    const entries: [string, unknown][] = [
+      ["updated_at", now],
+      ["last_event_at", now],
+    ];
+    if (patch.room_state !== undefined) entries.push(["room_state", patch.room_state]);
+    if (patch.sandbox_state !== undefined) entries.push(["sandbox_state", patch.sandbox_state]);
+    if (patch.active_run_state !== undefined) entries.push(["active_run_state", patch.active_run_state]);
+
+    const assignments = entries.map(([key]) => `${key} = ?`).join(", ");
+    const bindings = [...entries.map(([, value]) => value), this.meta.session_id];
+
+    this.ctx.waitUntil(
+      this.workerEnv.DB
+        .prepare(`UPDATE sessions SET ${assignments} WHERE id = ?`)
+        .bind(...bindings)
+        .run()
+        .catch((error) => {
+          this.getTracer()?.log("ERROR", "session_directory.update.failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }),
+    );
   }
 
   // --- Event log ---
@@ -1041,6 +1423,8 @@ export class Orchestrator extends DurableObject<Env> {
     );
     for (const r of row) {
       this.meta = JSON.parse(r["value"] as string);
+      this.meta!.queued_runs ??= [];
+      this.meta!.active_run ??= null;
       break;
     }
   }

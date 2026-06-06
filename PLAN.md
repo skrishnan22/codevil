@@ -37,13 +37,13 @@ HTTP router, auth, DO lifecycle, WebSocket upgrade. No sandbox — the DO manage
 
 ### Tasks
 
-- [ ] Create `packages/worker/` package with `wrangler.toml`
-- [ ] Worker entrypoint: `POST /sessions` (validate API key, generate session ID, create DO)
-- [ ] Worker entrypoint: `GET /sessions/:id/ws` (validate API key, upgrade to WebSocket, forward to DO)
-- [ ] Durable Object class: accept WebSocket connections, track cursor positions
-- [ ] DO state machine: implement state transitions, reject invalid ones
-- [ ] DO event log: append events to SQLite, support replay from cursor via `?cursor=N`
-- [ ] Emit test events so a WebSocket client can verify the pipeline works
+- [x] Create `packages/worker/` package with `wrangler.toml`
+- [x] Worker entrypoint: `POST /sessions` (validate API key, generate session ID, create DO)
+- [x] Worker entrypoint: `GET /sessions/:id/ws` (validate API key, upgrade to WebSocket, forward to DO)
+- [x] Durable Object class: accept WebSocket connections, track cursor positions
+- [x] DO state machine: implement state transitions, reject invalid ones
+- [x] DO event log: append events to SQLite, support replay from cursor via `?cursor=N`
+- [x] Emit test events so a WebSocket client can verify the pipeline works
 
 ### Review checkpoint
 
@@ -61,16 +61,16 @@ Connect to the Worker, render events, handle the approval flow. Wire it to the D
 
 ### Tasks
 
-- [ ] Create `packages/cli/` package, entry point `bin/codevil`
-- [ ] `codevil init` — prompt for endpoint URL and API key, write `~/.codevil/config`
-- [ ] `codevil run` — parse args (`--repo`, `--plan-model`, `--exec-model`, `--max-cost`, `--max-time`)
-- [ ] WebSocket client: connect with Bearer token, handle reconnect with `?cursor=N`
-- [ ] Renderer: display status events, clone progress, phase changes
-- [ ] Renderer: display plan as markdown when `plan_ready` arrives
-- [ ] Approval flow: prompt user for approve (`y`), abort (`n`), or refinement feedback
-- [ ] Send `approve`, `abort`, `refine_plan` messages over WebSocket
-- [ ] Display PR URL on `complete` event
-- [ ] Handle `error` and `verification_failed` events gracefully
+- [x] Create `packages/cli/` package, entry point `bin/codevil`
+- [x] `codevil init` — prompt for endpoint URL and API key, write `~/.codevil/config`
+- [x] `codevil run` — parse args (`--repo`, `--plan-model`, `--exec-model`, `--max-cost`, `--max-time`)
+- [x] WebSocket client: connect with Bearer token, handle reconnect with `?cursor=N`
+- [x] Renderer: display status events, clone progress, phase changes
+- [x] Renderer: display plan as markdown when `plan_ready` arrives
+- [x] Approval flow: prompt user for approve (`y`), abort (`n`), or refinement feedback
+- [x] Send `approve`, `abort`, `refine_plan` messages over WebSocket
+- [x] Display PR URL on `complete` event
+- [x] Handle `error` and `verification_failed` events gracefully
 
 ### Review checkpoint
 
@@ -84,19 +84,19 @@ The real agent. Pi explores with read-only tools, plans, and executes with full 
 
 ### Tasks
 
-- [ ] Create `packages/sandbox-image/` with Dockerfile (Node.js, pnpm, Git, gh CLI, Pi SDK)
-- [ ] Sandbox entrypoint: connect to DO via WebSocket
-- [ ] Handle `{ type: "init", repo }` — clone repo via credential broker, discover default branch with `gh repo view`
-- [ ] Handle `{ type: "plan", prompt, model }` — create Pi `AgentSession` with `createReadOnlyTools()`, run plan prompt
-- [ ] Subscribe to Pi `AgentEvent` stream, forward all events to DO
-- [ ] Handle `{ type: "refine_plan", feedback }` — send refinement prompt to Pi
-- [ ] Handle `{ type: "execute", plan, model }` — call `setActiveToolsByName(["read", "bash", "edit", "write"])`, switch model, run execution prompt
-- [ ] Handle verification: Pi runs repo's tests/lints, retry up to 5 times on failure
-- [ ] Handle `{ type: "create_pr", ... }` — create branch, commit, push, `gh pr create --base {default_branch}`
-- [ ] DO: provision sandbox via `@cloudflare/sandbox` SDK, establish WebSocket to sandbox
-- [ ] DO: forward CLI messages to sandbox, forward sandbox events to CLI
-- [ ] DO: implement event redaction before persisting/forwarding (exact-match + pattern-match)
-- [ ] LLM key: write to `/run/secrets/llm_key` tmpfs, entrypoint reads and unlinks
+- [x] Create `packages/sandbox-image/` with Dockerfile (Node.js, pnpm, Git, gh CLI, Pi SDK)
+- [x] Sandbox entrypoint: connect to DO via WebSocket
+- [x] Handle `{ type: "init", repo }` — clone repo, discover default branch from `origin/HEAD`
+- [x] Handle `{ type: "plan", prompt, model }` — create Pi `AgentSession` with read-only tool allowlist, run plan prompt
+- [x] Subscribe to Pi `AgentEvent` stream, forward all events to DO
+- [x] Handle `{ type: "refine_plan", feedback }` — send refinement prompt to Pi
+- [x] Handle `{ type: "execute", plan, model }` — call `setActiveToolsByName(["read", "bash", "edit", "write"])`, switch model, run execution prompt
+- [x] Handle verification: Pi runs repo's tests/lints, retry up to 5 times on failure
+- [x] Handle `{ type: "create_pr", ... }` — create branch, commit, push, `gh pr create --base {default_branch}`
+- [x] DO: provision sandbox via `@cloudflare/sandbox` SDK, establish WebSocket to sandbox
+- [x] DO: forward CLI messages to sandbox, forward sandbox events to CLI
+- [x] DO: implement event redaction before persisting/forwarding (exact-match + pattern-match)
+- [x] LLM key: write to `/run/secrets/llm_key` tmpfs, entrypoint reads and unlinks
 
 ### Review checkpoint
 

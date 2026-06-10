@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SessionState, DOToCLIEvent, CLIToDOMessage, PreviewApp } from "@codevil/shared";
+import type { SessionState, DOToCLIEvent, CLIToDOMessage, PreviewApp, ParticipantIdentity } from "@codevil/shared";
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
@@ -16,6 +16,8 @@ export interface PreviewState {
   error: string | null;
   apps: PreviewApp[];
   selectedAppKey: string | null;
+  reloadRevision: number;
+  outputLines: string[];
 }
 
 interface SessionStoreState {
@@ -23,6 +25,7 @@ interface SessionStoreState {
   wsUrl: string | null;
   messages: ChatMessage[];
   activityLog: ActivityEntry[];
+  participants: ParticipantIdentity[];
   sessionPhase: SessionState | null;
   cursor: number;
   connectionStatus: ConnectionStatus;
@@ -55,6 +58,7 @@ const initialState: SessionStoreState = {
   wsUrl: null,
   messages: [],
   activityLog: [],
+  participants: [],
   sessionPhase: null,
   cursor: 0,
   connectionStatus: "disconnected",
@@ -68,12 +72,19 @@ const initialState: SessionStoreState = {
     error: null,
     apps: [],
     selectedAppKey: null,
+    reloadRevision: 0,
+    outputLines: [],
   },
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
 let pendingEvents: DOToCLIEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+let previewReloadTimer: ReturnType<typeof setTimeout> | null = null;
+let connectionGeneration = 0;
+const PREVIEW_RELOAD_DEBOUNCE_MS = 1_000;
+const PREVIEW_OUTPUT_PREFIX = "Preview output: ";
+const PREVIEW_OUTPUT_LIMIT = 20;
 
 function clearPendingEvents(): void {
   pendingEvents = [];
@@ -81,6 +92,12 @@ function clearPendingEvents(): void {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
+}
+
+function clearPreviewReloadTimer(): void {
+  if (!previewReloadTimer) return;
+  clearTimeout(previewReloadTimer);
+  previewReloadTimer = null;
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
@@ -98,6 +115,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   connectToSession(config, sessionId, wsUrl) {
+    const generation = ++connectionGeneration;
     wsHandle?.close();
     clearPendingEvents();
 
@@ -109,6 +127,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       ...(isSameSession ? {} : {
         messages: [],
         activityLog: [],
+        participants: [],
         sessionPhase: null,
         cursor: 0,
         error: null,
@@ -127,21 +146,41 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       displayName: config.displayName,
       participantId: config.participantId,
       onOpen() {
+        if (generation !== connectionGeneration) return;
         set({ connectionStatus: "connected" });
       },
       onEvent(envelope: EventEnvelope) {
+        if (generation !== connectionGeneration) return;
         set((state) => {
           const nextPhase = inferPhase(envelope.event, state.sessionPhase);
           const planApproved = inferPlanApproved(envelope.event, state.planApproved);
           const preview = reducePreviewState(state.preview, envelope.event);
+          const participants = reduceParticipants(state.participants, envelope.event);
 
           return {
             cursor: envelope.cursor,
             sessionPhase: nextPhase ?? state.sessionPhase,
             planApproved,
             preview,
+            participants,
           };
         });
+
+        if (shouldReloadPreviewAfterEvent(envelope.event) && get().preview.status === "ready") {
+          clearPreviewReloadTimer();
+          previewReloadTimer = setTimeout(() => {
+            previewReloadTimer = null;
+            set((state) => {
+              if (state.preview.status !== "ready") return {};
+              return {
+                preview: {
+                  ...state.preview,
+                  reloadRevision: state.preview.reloadRevision + 1,
+                },
+              };
+            });
+          }, PREVIEW_RELOAD_DEBOUNCE_MS);
+        }
 
         pendingEvents.push(envelope.event);
         if (!flushTimer) {
@@ -163,12 +202,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         }
       },
       onClose(_code, _reason) {
+        if (generation !== connectionGeneration) return;
         set({ connectionStatus: "disconnected" });
       },
       onError() {
         // The socket close handler performs automatic reconnection.
       },
       onReconnecting() {
+        if (generation !== connectionGeneration) return;
         set({ connectionStatus: "connecting" });
       },
     });
@@ -214,6 +255,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   stopPreview() {
     wsHandle?.send({ type: "preview_stop" });
+    clearPreviewReloadTimer();
     set((state) => ({
       preview: {
         ...initialState.preview,
@@ -234,9 +276,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   disconnect() {
+    connectionGeneration++;
     wsHandle?.close();
     wsHandle = null;
     clearPendingEvents();
+    clearPreviewReloadTimer();
     set({ connectionStatus: "disconnected" });
   },
 
@@ -273,9 +317,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   reset() {
+    connectionGeneration++;
     wsHandle?.close();
     wsHandle = null;
     clearPendingEvents();
+    clearPreviewReloadTimer();
     set(initialState);
   },
 }));
@@ -330,6 +376,7 @@ export function reducePreviewState(current: PreviewState, event: DOToCLIEvent): 
         command: event.command,
         port: event.port,
         error: null,
+        outputLines: [],
       };
     case "preview_ready":
       return {
@@ -347,6 +394,15 @@ export function reducePreviewState(current: PreviewState, event: DOToCLIEvent): 
         url: null,
         error: event.message,
       };
+    case "status": {
+      if (!event.message.startsWith(PREVIEW_OUTPUT_PREFIX)) return current;
+      const line = event.message.slice(PREVIEW_OUTPUT_PREFIX.length).trim();
+      if (!line) return current;
+      return {
+        ...current,
+        outputLines: [...current.outputLines, line].slice(-PREVIEW_OUTPUT_LIMIT),
+      };
+    }
     case "preview_stopped":
       return {
         ...initialState.preview,
@@ -367,8 +423,54 @@ export function reducePreviewState(current: PreviewState, event: DOToCLIEvent): 
   }
 }
 
+export function reduceParticipants(
+  current: ParticipantIdentity[],
+  event: DOToCLIEvent,
+): ParticipantIdentity[] {
+  switch (event.type) {
+    case "participant_joined":
+      return upsertParticipant(current, event.participant);
+    case "participant_left":
+      return current.filter((participant) => participant.id !== event.participant.id);
+    default:
+      return current;
+  }
+}
+
+function upsertParticipant(
+  current: ParticipantIdentity[],
+  participant: ParticipantIdentity,
+): ParticipantIdentity[] {
+  const existingIndex = current.findIndex((item) => item.id === participant.id);
+  if (existingIndex === -1) return [...current, participant];
+  return current.map((item, index) => index === existingIndex ? participant : item);
+}
+
 export function parseAgentMention(text: string): string | null {
   const match = text.trim().match(/^@codevil(?:\s+(.+))?$/i);
   if (!match) return null;
   return match[1]?.trim() || null;
+}
+
+function shouldReloadPreviewAfterEvent(event: DOToCLIEvent): boolean {
+  if (event.type !== "agent_event") return false;
+  const raw = event.event;
+  if (!isRecord(raw) || raw.type !== "tool_execution_end") return false;
+  if (raw.success === false || raw.isError === true || typeof raw.error === "string") return false;
+
+  const tool = typeof raw.toolName === "string"
+    ? raw.toolName
+    : typeof raw.tool === "string"
+      ? raw.tool
+      : "";
+  return isWriteTool(tool);
+}
+
+function isWriteTool(name: string): boolean {
+  const normalized = name.toLowerCase();
+  return normalized.includes("write") || normalized.includes("edit") || normalized.includes("replace");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

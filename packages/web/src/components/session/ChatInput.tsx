@@ -1,11 +1,20 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
+import { loadConfig } from "@/lib/config";
 
 export function ChatInput() {
   const { connectionStatus, sendRoomMessage } = useSessionStore();
   const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canSend = connectionStatus === "connected" || connectionStatus === "connecting";
+  const connectionLabel =
+    connectionStatus === "connecting"
+      ? "Reconnecting. Messages will send when connected."
+      : connectionStatus;
+
+  const displayName = loadConfig()?.displayName?.trim();
+  const avatarLabel = (displayName?.slice(0, 1) ?? "Y").toUpperCase();
 
   function handleSend() {
     const trimmed = input.trim();
@@ -14,34 +23,61 @@ export function ChatInput() {
     setInput("");
   }
 
+  function handleMention() {
+    setInput((current) => {
+      if (/@codevil\b/i.test(current)) return current;
+      const prefix = current.length === 0 || current.endsWith(" ") ? current : `${current} `;
+      return `${prefix}@codevil `;
+    });
+    textareaRef.current?.focus();
+  }
+
   return (
     <div className="chat-input-bar">
       <div className="chat-input-bar-inner">
-        <input
+        <div className="chat-input-avatar" aria-hidden="true">{avatarLabel}</div>
+        <textarea
           id="session-chat-input"
-          type="text"
-          placeholder="Message the room or tag @codevil..."
+          ref={textareaRef}
+          placeholder="Message the room — tag @codevil to direct the agent"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") handleSend();
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
           }}
           disabled={!canSend}
           autoComplete="off"
         />
+        <div className="chat-input-tools">
+          <button
+            type="button"
+            className="chat-input-mention"
+            onClick={handleMention}
+            disabled={!canSend}
+          >
+            @ Mention Codevil
+          </button>
+          <span className="chat-input-hint">
+            <kbd>↵</kbd> to send · <kbd>⇧↵</kbd> for newline
+          </span>
+        </div>
         <button
           id="session-chat-send"
           className="chat-input-send"
           onClick={handleSend}
           disabled={!canSend || !input.trim()}
           type="button"
+          aria-label="Send message"
         >
-          Send ↵
+          ↑
         </button>
       </div>
       <div className={`chat-connection-status ${connectionStatus}`}>
         <span aria-hidden="true" />
-        {connectionStatus === "connecting" ? "Reconnecting. Messages will send when connected." : connectionStatus}
+        {connectionLabel}
       </div>
     </div>
   );

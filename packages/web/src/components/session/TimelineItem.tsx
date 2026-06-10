@@ -1,7 +1,12 @@
 import type { ChatMessage } from "@/types";
+import type { CSSProperties } from "react";
+import { loadConfig } from "@/lib/config";
 import { MilestoneCard, type MilestoneData } from "./MilestoneCard";
 import { AttentionCard, type AttentionData } from "./AttentionCard";
 import { TraceGroup, type TraceGroupData } from "./TraceGroup";
+import { PlanCard } from "./plan-card";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -36,6 +41,29 @@ function getMessageContent(msg: ChatMessage): string {
   return msg.content;
 }
 
+function isOutgoingMessage(msg: ChatMessage): boolean {
+  if (msg.role !== "user") return false;
+  const config = loadConfig();
+  const actorId = msg.meta?.actor_id;
+  if (actorId && config?.participantId) return actorId === config.participantId;
+  if (msg.actor && config?.displayName) return msg.actor === config.displayName;
+  return !msg.actor || msg.actor === "You";
+}
+
+function renderHumanMessageContent(content: string) {
+  const parts = content.split(/(@codevil\b)/gi);
+  return parts.map((part, index) => {
+    if (part.toLowerCase() === "@codevil") {
+      return (
+        <span className="timeline-mention" key={`${part}-${index}`}>
+          {part}
+        </span>
+      );
+    }
+    return part;
+  });
+}
+
 export type TimelineItemData =
   | { id: string; type: "milestone"; data: MilestoneData }
   | { id: string; type: "trace-group"; data: TraceGroupData }
@@ -46,9 +74,12 @@ interface TimelineItemProps {
   item: TimelineItemData;
   highlight?: boolean;
   onOpenActivity?: (id: string) => void;
+  avatarColors?: Map<string, string>;
+  /** True when this message continues a run from the same sender — hides the repeated avatar/meta. */
+  grouped?: boolean;
 }
 
-export function TimelineItem({ item, highlight, onOpenActivity }: TimelineItemProps) {
+export function TimelineItem({ item, highlight, onOpenActivity, avatarColors, grouped }: TimelineItemProps) {
   if (item.type === "milestone") {
     return <MilestoneCard milestone={item.data} />;
   }
@@ -63,8 +94,17 @@ export function TimelineItem({ item, highlight, onOpenActivity }: TimelineItemPr
 
   // message
   const msg = item.data;
+  if (msg.variant === "plan") {
+    return <PlanCard />;
+  }
+
   const presentation = getTimelineMessagePresentation(msg);
   const content = getMessageContent(msg);
+  const isOutgoing = isOutgoingMessage(msg);
+  const avatarColorKey = msg.meta?.actor_id ?? presentation.sender;
+  const avatarColor = presentation.kind === "human"
+    ? avatarColors?.get(avatarColorKey)
+    : undefined;
 
   if (presentation.kind === "system") {
     return (
@@ -77,17 +117,32 @@ export function TimelineItem({ item, highlight, onOpenActivity }: TimelineItemPr
   }
 
   return (
-    <div className={`timeline-msg ${presentation.kind}`} id={`msg-${msg.id}`}>
-      <div className={`timeline-msg-avatar ${presentation.kind}`} aria-hidden="true">
-        {presentation.avatarLabel}
+    <div
+      className={`timeline-msg ${presentation.kind}${isOutgoing ? " outgoing" : ""}${grouped ? " grouped" : ""}`}
+      id={`msg-${msg.id}`}
+    >
+      <div
+        className={`timeline-msg-avatar ${presentation.kind}${grouped ? " is-grouped" : ""}`}
+        aria-hidden="true"
+        style={avatarColor ? { "--avatar-color": avatarColor } as CSSProperties : undefined}
+      >
+        {grouped ? null : presentation.avatarLabel}
       </div>
       <div className="timeline-msg-body">
-        <div className="timeline-msg-meta">
-          <span className="timeline-msg-sender">{presentation.sender}</span>
-          <span>·</span>
-          <span>{formatTime(msg.timestamp)}</span>
+        {!grouped && (
+          <div className="timeline-msg-meta">
+            <span className="timeline-msg-sender">{presentation.sender}</span>
+            <span>·</span>
+            <span>{formatTime(msg.timestamp)}</span>
+          </div>
+        )}
+        <div className="timeline-msg-bubble">
+          {presentation.kind === "agent" ? (
+            <div className="timeline-msg-markdown">
+              <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+            </div>
+          ) : renderHumanMessageContent(content)}
         </div>
-        <div className="timeline-msg-bubble">{content}</div>
       </div>
     </div>
   );

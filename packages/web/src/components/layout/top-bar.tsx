@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/brand/logo";
 import { SettingsDialog } from "../settings-dialog";
 
 export function TopBar() {
@@ -9,8 +10,7 @@ export function TopBar() {
   return (
     <header className="app-topbar">
       <Link to="/" className="brand-lockup">
-        <span className="brand-mark" />
-        <span>Codevil</span>
+        <Logo />
       </Link>
       <div className="flex items-center gap-1">
         <Button variant="ghost" size="sm" asChild>

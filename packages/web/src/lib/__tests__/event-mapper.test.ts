@@ -73,6 +73,7 @@ describe("mapEventToChat", () => {
     expect(messages[0].variant).toBe("text");
     expect(messages[0].content).toBe("hello room");
     expect(messages[0].actor).toBe("Alice");
+    expect(messages[0].meta?.actor_id).toBe("usr_123");
   });
 
   it("carries the actor from an attributed error event", () => {
@@ -149,6 +150,7 @@ describe("mapEventToChat", () => {
 
     expect(requested[0].role).toBe("user");
     expect(requested[0].actor).toBe("Alice");
+    expect(requested[0].meta?.actor_id).toBe("usr_123");
     expect(requested[0].content).toBe("@codevil fix the bug");
     expect(queued[0].content).toBe("Queued agent request #2.");
     expect(started).toEqual([]);
@@ -473,9 +475,30 @@ describe("mapEventToActivity", () => {
     expect(mapEventToActivity(event)[0].event?.detail).toBe("fix the test");
   });
 
-  it("returns empty array for events with no activity representation", () => {
-    const event: DOToCLIEvent = { type: "session_created", session_id: "ses_abc" };
-    const entries = mapEventToActivity(event);
-    expect(entries).toHaveLength(0);
+  it("maps room lifecycle events to activity entries for the right pane", () => {
+    const events: DOToCLIEvent[] = [
+      { type: "session_created", session_id: "ses_abc" },
+      { type: "status", message: "Provisioning sandbox..." },
+      { type: "room_ready", repo: "github.com/acme/app" },
+    ];
+
+    const labels = events.flatMap((event) =>
+      mapEventToActivity(event).map((entry) => entry.event?.label),
+    );
+
+    expect(labels).toEqual([
+      "Room created",
+      "Provisioning sandbox",
+      "Room ready",
+    ]);
+  });
+
+  it("keeps clone progress line noise out of activity", () => {
+    const entries = mapEventToActivity({
+      type: "clone_progress",
+      line: "Receiving objects: 50%",
+    });
+
+    expect(entries).toEqual([]);
   });
 });

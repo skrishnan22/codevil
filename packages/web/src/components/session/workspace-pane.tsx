@@ -17,7 +17,7 @@ export function WorkspacePane({
   selectedActivityId,
   onSelectActivity,
 }: WorkspacePaneProps) {
-  const { preview } = useSessionStore();
+  const { preview, sessionPhase } = useSessionStore();
   const previewOn = preview.status === "starting" || preview.status === "ready";
 
   return (
@@ -32,6 +32,10 @@ export function WorkspacePane({
             {previewOn && <span className="workspace-tab-dot" aria-hidden="true" />}
           </WorkspaceTabButton>
         </div>
+        <div className="workspace-phase-pill">
+          <span aria-hidden="true" />
+          {phaseLabel(sessionPhase)}
+        </div>
       </div>
 
       <div className="workspace-pane-body">
@@ -42,6 +46,26 @@ export function WorkspacePane({
       </div>
     </aside>
   );
+}
+
+function phaseLabel(phase: string | null): string {
+  switch (phase) {
+    case "planning":
+    case "awaiting_approval":
+    case "refining":
+      return "Drafting plan";
+    case "executing":
+      return "Executing";
+    case "verifying":
+    case "retrying":
+      return "Verifying";
+    case "completed":
+      return "Complete";
+    case "failed":
+      return "Needs attention";
+    default:
+      return "Activity";
+  }
 }
 
 function WorkspaceTabButton({

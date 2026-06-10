@@ -12,8 +12,8 @@ import {
 import { SessionTopBar } from "@/components/session/session-top-bar";
 import { Timeline } from "@/components/session/Timeline";
 import { ChatInput } from "@/components/session/ChatInput";
-import { CurrentAgentCard } from "@/components/session/current-agent-card";
 import { WorkspacePane } from "@/components/session/workspace-pane";
+import { RoomHeader } from "@/components/session/room-header";
 
 export const Route = createFileRoute("/session/$id")({
   component: SessionPage,
@@ -63,9 +63,7 @@ function SessionPage() {
       <SessionTopBar />
       <div className="session-workbench">
         <section className="conversation-pane" aria-label="Conversation">
-          <CurrentAgentCard
-            onOpenActivity={handleOpenActivity}
-          />
+          <RoomHeader />
           <Timeline
             onOpenActivity={handleOpenActivity}
           />

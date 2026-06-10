@@ -164,6 +164,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
           content: event.text,
           timestamp: Date.parse(event.created_at) || ts,
           actor: event.actor.name,
+          meta: { actor_id: event.actor.id },
         },
       ];
 
@@ -176,7 +177,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
           content: `@codevil ${event.text}`,
           timestamp: Date.parse(event.created_at) || ts,
           actor: event.actor.name,
-          meta: { run_id: event.run_id },
+          meta: { actor_id: event.actor.id, run_id: event.run_id },
         },
       ];
 
@@ -243,6 +244,28 @@ export function mapEventToActivity(event: DOToCLIEvent): ActivityEntry[] {
   const ts = Date.now();
 
   switch (event.type) {
+    case "session_created":
+      return [eventEntry("Room created", ts, event.session_id)];
+
+    case "status":
+      if (event.message === "Waiting for user approval.") return [];
+      return [statusEventEntry(event.message, ts)];
+
+    case "clone_progress":
+      return [];
+
+    case "room_ready":
+      return [eventEntry("Room ready", ts, event.repo)];
+
+    case "preview_starting":
+      return [eventEntry("Preview starting", ts, event.command)];
+
+    case "preview_ready":
+      return [eventEntry("Preview ready", ts, event.url)];
+
+    case "preview_error":
+      return [eventEntry("Preview error", ts, event.message, "error")];
+
     case "phase":
       return [
         {
@@ -263,6 +286,12 @@ export function mapEventToActivity(event: DOToCLIEvent): ActivityEntry[] {
 
     case "agent_run_started":
       return [eventEntry("Agent run started", ts, event.text)];
+
+    case "agent_run_completed":
+      return [eventEntry("Agent finished", ts, event.pr_url)];
+
+    case "agent_run_failed":
+      return [eventEntry("Agent failed", ts, event.message, "error")];
 
     default:
       return [];
@@ -490,14 +519,36 @@ function readMessageDelta(raw: Record<string, unknown>): string {
   return "";
 }
 
-function eventEntry(label: string, timestamp: number, detail?: string): ActivityEntry {
+function eventEntry(
+  label: string,
+  timestamp: number,
+  detail?: string,
+  status: ActivityEntry["status"] = "success",
+): ActivityEntry {
   return {
     id: uid(),
     kind: "event",
-    status: "success",
+    status,
     timestamp,
     event: { label, detail },
   };
+}
+
+function classifyStatusMessage(message: string): [string, string | undefined] {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("provision")) return ["Provisioning sandbox", message];
+  if (normalized.includes("sandbox") && normalized.includes("connect")) return ["Sandbox connected", message];
+  if (normalized.includes("clone") || normalized.includes("cloned")) return ["Cloned repository", message];
+  if (normalized.includes("setup") && normalized.includes("complete")) return ["Setup complete", message];
+  if (normalized.includes("setup") || normalized.includes("install")) return ["Running setup", message];
+  if (normalized.includes("approved")) return ["Plan approved", message];
+  if (normalized.includes("verification")) return ["Verification", message];
+  return [message, undefined];
+}
+
+function statusEventEntry(message: string, timestamp: number): ActivityEntry {
+  const [label, detail] = classifyStatusMessage(message);
+  return eventEntry(label, timestamp, detail);
 }
 
 function describeTurnEnd(raw: Record<string, unknown>): string | undefined {

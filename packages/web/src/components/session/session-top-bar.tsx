@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useSessionStore } from "@/stores/session-store";
 import { loadStoredSession } from "@/lib/session-summary";
+import { Logo } from "@/components/brand/logo";
 
 export function SessionTopBar() {
   const { sessionId, sessionPhase, connectionStatus, messages, stopSession } = useSessionStore();
@@ -40,57 +41,59 @@ export function SessionTopBar() {
   }
 
   return (
-    <header className="topbar">
-      <div className="topbar-left">
-        <Link to="/" className="topbar-title">
-          <div className="logo-mark"><span /></div>
-          codevil
-        </Link>
-        <span className="topbar-sep">/</span>
-        <span className="topbar-session">{sessionId ? sessionId.slice(0, 18) : "loading..."}</span>
-        
-        <div className="chip">
-          <span className={statusClass}></span>
-          {statusText}
+    <>
+      <header className="topbar session-global-topbar">
+        <div className="topbar-left">
+          <Link to="/" className="topbar-title">
+            <Logo />
+          </Link>
+          {storedSession?.repo && (
+            <>
+              <span className="topbar-sep" />
+              <span className="topbar-repo">{storedSession.repo}</span>
+            </>
+          )}
+          <span className="topbar-sep">/</span>
+          <span className="topbar-session">{sessionId ? sessionId.slice(0, 18) : "loading..."}</span>
         </div>
-        {storedSession?.repo && (
-          <div className="chip">
-            <span className="topbar-key">REPO</span> {storedSession.repo}
+
+        <div className="topbar-right">
+          <Link to="/" className="session-nav-link">Sessions</Link>
+          <Link to="/" className="session-nav-link">Settings</Link>
+          <span className="session-user-avatar" aria-label="Current user">K</span>
+        </div>
+      </header>
+
+      <div className="room-status-strip">
+        <div className="room-status-left">
+          <div className={`room-run-pill ${statusText}`}>
+            <span className={statusClass}></span>
+            {statusText}
           </div>
-        )}
-        
+          <span className="room-status-session">{sessionId ? sessionId.slice(0, 18) : "loading..."}</span>
+          {model && <span className="room-status-model">{model}</span>}
+        </div>
+        <div className="room-status-right">
+          <span className="room-stat"><span>COST</span>{cost}</span>
+          <span className="room-stat"><span>TOKENS</span>{tokens}</span>
+          <span className="room-stat"><span>ELAPSED</span>{elapsed}</span>
+          <button
+            type="button"
+            className="room-stop-button"
+            onClick={() => {
+              if (window.confirm("Stop the sandbox container? This will end the session and tear down the preview.")) {
+                stopSession();
+              }
+            }}
+            disabled={connectionStatus !== "connected" || sessionId === null}
+            title="Stop the sandbox container immediately"
+          >
+            <span aria-hidden="true" />
+            Stop
+          </button>
+        </div>
       </div>
-      
-      <div className="topbar-right">
-        {model && (
-          <div className="chip solid">
-            <span className="topbar-key">MODEL</span> {model}
-          </div>
-        )}
-        <div className="chip solid">
-          <span className="topbar-key">COST</span> {cost}
-        </div>
-        <div className="chip solid">
-          <span className="topbar-key">TOK</span> {tokens}
-        </div>
-        <div className="chip solid">
-          <span className="topbar-key">ELAPSED</span> {elapsed}
-        </div>
-        <button
-          type="button"
-          className="topbar-stop"
-          onClick={() => {
-            if (window.confirm("Stop the sandbox container? This will end the session and tear down the preview.")) {
-              stopSession();
-            }
-          }}
-          disabled={connectionStatus !== "connected" || sessionId === null}
-          title="Stop the sandbox container immediately"
-        >
-          Stop
-        </button>
-      </div>
-    </header>
+    </>
   );
 }
 

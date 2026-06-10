@@ -1,9 +1,18 @@
-import { useSessionStore, type PreviewState } from "@/stores/session-store";
+import { useState } from "react";
+import { useSessionStore, type PreviewState, type PreviewStatus } from "@/stores/session-store";
 
 export function LivePreview() {
   const { preview, startPreview, stopPreview, selectPreviewApp, sessionPhase, connectionStatus } = useSessionStore();
+  const [loadedFrameKey, setLoadedFrameKey] = useState<string | null>(null);
+  const [loadedPreviewUrl, setLoadedPreviewUrl] = useState<string | null>(null);
   const enabled = preview.status === "starting" || preview.status === "ready";
   const hasApps = preview.apps.length > 0;
+  const hasReadyFrame = preview.status === "ready" && Boolean(preview.url);
+  const frameKey = preview.url ? `${preview.url}:${preview.reloadRevision}` : null;
+  const iframeLoaded = frameKey ? isPreviewFrameLoaded(frameKey, loadedFrameKey) : false;
+  const hasLoadedPreview = Boolean(preview.url && loadedPreviewUrl === preview.url);
+  const frameVisible = iframeLoaded || hasLoadedPreview;
+  const showLoading = shouldShowPreviewLoading(preview.status, hasReadyFrame, iframeLoaded, hasLoadedPreview);
   const canToggle =
     connectionStatus === "connected" &&
     sessionPhase !== null &&
@@ -48,16 +57,68 @@ export function LivePreview() {
         <div className="live-preview-error">{preview.error}</div>
       )}
 
-      {preview.status === "ready" && preview.url && (
-        <iframe
-          className="live-preview-frame"
-          title="Live preview"
-          src={preview.url}
-          sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-same-origin allow-scripts"
-        />
+      {preview.status === "starting" && (
+        <PreviewLoading preview={preview} />
+      )}
+
+      {hasReadyFrame && preview.url && (
+        <div className="live-preview-stage">
+          <iframe
+            key={frameKey}
+            className={`live-preview-frame ${frameVisible ? "loaded" : "loading"}`}
+            title="Live preview"
+            src={preview.url}
+            sandbox="allow-forms allow-modals allow-pointer-lock allow-popups allow-same-origin allow-scripts"
+            onLoad={() => {
+              if (frameKey) setLoadedFrameKey(frameKey);
+              setLoadedPreviewUrl(preview.url);
+            }}
+          />
+          {showLoading && (
+            <PreviewLoading preview={preview} overlay />
+          )}
+        </div>
       )}
     </section>
   );
+}
+
+function PreviewLoading({ preview, overlay = false }: { preview: PreviewState; overlay?: boolean }) {
+  const lines = preview.outputLines.length > 0
+    ? preview.outputLines
+    : ["Waiting for preview command output..."];
+
+  return (
+    <div className={`live-preview-loading${overlay ? " overlay" : ""}`}>
+      <div className="live-preview-loading-center">
+        <div className="live-preview-loading-title">Live preview loading</div>
+        <div className="live-preview-loading-meta">
+          {preview.command ?? "Starting preview command"}
+          {preview.port ? ` · port ${preview.port}` : ""}
+        </div>
+        <div className="live-preview-output" aria-live="polite">
+          {lines.map((line, index) => (
+            <div key={`${index}:${line}`} className="live-preview-output-line">
+              {line}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function shouldShowPreviewLoading(
+  status: PreviewStatus,
+  hasReadyFrame: boolean,
+  iframeLoaded: boolean,
+  hasLoadedPreview: boolean,
+): boolean {
+  return status === "starting" || (status === "ready" && hasReadyFrame && !iframeLoaded && !hasLoadedPreview);
+}
+
+export function isPreviewFrameLoaded(frameKey: string, loadedFrameKey: string | null): boolean {
+  return loadedFrameKey === frameKey;
 }
 
 function previewMeta(preview: PreviewState, hasApps: boolean): string {

@@ -29,6 +29,7 @@ export interface ChatMessage {
 }
 
 export interface ChatMessageMeta {
+  actor_id?: string;
   run_id?: string;
   cost?: { input_tokens: number; output_tokens: number; total_cost_usd: number };
   refinement_round?: number;

@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
-import { loadConfig } from "@/lib/config";
 
 export function ChatInput() {
   const { connectionStatus, sendRoomMessage } = useSessionStore();
@@ -12,9 +11,6 @@ export function ChatInput() {
     connectionStatus === "connecting"
       ? "Reconnecting. Messages will send when connected."
       : connectionStatus;
-
-  const displayName = loadConfig()?.displayName?.trim();
-  const avatarLabel = (displayName?.slice(0, 1) ?? "Y").toUpperCase();
 
   function handleSend() {
     const trimmed = input.trim();
@@ -35,7 +31,7 @@ export function ChatInput() {
   return (
     <div className="chat-input-bar">
       <div className="chat-input-bar-inner">
-        <div className="chat-input-avatar" aria-hidden="true">{avatarLabel}</div>
+        <div className="chat-input-avatar" aria-hidden="true">Y</div>
         <textarea
           id="session-chat-input"
           ref={textareaRef}

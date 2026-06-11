@@ -7,10 +7,7 @@ export interface EventEnvelope {
 
 export interface WSClientOptions {
   wsUrl: string;
-  apiKey: string;
   initialCursor?: number;
-  displayName?: string;
-  participantId?: string;
   onEvent: (envelope: EventEnvelope) => void;
   onOpen?: () => void;
   onClose?: (code: number, reason: string) => void;
@@ -20,24 +17,15 @@ export interface WSClientOptions {
 
 export function buildWebSocketUrl(
   wsUrl: string,
-  apiKey: string,
   cursor: number,
-  displayName?: string,
-  participantId?: string,
 ): string {
   const url = new URL(wsUrl);
   if (url.protocol === "https:") url.protocol = "wss:";
   if (url.protocol === "http:") url.protocol = "ws:";
-  url.searchParams.set("token", apiKey);
+  url.searchParams.delete("token");
+  url.searchParams.delete("participant_id");
+  url.searchParams.delete("name");
   url.searchParams.set("cursor", cursor.toString());
-  if (participantId && participantId.trim().length > 0) {
-    url.searchParams.set("participant_id", participantId.trim());
-  }
-  // Self-declared multiplayer display name; omitted when blank so the server
-  // falls back to "Anonymous".
-  if (displayName && displayName.trim().length > 0) {
-    url.searchParams.set("name", displayName.trim());
-  }
   return url.toString();
 }
 
@@ -63,10 +51,7 @@ export function connectWebSocket(options: WSClientOptions): {
   function open(): void {
     const url = buildWebSocketUrl(
       options.wsUrl,
-      options.apiKey,
       cursor,
-      options.displayName,
-      options.participantId,
     );
     ws = new WebSocket(url);
 

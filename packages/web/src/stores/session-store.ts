@@ -141,10 +141,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
     wsHandle = connectWebSocket({
       wsUrl,
-      apiKey: config.apiKey,
       initialCursor,
-      displayName: config.displayName,
-      participantId: config.participantId,
       onOpen() {
         if (generation !== connectionGeneration) return;
         set({ connectionStatus: "connected" });

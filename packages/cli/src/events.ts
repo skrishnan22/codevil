@@ -64,6 +64,8 @@ export function renderEvent(event: DOToCLIEvent): string[] {
     case "preview_apps":
       if (event.apps.length === 0) return [];
       return [`Detected preview apps: ${event.apps.map((app) => app.key).join(", ")}`];
+    default:
+      return [];
   }
 }
 

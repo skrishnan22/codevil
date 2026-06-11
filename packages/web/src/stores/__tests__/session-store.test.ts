@@ -211,12 +211,12 @@ describe("session event state inference", () => {
       });
 
       useSessionStore.getState().connectToSession(
-        { endpoint: "https://example.com", apiKey: "key" },
+        { endpoint: "https://example.com" },
         "ses_new",
         "https://example.com/sessions/ses_new/ws",
       );
 
-      expect(sockets[0].url).toBe("wss://example.com/sessions/ses_new/ws?token=key&cursor=0");
+      expect(sockets[0].url).toBe("wss://example.com/sessions/ses_new/ws?cursor=0");
       expect(useSessionStore.getState().messages).toEqual([]);
       expect(useSessionStore.getState().activityLog).toEqual([]);
       expect(useSessionStore.getState().participants).toEqual([]);
@@ -256,7 +256,7 @@ describe("session event state inference", () => {
 
     try {
       useSessionStore.getState().connectToSession(
-        { endpoint: "https://example.com", apiKey: "key", participantId: "usr_123", displayName: "Alice" },
+        { endpoint: "https://example.com" },
         "ses_new",
         "https://example.com/sessions/ses_new/ws",
       );
@@ -298,7 +298,7 @@ describe("session event state inference", () => {
 
     try {
       useSessionStore.getState().connectToSession(
-        { endpoint: "https://example.com", apiKey: "key" },
+        { endpoint: "https://example.com" },
         "ses_new",
         "https://example.com/sessions/ses_new/ws",
       );
@@ -306,7 +306,7 @@ describe("session event state inference", () => {
       sockets[0].onopen?.();
 
       useSessionStore.getState().connectToSession(
-        { endpoint: "https://example.com", apiKey: "key" },
+        { endpoint: "https://example.com" },
         "ses_new",
         "https://example.com/sessions/ses_new/ws",
       );
@@ -350,7 +350,7 @@ describe("session event state inference", () => {
 
     try {
       useSessionStore.getState().connectToSession(
-        { endpoint: "https://example.com", apiKey: "key", participantId: "usr_123", displayName: "Alice" },
+        { endpoint: "https://example.com" },
         "ses_new",
         "https://example.com/sessions/ses_new/ws",
       );
@@ -393,7 +393,7 @@ describe("session event state inference", () => {
 
     try {
       useSessionStore.getState().connectToSession(
-        { endpoint: "https://example.com", apiKey: "key" },
+        { endpoint: "https://example.com" },
         "ses_new",
         "https://example.com/sessions/ses_new/ws",
       );

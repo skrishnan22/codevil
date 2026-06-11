@@ -1,5 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
-import { createSession, getSession, listSessions } from "../api-client";
+import {
+  acceptInvite,
+  claimSetup,
+  createInvitation,
+  createSession,
+  getAuthMe,
+  getInvite,
+  getSession,
+  listInvitations,
+  listSessions,
+  revokeInvitation,
+  signInWithGoogle,
+  signOut,
+} from "../api-client";
 
 describe("createSession", () => {
   it("sends repo-only POST /sessions and returns room summary", async () => {
@@ -22,7 +35,7 @@ describe("createSession", () => {
     });
 
     const result = await createSession(
-      { endpoint: "https://example.com", apiKey: "cdv_test" },
+      { endpoint: "https://example.com" },
       { repo: "github.com/user/repo" },
       mockFetch,
     );
@@ -33,6 +46,11 @@ describe("createSession", () => {
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body).toEqual({ repo: "github.com/user/repo" });
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/sessions", expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+    }));
   });
 
   it("sends selected provider and models when creating a session", async () => {
@@ -55,7 +73,7 @@ describe("createSession", () => {
     });
 
     await createSession(
-      { endpoint: "https://example.com", apiKey: "cdv_test" },
+      { endpoint: "https://example.com" },
       {
         repo: "github.com/user/repo",
         provider: "openai",
@@ -85,7 +103,7 @@ describe("createSession", () => {
 
     await expect(
       createSession(
-        { endpoint: "https://example.com", apiKey: "bad" },
+        { endpoint: "https://example.com" },
         { repo: "github.com/u/r" },
         mockFetch,
       ),
@@ -114,7 +132,7 @@ describe("listSessions", () => {
     });
 
     const result = await listSessions(
-      { endpoint: "https://example.com/", apiKey: "cdv_test" },
+      { endpoint: "https://example.com/" },
       mockFetch,
     );
 
@@ -122,7 +140,7 @@ describe("listSessions", () => {
     expect(result.sessions[0].id).toBe("ses_123");
     expect(mockFetch).toHaveBeenCalledWith("https://example.com/sessions", {
       method: "GET",
-      headers: { Authorization: "Bearer cdv_test" },
+      credentials: "include",
     });
   });
 });
@@ -147,12 +165,256 @@ describe("getSession", () => {
     });
 
     const result = await getSession(
-      { endpoint: "https://example.com", apiKey: "cdv_test" },
+      { endpoint: "https://example.com" },
       "ses_123",
       mockFetch,
     );
 
     expect(result.session.id).toBe("ses_123");
     expect(result.ws_url).toBe("https://example.com/sessions/ses_123/ws");
+  });
+});
+
+describe("getAuthMe", () => {
+  it("fetches auth state with browser credentials", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        authenticated: false,
+        setupRequired: true,
+        authConfigured: true,
+      }),
+    });
+
+    const result = await getAuthMe({ endpoint: "https://example.com" }, mockFetch);
+
+    expect(result.setupRequired).toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/auth/me", {
+      method: "GET",
+      credentials: "include",
+    });
+  });
+});
+
+describe("claimSetup", () => {
+  it("posts setup token with browser credentials", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        authenticated: true,
+        setupRequired: false,
+        authConfigured: true,
+        user: { id: "usr_123", email: "alice@example.com", name: "Alice" },
+        membership: { role: "owner", status: "active" },
+      }),
+    });
+
+    const result = await claimSetup(
+      { endpoint: "https://example.com/" },
+      "setup-token",
+      mockFetch,
+    );
+
+    expect(result.membership?.role).toBe("owner");
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/setup/claim", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ setupToken: "setup-token" }),
+    });
+  });
+});
+
+describe("signInWithGoogle", () => {
+  it("starts Better Auth social sign-in and returns redirect URL", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        redirect: true,
+        url: "https://accounts.google.com/oauth",
+      }),
+    });
+
+    const result = await signInWithGoogle(
+      { endpoint: "https://example.com" },
+      "https://app.example.com/setup",
+      mockFetch,
+    );
+
+    expect(result.url).toBe("https://accounts.google.com/oauth");
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/api/auth/sign-in/social", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "google",
+        callbackURL: "https://app.example.com/setup",
+        errorCallbackURL: "https://app.example.com/setup",
+      }),
+    });
+  });
+});
+
+describe("signOut", () => {
+  it("posts Better Auth sign-out with browser credentials", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ success: true }),
+    });
+
+    await signOut({ endpoint: "https://example.com/" }, mockFetch);
+
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/api/auth/sign-out", {
+      method: "POST",
+      credentials: "include",
+    });
+  });
+
+  it("throws when sign-out fails", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+
+    await expect(signOut({ endpoint: "https://example.com" }, mockFetch)).rejects.toThrow("500");
+  });
+});
+
+describe("listInvitations", () => {
+  it("fetches pending invitations with browser credentials", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        invitations: [
+          {
+            id: "inv_123",
+            email: "alice@example.com",
+            role: "developer",
+            status: "pending",
+            expires_at: "2026-06-25T00:00:00.000Z",
+            created_at: "2026-06-11T00:00:00.000Z",
+          },
+        ],
+      }),
+    });
+
+    const result = await listInvitations({ endpoint: "https://example.com/" }, mockFetch);
+
+    expect(result.invitations).toHaveLength(1);
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/invitations", {
+      method: "GET",
+      credentials: "include",
+    });
+  });
+});
+
+describe("createInvitation", () => {
+  it("creates an invite and returns its one-time link", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: () => Promise.resolve({
+        status: "created",
+        invitation: {
+          id: "inv_123",
+          email: "alice@example.com",
+          role: "developer",
+          status: "pending",
+          expires_at: "2026-06-25T00:00:00.000Z",
+          created_at: "2026-06-11T00:00:00.000Z",
+        },
+        invite_url: "https://app.example.com/invite/inv_token",
+        email_delivery: { provider: "resend", status: "sent", messageId: "email_123" },
+      }),
+    });
+
+    const result = await createInvitation(
+      { endpoint: "https://example.com" },
+      { email: "Alice@Example.COM", role: "developer" },
+      mockFetch,
+    );
+
+    expect(result.status).toBe("created");
+    expect(result.invite_url).toBe("https://app.example.com/invite/inv_token");
+    expect(result.email_delivery).toEqual({ provider: "resend", status: "sent", messageId: "email_123" });
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/invitations", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "Alice@Example.COM", role: "developer" }),
+    });
+  });
+
+  it("returns duplicate/member statuses without throwing", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ status: "already_invited" }),
+    });
+
+    const result = await createInvitation(
+      { endpoint: "https://example.com" },
+      { email: "alice@example.com", role: "viewer" },
+      mockFetch,
+    );
+
+    expect(result.status).toBe("already_invited");
+  });
+});
+
+describe("getInvite", () => {
+  it("reads invite state without credentials", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        status: "pending",
+        invitation: {
+          email: "alice@example.com",
+          role: "developer",
+          expires_at: "2026-06-25T00:00:00.000Z",
+        },
+      }),
+    });
+
+    const result = await getInvite({ endpoint: "https://example.com" }, "inv_token", mockFetch);
+
+    expect(result.status).toBe("pending");
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/invite/inv_token", {
+      method: "GET",
+    });
+  });
+});
+
+describe("acceptInvite", () => {
+  it("accepts an invite with browser credentials", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        status: "accepted",
+        membership: { role: "developer", status: "active" },
+      }),
+    });
+
+    const result = await acceptInvite({ endpoint: "https://example.com" }, "inv_token", mockFetch);
+
+    expect(result.status).toBe("accepted");
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/invite/inv_token/accept", {
+      method: "POST",
+      credentials: "include",
+    });
+  });
+});
+
+describe("revokeInvitation", () => {
+  it("revokes a pending invite with browser credentials", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: "revoked" }),
+    });
+
+    const result = await revokeInvitation({ endpoint: "https://example.com" }, "inv_123", mockFetch);
+
+    expect(result.status).toBe("revoked");
+    expect(mockFetch).toHaveBeenCalledWith("https://example.com/invitations/inv_123/revoke", {
+      method: "POST",
+      credentials: "include",
+    });
   });
 });

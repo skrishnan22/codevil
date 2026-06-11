@@ -2626,6 +2626,57 @@ button.current-activity:hover { background: var(--surface-3); }
   color: var(--fg-3);
 }
 
+.home-auth-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.home-auth-status > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.home-auth-status strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+.home-auth-status span span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-4);
+  font-size: 12px;
+}
+.home-auth-status button {
+  flex: 0 0 auto;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--fg-3);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.home-auth-status button:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--fg-4);
+}
+.home-auth-status button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* launcher card */
 .home-launcher {
   display: flex;
@@ -2757,6 +2808,93 @@ button.current-activity:hover { background: var(--surface-3); }
 .home-launcher-create:hover:not(:disabled) { background: var(--accent); }
 .home-launcher-create:active:not(:disabled) { transform: translateY(1px); }
 .home-launcher-create:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* team invites */
+.home-team {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.home-team-invite {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px auto;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  background: var(--surface);
+  overflow: hidden;
+}
+.home-team-invite .home-launcher-create {
+  align-self: center;
+  margin: 0 14px;
+}
+.home-team-link {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  padding: 10px 12px;
+}
+.home-team-link input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.home-team-note {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: 13px;
+}
+.home-team-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+.home-team-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.home-team-row + .home-team-row { border-top: 1px solid var(--line); }
+.home-team-row > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.home-team-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+.home-team-row span span {
+  color: var(--fg-4);
+  font-size: 12px;
+}
+.home-team-row button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--fg-3);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.home-team-row button:hover { color: var(--err); border-color: var(--err); }
 
 /* recent sessions */
 .home-sessions { display: flex; flex-direction: column; gap: 14px; }
@@ -2949,6 +3087,9 @@ button.current-activity:hover { background: var(--surface-3); }
   .home-hero-title { font-size: 32px; }
   .home-launcher-models { grid-template-columns: 1fr; }
   .home-launcher-field + .home-launcher-field { border-left: 0; border-top: 1px solid var(--line); }
+  .home-team-invite { grid-template-columns: 1fr; }
+  .home-team-invite .home-launcher-field + .home-launcher-field { border-left: 0; border-top: 1px solid var(--line); }
+  .home-team-invite .home-launcher-create { margin: 14px 20px; }
   .home-session-card { grid-template-columns: 32px minmax(0, 1fr); }
   .home-session-card-meta { grid-column: 1 / -1; flex-direction: row; justify-content: space-between; align-items: center; }
 }

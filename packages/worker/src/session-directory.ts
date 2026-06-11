@@ -39,6 +39,7 @@ export interface SessionDirectoryRow {
   active_run_state?: AgentRunState | null;
   created_by_id?: string | null;
   created_by_name?: string | null;
+  created_by_email?: string | null;
   created_at: string;
   updated_at: string;
   last_event_at: string;
@@ -109,10 +110,11 @@ export function sessionDirectoryInsert(row: SessionDirectoryRow): SqlStatement {
       active_run_state,
       created_by_id,
       created_by_name,
+      created_by_email,
       created_at,
       updated_at,
       last_event_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     bindings: [
       row.id,
       row.repo,
@@ -129,6 +131,7 @@ export function sessionDirectoryInsert(row: SessionDirectoryRow): SqlStatement {
       row.active_run_state ?? null,
       row.created_by_id ?? null,
       row.created_by_name ?? null,
+      row.created_by_email ?? null,
       row.created_at,
       row.updated_at,
       row.last_event_at,

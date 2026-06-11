@@ -182,6 +182,16 @@ export {
 } from "./preview.js";
 
 export type {
+  AuthRole,
+  AuthAction,
+} from "./auth.js";
+export {
+  AuthRoleSchema,
+  AuthActionSchema,
+  can,
+} from "./auth.js";
+
+export type {
   Config,
   ConfigDefaults,
 } from "./config.js";

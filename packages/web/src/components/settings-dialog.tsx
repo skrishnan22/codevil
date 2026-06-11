@@ -12,28 +12,19 @@ interface SettingsDialogProps {
 
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [endpoint, setEndpoint] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [displayName, setDisplayName] = useState("");
 
   useEffect(() => {
     if (open) {
       const config = loadConfig();
       if (config) {
         setEndpoint(config.endpoint);
-        setApiKey(config.apiKey);
-        setDisplayName(config.displayName ?? "");
       }
     }
   }, [open]);
 
   function handleSave() {
-    const existing = loadConfig();
-    const trimmedName = displayName.trim();
     saveConfig({
       endpoint: endpoint.trim(),
-      apiKey: apiKey.trim(),
-      participantId: existing?.participantId,
-      ...(trimmedName ? { displayName: trimmedName } : {}),
     });
     onOpenChange(false);
   }
@@ -54,28 +45,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               onChange={(e) => setEndpoint(e.target.value)}
             />
           </div>
-          <div className="grid gap-2">
-            <Label htmlFor="apiKey">API Key</Label>
-            <Input
-              id="apiKey"
-              type="password"
-              placeholder="cdv_..."
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="displayName">Display name</Label>
-            <Input
-              id="displayName"
-              placeholder="Your name (shown to teammates)"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-            />
-          </div>
         </div>
         <DialogFooter>
-          <Button onClick={handleSave} disabled={!endpoint.trim() || !apiKey.trim()}>
+          <Button onClick={handleSave} disabled={!endpoint.trim()}>
             Save
           </Button>
         </DialogFooter>

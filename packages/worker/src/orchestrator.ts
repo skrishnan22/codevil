@@ -45,6 +45,13 @@ import {
   finishActiveAgentRun,
   type AgentRun,
 } from "./agent-runs.js";
+import { activeMembershipByUserSelect, type MembershipRow } from "./memberships.js";
+import {
+  authorizeSocketMessage,
+  socketAuthFromAttachment,
+  socketAuthFromRequest,
+  type SocketAuthContext,
+} from "./ws-authorization.js";
 
 interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
@@ -220,7 +227,8 @@ export class Orchestrator extends DurableObject<Env> {
     const [client, server] = Object.values(pair);
 
     this.ctx.acceptWebSocket(server, ["cli"]);
-    server.serializeAttachment({ participant });
+    const auth = socketAuthFromRequest(request);
+    server.serializeAttachment({ participant, auth });
     this.replayEvents(server, cursor);
     this.appendAndBroadcast({ type: "participant_joined", participant });
 
@@ -267,6 +275,15 @@ export class Orchestrator extends DurableObject<Env> {
 
     const participant = this.participantFromSocket(ws);
     const actor = participant.name;
+    const authz = await authorizeSocketMessage({
+      auth: this.authFromSocket(ws),
+      message: msg,
+      loadMembership: (userId) => this.loadActiveMembership(userId),
+    });
+    if (!authz.ok) {
+      ws.send(JSON.stringify({ type: "error", message: authz.message }));
+      return;
+    }
 
     switch (msg.type) {
       case "human_message":
@@ -415,6 +432,15 @@ export class Orchestrator extends DurableObject<Env> {
       id: sanitizeParticipantId(attachment?.participant?.id),
       name: sanitizeDisplayName(attachment?.participant?.name),
     };
+  }
+
+  private authFromSocket(ws: WebSocket): SocketAuthContext | null {
+    return socketAuthFromAttachment(ws.deserializeAttachment() as { auth?: Partial<SocketAuthContext> } | null);
+  }
+
+  private async loadActiveMembership(userId: string): Promise<MembershipRow | null> {
+    const select = activeMembershipByUserSelect(userId);
+    return await this.workerEnv.DB.prepare(select.sql).bind(...select.bindings).first<MembershipRow>();
   }
 
   private handleApprove(actor: string, runId?: string): void {

@@ -1,7 +1,20 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect, useMemo } from "react";
 import { loadConfig } from "@/lib/config";
-import { createSession, listSessions } from "@/lib/api-client";
+import {
+  claimSetup,
+  createInvitation,
+  createSession,
+  getAuthMe,
+  listInvitations,
+  listSessions,
+  revokeInvitation,
+  signInWithGoogle,
+  signOut,
+  type AuthMeResponse,
+  type InvitationRole,
+  type InvitationSummary,
+} from "@/lib/api-client";
 import { DEFAULT_CONFIG } from "@codevil/shared";
 import type { SessionSummary } from "@/types";
 import {
@@ -57,6 +70,10 @@ function saveModelPrefs(prefs: ModelPrefs): void {
   localStorage.setItem(MODEL_PREFS_KEY, JSON.stringify(prefs));
 }
 
+function canManageInvites(auth: AuthMeResponse): boolean {
+  return auth.membership?.role === "owner" || auth.membership?.role === "admin";
+}
+
 type SessionStatus = "running" | "review" | "done" | "failed" | "idle";
 
 const STATUS_LABEL: Record<SessionStatus, string> = {
@@ -91,6 +108,7 @@ function deriveStatus(session: SessionSummary): SessionStatus {
 
 const FILTERS = ["all", "running", "review", "done"] as const;
 type Filter = (typeof FILTERS)[number];
+const INVITE_ROLES: InvitationRole[] = ["admin", "developer", "viewer"];
 
 const FILTER_LABEL: Record<Filter, string> = {
   all: "All",
@@ -130,14 +148,50 @@ function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
+  const [authState, setAuthState] = useState<AuthMeResponse | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const [setupToken, setSetupToken] = useState("");
+  const [setupSubmitting, setSetupSubmitting] = useState(false);
+  const [invitations, setInvitations] = useState<InvitationSummary[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<InvitationRole>("developer");
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const prefs = loadModelPrefs();
     setProvider(prefs.provider);
     setPlanModel(prefs.planModel);
     setExecModel(prefs.execModel);
-    void refreshSessions();
+    void refreshHome();
   }, []);
+
+  async function refreshHome() {
+    const config = loadConfig();
+    if (!config) {
+      setAuthLoading(false);
+      return;
+    }
+
+    try {
+      const auth = await getAuthMe(config);
+      setAuthState(auth);
+      if (auth.authenticated && auth.membership?.status === "active") {
+        await refreshSessions();
+        if (canManageInvites(auth)) {
+          await refreshInvitations();
+        }
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAuthLoading(false);
+    }
+  }
 
   async function refreshSessions() {
     const config = loadConfig();
@@ -147,6 +201,17 @@ function HomePage() {
       setSessions(result.sessions);
     } catch {
       /* The create form already surfaces config/API errors. */
+    }
+  }
+
+  async function refreshInvitations() {
+    const config = loadConfig();
+    if (!config) return;
+    try {
+      const result = await listInvitations(config);
+      setInvitations(result.invitations);
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -174,6 +239,121 @@ function HomePage() {
     }
   }
 
+  async function handleGoogleSignIn() {
+    const config = loadConfig();
+    if (!config) {
+      setAuthError("Configure your backend URL in Settings first.");
+      return;
+    }
+
+    setAuthError(null);
+    try {
+      const result = await signInWithGoogle(config, window.location.href);
+      window.location.assign(result.url);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleSetupClaim(e: React.FormEvent) {
+    e.preventDefault();
+    const config = loadConfig();
+    if (!config) {
+      setAuthError("Configure your backend URL in Settings first.");
+      return;
+    }
+
+    setSetupSubmitting(true);
+    setAuthError(null);
+    try {
+      const auth = await claimSetup(config, setupToken.trim());
+      setAuthState(auth);
+      setSetupToken("");
+      if (auth.membership?.status === "active") {
+        await refreshSessions();
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSetupSubmitting(false);
+    }
+  }
+
+  async function handleSignOut() {
+    const config = loadConfig();
+    if (!config) return;
+
+    setSigningOut(true);
+    setAuthError(null);
+    try {
+      await signOut(config);
+      const auth = await getAuthMe(config);
+      setAuthState(auth);
+      setSessions([]);
+      setInvitations([]);
+      setLastInviteUrl(null);
+      setInviteMessage(null);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
+  async function handleCreateInvite(e: React.FormEvent) {
+    e.preventDefault();
+    const config = loadConfig();
+    if (!config) {
+      setInviteError("Configure your backend URL in Settings first.");
+      return;
+    }
+
+    setInviteLoading(true);
+    setInviteError(null);
+    setInviteMessage(null);
+    setLastInviteUrl(null);
+    try {
+      const result = await createInvitation(config, { email: inviteEmail.trim(), role: inviteRole });
+      if (result.status === "created") {
+        setInviteEmail("");
+        setLastInviteUrl(result.invite_url ?? null);
+        if (result.email_delivery?.status === "sent") {
+          setInviteMessage("Invite email sent.");
+        } else if (result.email_delivery?.status === "failed") {
+          setInviteMessage(`Invite created, but email failed: ${result.email_delivery.error}`);
+        } else {
+          setInviteMessage("Invite created. Email is not configured, copy the link below.");
+        }
+        await refreshInvitations();
+      } else if (result.status === "already_invited") {
+        setInviteMessage("That email already has a pending invite.");
+      } else if (result.status === "already_member") {
+        setInviteMessage("That email already belongs to a team member.");
+      } else {
+        setInviteMessage("That member is disabled and cannot be invited.");
+      }
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInviteLoading(false);
+    }
+  }
+
+  async function handleRevokeInvite(invitationId: string) {
+    const config = loadConfig();
+    if (!config) return;
+
+    setInviteError(null);
+    setInviteMessage(null);
+    try {
+      await revokeInvitation(config, invitationId);
+      setInviteMessage("Invite revoked.");
+      await refreshInvitations();
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   const canCreate =
     !loading &&
     Boolean(repo.trim() && provider.trim() && planModel.trim() && execModel.trim());
@@ -195,6 +375,97 @@ function HomePage() {
     [sessions, filter],
   );
 
+  const inviteRoleOptions = authState?.membership?.role === "owner"
+    ? (["owner", ...INVITE_ROLES] as InvitationRole[])
+    : INVITE_ROLES;
+
+  if (authLoading) {
+    return (
+      <main className="home-page">
+        <div className="home-page-inner">
+          <section className="home-hero">
+            <div className="home-eyebrow">Codevil</div>
+            <h1 className="home-hero-title">Loading</h1>
+          </section>
+        </div>
+      </main>
+    );
+  }
+
+  if (!loadConfig()) {
+    return (
+      <SetupGate
+        title="Connect Codevil"
+        copy="Configure your backend URL in Settings before continuing."
+        error={authError}
+      />
+    );
+  }
+
+  if (!authState?.authConfigured) {
+    return (
+      <SetupGate
+        title="Auth is not configured"
+        copy="Set Better Auth and Google OAuth environment variables on the Worker, then reload."
+        error={authError}
+      />
+    );
+  }
+
+  if (!authState.authenticated) {
+    return (
+      <SetupGate
+        title={authState.setupRequired ? "Set up this Codevil instance" : "Sign in to Codevil"}
+        copy="Continue with Google to authenticate with this self-hosted team."
+        actionLabel="Continue with Google"
+        onAction={handleGoogleSignIn}
+        error={authError}
+      />
+    );
+  }
+
+  if (authState.setupRequired && !authState.membership) {
+    return (
+      <SetupGate
+        title="Claim this Codevil instance"
+        copy={`Signed in as ${authState.user?.email ?? "authenticated user"}. Enter the setup token configured on the Worker.`}
+        error={authError}
+      >
+        <AuthStatus auth={authState} onSignOut={handleSignOut} signingOut={signingOut} />
+        <form className="home-launcher" onSubmit={handleSetupClaim}>
+          <label className="home-launcher-field">
+            <span>Setup token</span>
+            <input
+              type="password"
+              value={setupToken}
+              onChange={(e) => setSetupToken(e.target.value)}
+              required
+            />
+          </label>
+          <div className="home-launcher-foot">
+            <span className="home-launcher-hint">{authState.user?.email}</span>
+            <button type="submit" className="home-launcher-create" disabled={!setupToken.trim() || setupSubmitting}>
+              {setupSubmitting ? "Claiming…" : "Create owner account"}
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
+        </form>
+      </SetupGate>
+    );
+  }
+
+  if (!authState.membership) {
+    return (
+      <SetupGate
+        title="Access required"
+        copy="Ask an owner or admin for an invite to this Codevil instance."
+        error={authError}
+      >
+        <AuthStatus auth={authState} onSignOut={handleSignOut} signingOut={signingOut} />
+      </SetupGate>
+    );
+  }
+
   return (
     <main className="home-page">
       <div className="home-page-inner">
@@ -205,6 +476,7 @@ function HomePage() {
             Point Codevil at a repo, pick your models, and bring your team into a shared room with the agent.
           </p>
         </section>
+        <AuthStatus auth={authState} onSignOut={handleSignOut} signingOut={signingOut} />
 
         <form className="home-launcher" onSubmit={handleSubmit}>
           <div className="home-launcher-repo">
@@ -274,6 +546,59 @@ function HomePage() {
           </div>
         </form>
 
+        {authState && canManageInvites(authState) && (
+          <section className="home-team" aria-labelledby="team-invites-title">
+            <div className="home-sessions-head">
+              <h2 id="team-invites-title">Team invites</h2>
+            </div>
+            <form className="home-team-invite" onSubmit={handleCreateInvite}>
+              <label className="home-launcher-field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder="alice@example.com"
+                  required
+                />
+              </label>
+              <label className="home-launcher-field">
+                <span>Role</span>
+                <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value as InvitationRole)}>
+                  {inviteRoleOptions.map((role) => (
+                    <option key={role} value={role}>{role}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="submit" className="home-launcher-create" disabled={!inviteEmail.trim() || inviteLoading}>
+                {inviteLoading ? "Inviting…" : "Invite"}
+              </button>
+            </form>
+            {lastInviteUrl && (
+              <div className="home-team-link">
+                <input value={lastInviteUrl} readOnly onFocus={(e) => e.currentTarget.select()} />
+              </div>
+            )}
+            {inviteMessage && <p className="home-team-note">{inviteMessage}</p>}
+            {inviteError && <p className="home-error">{inviteError}</p>}
+            {invitations.length > 0 && (
+              <div className="home-team-list">
+                {invitations.map((invitation) => (
+                  <div key={invitation.id} className="home-team-row">
+                    <span>
+                      <strong>{invitation.email}</strong>
+                      <span>{invitation.role}</span>
+                    </span>
+                    <button type="button" onClick={() => void handleRevokeInvite(invitation.id)}>
+                      Revoke
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
         <section className="home-sessions" aria-labelledby="recent-sessions-title">
           <div className="home-sessions-head">
             <h2 id="recent-sessions-title">Recent sessions</h2>
@@ -324,6 +649,62 @@ function HomePage() {
         </section>
       </div>
     </main>
+  );
+}
+
+interface SetupGateProps {
+  title: string;
+  copy: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  error?: string | null;
+  children?: React.ReactNode;
+}
+
+function SetupGate({ title, copy, actionLabel, onAction, error, children }: SetupGateProps) {
+  return (
+    <main className="home-page">
+      <div className="home-page-inner">
+        <section className="home-hero">
+          <div className="home-eyebrow">Codevil auth</div>
+          <h1 className="home-hero-title">{title}</h1>
+          <p className="home-hero-sub">{copy}</p>
+        </section>
+        {children}
+        {actionLabel && onAction && (
+          <div className="home-launcher-foot">
+            <span className="home-launcher-hint">Google OAuth</span>
+            <button type="button" className="home-launcher-create" onClick={onAction}>
+              {actionLabel}
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
+        )}
+        {error && <p className="home-error">{error}</p>}
+      </div>
+    </main>
+  );
+}
+
+interface AuthStatusProps {
+  auth: AuthMeResponse;
+  signingOut: boolean;
+  onSignOut: () => void;
+}
+
+function AuthStatus({ auth, signingOut, onSignOut }: AuthStatusProps) {
+  if (!auth.user) return null;
+
+  return (
+    <div className="home-auth-status">
+      <span>
+        <strong>{auth.user.name || auth.user.email}</strong>
+        <span>{auth.user.email}</span>
+      </span>
+      <button type="button" onClick={onSignOut} disabled={signingOut}>
+        {signingOut ? "Signing out..." : "Sign out"}
+      </button>
+    </div>
   );
 }
 

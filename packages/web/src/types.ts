@@ -71,10 +71,6 @@ export interface ActivityEntry {
 
 export interface SessionConfig {
   endpoint: string;
-  apiKey: string;
-  participantId?: string;
-  // Optional self-declared display name for multiplayer attribution.
-  displayName?: string;
 }
 
 export interface NewSessionParams {

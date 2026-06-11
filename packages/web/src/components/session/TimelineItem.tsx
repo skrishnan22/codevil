@@ -1,6 +1,5 @@
 import type { ChatMessage } from "@/types";
 import type { CSSProperties } from "react";
-import { loadConfig } from "@/lib/config";
 import { MilestoneCard, type MilestoneData } from "./MilestoneCard";
 import { AttentionCard, type AttentionData } from "./AttentionCard";
 import { TraceGroup, type TraceGroupData } from "./TraceGroup";
@@ -43,10 +42,6 @@ function getMessageContent(msg: ChatMessage): string {
 
 function isOutgoingMessage(msg: ChatMessage): boolean {
   if (msg.role !== "user") return false;
-  const config = loadConfig();
-  const actorId = msg.meta?.actor_id;
-  if (actorId && config?.participantId) return actorId === config.participantId;
-  if (msg.actor && config?.displayName) return msg.actor === config.displayName;
   return !msg.actor || msg.actor === "You";
 }
 

@@ -41,6 +41,13 @@ test("renders complete event with PR URL", () => {
   ]);
 });
 
+test("renders newer non-CLI events as no output", () => {
+  assert.deepEqual(renderEvent({
+    type: "participant_joined",
+    participant: { id: "usr_123", name: "Alice" },
+  }), []);
+});
+
 test("rejects malformed envelopes", () => {
   assert.throws(
     () => parseEnvelope(JSON.stringify({ cursor: "7", event: { type: "status", message: "x" } })),

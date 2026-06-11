@@ -6,41 +6,25 @@ afterEach(() => {
 });
 
 describe("buildWebSocketUrl", () => {
-  it("adds token and cursor params", () => {
-    const url = buildWebSocketUrl("wss://example.com/sessions/ses_1/ws", "key123", 0);
-    expect(url).toBe("wss://example.com/sessions/ses_1/ws?token=key123&cursor=0");
+  it("adds the replay cursor param", () => {
+    const url = buildWebSocketUrl("wss://example.com/sessions/ses_1/ws", 0);
+    expect(url).toBe("wss://example.com/sessions/ses_1/ws?cursor=0");
   });
 
   it("converts https to wss", () => {
-    const url = buildWebSocketUrl("https://example.com/sessions/ses_1/ws", "key", 5);
-    expect(url).toBe("wss://example.com/sessions/ses_1/ws?token=key&cursor=5");
+    const url = buildWebSocketUrl("https://example.com/sessions/ses_1/ws", 5);
+    expect(url).toBe("wss://example.com/sessions/ses_1/ws?cursor=5");
   });
 
   it("converts http to ws", () => {
-    const url = buildWebSocketUrl("http://localhost:8787/sessions/ses_1/ws", "key", 0);
-    expect(url).toBe("ws://localhost:8787/sessions/ses_1/ws?token=key&cursor=0");
+    const url = buildWebSocketUrl("http://localhost:8787/sessions/ses_1/ws", 0);
+    expect(url).toBe("ws://localhost:8787/sessions/ses_1/ws?cursor=0");
   });
 
-  it("appends an encoded name param when a display name is given", () => {
-    const url = buildWebSocketUrl("wss://example.com/sessions/ses_1/ws", "key", 0, "Alice Smith", "usr_123");
-    expect(url).toBe("wss://example.com/sessions/ses_1/ws?token=key&cursor=0&participant_id=usr_123&name=Alice+Smith");
-  });
+  it("does not include self-declared browser identity params", () => {
+    const url = buildWebSocketUrl("wss://example.com/sessions/ses_1/ws?name=Eve&participant_id=usr_eve&token=bad", 0);
 
-  it("appends participant_id without a name", () => {
-    const url = buildWebSocketUrl("wss://example.com/sessions/ses_1/ws", "key", 0, "", "usr_123");
-    expect(url).toBe("wss://example.com/sessions/ses_1/ws?token=key&cursor=0&participant_id=usr_123");
-  });
-
-  it("omits the name param when the display name is empty or whitespace", () => {
-    expect(buildWebSocketUrl("wss://example.com/sessions/ses_1/ws", "key", 0, "")).toBe(
-      "wss://example.com/sessions/ses_1/ws?token=key&cursor=0",
-    );
-    expect(buildWebSocketUrl("wss://example.com/sessions/ses_1/ws", "key", 0, "   ")).toBe(
-      "wss://example.com/sessions/ses_1/ws?token=key&cursor=0",
-    );
-    expect(buildWebSocketUrl("wss://example.com/sessions/ses_1/ws", "key", 0)).toBe(
-      "wss://example.com/sessions/ses_1/ws?token=key&cursor=0",
-    );
+    expect(url).toBe("wss://example.com/sessions/ses_1/ws?cursor=0");
   });
 });
 
@@ -79,7 +63,6 @@ describe("connectWebSocket", () => {
     try {
       const client = connectWebSocket({
         wsUrl: "wss://example.com/sessions/ses_1/ws",
-        apiKey: "key",
         onEvent() {},
       });
       client.send({ type: "human_message", text: "hello" });
@@ -115,7 +98,6 @@ describe("connectWebSocket", () => {
     try {
       connectWebSocket({
         wsUrl: "wss://example.com/sessions/ses_1/ws",
-        apiKey: "key",
         onEvent() {},
         onReconnecting: reconnecting,
       });

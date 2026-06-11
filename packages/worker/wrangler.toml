@@ -1,10 +1,15 @@
 name = "codevil"
 main = "src/index.ts"
 compatibility_date = "2026-04-07"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [vars]
 CODEVIL_PREVIEW_ORIGIN = "https://lexmora.app"
+BETTER_AUTH_URL = "https://codevil.krisdev655.workers.dev"
+GOOGLE_CLIENT_ID = "192983306539-a9ottub58vev5a53596qfpqhm62skn7d.apps.googleusercontent.com"
+CODEVIL_WEB_ORIGIN = "https://codevil-ui.pages.dev,http://localhost:5173"
+EMAIL_PROVIDER = "none"
 
 [[routes]]
 pattern = "*.lexmora.app/*"

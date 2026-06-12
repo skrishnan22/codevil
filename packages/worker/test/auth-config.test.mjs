@@ -63,3 +63,30 @@ test("buildAuthOptions trusts configured web origins", () => {
 
   assert.deepEqual(options.trustedOrigins, ["https://app.example.com"]);
 });
+
+test("buildAuthOptions uses cross-site cookies for split-domain HTTPS UI", () => {
+  const options = buildAuthOptions({
+    ...baseEnv,
+    BETTER_AUTH_URL: "https://codevil.krisdev655.workers.dev",
+    CODEVIL_WEB_ORIGIN: "https://codevil-ui.pages.dev",
+  });
+
+  assert.deepEqual(options.advanced?.defaultCookieAttributes, {
+    sameSite: "none",
+    secure: true,
+  });
+});
+
+test("buildAuthOptions keeps default cookie attributes for same-site or local HTTP UI", () => {
+  assert.equal(buildAuthOptions({
+    ...baseEnv,
+    BETTER_AUTH_URL: "https://api.example.com",
+    CODEVIL_WEB_ORIGIN: "https://app.example.com",
+  }).advanced, undefined);
+
+  assert.equal(buildAuthOptions({
+    ...baseEnv,
+    BETTER_AUTH_URL: "http://localhost:8787",
+    CODEVIL_WEB_ORIGIN: "http://localhost:5173",
+  }).advanced, undefined);
+});

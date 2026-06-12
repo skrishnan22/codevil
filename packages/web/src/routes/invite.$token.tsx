@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
   acceptInvite,
@@ -10,6 +10,7 @@ import {
   type GetInviteResponse,
 } from "@/lib/api-client";
 import { loadConfig } from "@/lib/config";
+import { shouldAutoAcceptInvite } from "@/lib/invite-flow";
 
 export const Route = createFileRoute("/invite/$token")({
   component: InvitePage,
@@ -21,13 +22,43 @@ function InvitePage() {
   const [auth, setAuth] = useState<AuthMeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [accepting, setAccepting] = useState(false);
+  const [autoAcceptAttempted, setAutoAcceptAttempted] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const acceptCurrentInvite = useCallback(async () => {
+    const config = loadConfig();
+    if (!config) return;
+
+    setAccepting(true);
+    setError(null);
+    try {
+      await acceptInvite(config, token);
+      setMessage("Invite accepted.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAccepting(false);
+    }
+  }, [token]);
 
   useEffect(() => {
     void loadInvite();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (!shouldAutoAcceptInvite({
+      invite,
+      auth,
+      accepting,
+      accepted: message === "Invite accepted.",
+      autoAcceptAttempted,
+    })) return;
+
+    setAutoAcceptAttempted(true);
+    void acceptCurrentInvite();
+  }, [acceptCurrentInvite, accepting, auth, autoAcceptAttempted, invite, message]);
 
   async function loadInvite() {
     const config = loadConfig();
@@ -67,19 +98,8 @@ function InvitePage() {
   }
 
   async function handleAccept() {
-    const config = loadConfig();
-    if (!config) return;
-
-    setAccepting(true);
-    setError(null);
-    try {
-      await acceptInvite(config, token);
-      setMessage("Invite accepted.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setAccepting(false);
-    }
+    setAutoAcceptAttempted(true);
+    await acceptCurrentInvite();
   }
 
   if (loading) {

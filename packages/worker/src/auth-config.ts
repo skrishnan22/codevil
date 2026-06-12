@@ -24,6 +24,12 @@ export interface CodevilAuthOptions {
     expiresIn: number;
     updateAge: number;
   };
+  advanced?: {
+    defaultCookieAttributes?: {
+      sameSite: "none";
+      secure: true;
+    };
+  };
   trustedOrigins?: string[];
 }
 
@@ -56,11 +62,15 @@ export function buildAuthOptions(env: AuthConfigEnv): CodevilAuthOptions {
     throw new Error(`Missing auth config: ${missing.join(", ")}`);
   }
 
+  const baseURL = env.BETTER_AUTH_URL!.replace(/\/$/, "");
   const trustedOrigins = configuredWebOrigins(env);
+  const crossSiteCookieAttributes = needsCrossSiteCookies(baseURL, trustedOrigins)
+    ? { sameSite: "none" as const, secure: true as const }
+    : null;
 
   return {
     database: env.DB,
-    baseURL: env.BETTER_AUTH_URL!.replace(/\/$/, ""),
+    baseURL,
     secret: env.BETTER_AUTH_SECRET!,
     socialProviders: {
       google: {
@@ -72,6 +82,33 @@ export function buildAuthOptions(env: AuthConfigEnv): CodevilAuthOptions {
       expiresIn: AUTH_SESSION_EXPIRES_IN_SECONDS,
       updateAge: AUTH_SESSION_UPDATE_AGE_SECONDS,
     },
+    ...(crossSiteCookieAttributes
+      ? { advanced: { defaultCookieAttributes: crossSiteCookieAttributes } }
+      : {}),
     ...(trustedOrigins.length > 0 ? { trustedOrigins } : {}),
   };
+}
+
+function needsCrossSiteCookies(baseURL: string, webOrigins: string[]): boolean {
+  const base = parseOrigin(baseURL);
+  if (!base || base.protocol !== "https:") return false;
+
+  return webOrigins.some((origin) => {
+    const web = parseOrigin(origin);
+    return Boolean(web && web.protocol === "https:" && siteKey(web.hostname) !== siteKey(base.hostname));
+  });
+}
+
+function parseOrigin(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function siteKey(hostname: string): string {
+  const parts = hostname.split(".").filter(Boolean);
+  if (parts.length <= 2) return hostname;
+  return parts.slice(-2).join(".");
 }

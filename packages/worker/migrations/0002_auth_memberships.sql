@@ -19,8 +19,6 @@ CREATE TABLE IF NOT EXISTS invitations (
   updated_at TEXT NOT NULL
 );
 
-ALTER TABLE sessions ADD COLUMN created_by_user_id TEXT;
-ALTER TABLE sessions ADD COLUMN created_by_name TEXT;
 ALTER TABLE sessions ADD COLUMN created_by_email TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_memberships_role_status

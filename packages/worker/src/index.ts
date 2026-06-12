@@ -787,11 +787,13 @@ function requestWithAuthenticatedParticipant(request: Request, auth: AuthContext
   url.searchParams.delete("token");
   url.searchParams.delete("auth_user_id");
   url.searchParams.delete("auth_email");
+  url.searchParams.delete("auth_name");
   url.searchParams.delete("auth_role");
   url.searchParams.set("participant_id", auth.userId);
   url.searchParams.set("name", auth.name || auth.email);
   url.searchParams.set("auth_user_id", auth.userId);
   url.searchParams.set("auth_email", auth.email);
+  url.searchParams.set("auth_name", auth.name || auth.email);
   url.searchParams.set("auth_role", auth.role);
   return new Request(url.toString(), request);
 }

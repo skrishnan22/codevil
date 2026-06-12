@@ -25,11 +25,12 @@ test("authActionForClientMessage treats user-driven socket mutations as session 
 });
 
 test("socketAuthFromRequest extracts trusted auth context from worker-internal query params", () => {
-  const request = new Request("https://worker.example.com/sessions/ses_1/ws?auth_user_id=usr_1&auth_email=a%40example.com&auth_role=developer");
+  const request = new Request("https://worker.example.com/sessions/ses_1/ws?auth_user_id=usr_1&auth_email=a%40example.com&auth_name=Alice&auth_role=developer");
 
   assert.deepEqual(socketAuthFromRequest(request), {
     userId: "usr_1",
     email: "a@example.com",
+    name: "Alice",
     role: "developer",
   });
 });

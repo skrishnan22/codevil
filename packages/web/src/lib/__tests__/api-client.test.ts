@@ -267,6 +267,8 @@ describe("signOut", () => {
     expect(mockFetch).toHaveBeenCalledWith("https://example.com/api/auth/sign-out", {
       method: "POST",
       credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
     });
   });
 

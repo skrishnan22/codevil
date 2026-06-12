@@ -7,6 +7,9 @@
   },
   "packageManager": "pnpm@10.28.1",
   "pnpm": {
+    "overrides": {
+      "kysely": "0.28.17"
+    },
     "onlyBuiltDependencies": ["esbuild", "workerd"]
   }
 }

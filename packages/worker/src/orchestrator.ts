@@ -217,17 +217,13 @@ export class Orchestrator extends DurableObject<Env> {
     const cursorParam = url.searchParams.get("cursor");
     const cursor = cursorParam ? parseInt(cursorParam, 10) : 0;
 
-    // Self-declared multiplayer display name, captured once at connect time.
-    const participant: ParticipantIdentity = {
-      id: sanitizeParticipantId(url.searchParams.get("participant_id")),
-      name: sanitizeDisplayName(url.searchParams.get("name")),
-    };
+    const auth = socketAuthFromRequest(request);
+    const participant = this.participantFromRequest(url, auth);
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
     this.ctx.acceptWebSocket(server, ["cli"]);
-    const auth = socketAuthFromRequest(request);
     server.serializeAttachment({ participant, auth });
     this.replayEvents(server, cursor);
     this.appendAndBroadcast({ type: "participant_joined", participant });
@@ -431,6 +427,20 @@ export class Orchestrator extends DurableObject<Env> {
     return {
       id: sanitizeParticipantId(attachment?.participant?.id),
       name: sanitizeDisplayName(attachment?.participant?.name),
+    };
+  }
+
+  private participantFromRequest(url: URL, auth: SocketAuthContext | null): ParticipantIdentity {
+    if (auth) {
+      return {
+        id: sanitizeParticipantId(auth.userId),
+        name: sanitizeDisplayName(auth.name || auth.email),
+      };
+    }
+
+    return {
+      id: sanitizeParticipantId(url.searchParams.get("participant_id")),
+      name: sanitizeDisplayName(url.searchParams.get("name")),
     };
   }
 

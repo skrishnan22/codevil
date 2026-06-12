@@ -10,6 +10,7 @@ import type { MembershipRow } from "./memberships.js";
 export interface SocketAuthContext {
   userId: string;
   email: string;
+  name: string;
   role: AuthRole;
 }
 
@@ -20,6 +21,7 @@ export interface SocketAttachment {
 interface RawSocketAuth {
   userId?: unknown;
   email?: unknown;
+  name?: unknown;
   role?: unknown;
 }
 
@@ -51,6 +53,7 @@ export function socketAuthFromRequest(request: Request): SocketAuthContext | nul
   return normalizeSocketAuth({
     userId: url.searchParams.get("auth_user_id"),
     email: url.searchParams.get("auth_email"),
+    name: url.searchParams.get("auth_name"),
     role: url.searchParams.get("auth_role"),
   });
 }
@@ -92,6 +95,7 @@ function normalizeSocketAuth(value: RawSocketAuth | null | undefined): SocketAut
   return {
     userId: value.userId,
     email: value.email,
+    name: typeof value.name === "string" && value.name.length > 0 ? value.name : value.email,
     role: role.data,
   };
 }

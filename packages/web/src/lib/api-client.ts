@@ -226,6 +226,8 @@ export async function signOut(
   const response = await fetcher(`${endpoint}/api/auth/sign-out`, {
     method: "POST",
     credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
   });
 
   if (!response.ok) {

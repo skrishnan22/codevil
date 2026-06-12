@@ -38,6 +38,15 @@ import {
   PersistedDOToCLIEventSchema,
 } from "../dist/index.js";
 
+// Canonical fixture for the new AnnotationAnchor shape.
+const validAnchor = {
+  startMeta: { parentTagName: "P", parentIndex: 0, textOffset: 10 },
+  endMeta: { parentTagName: "P", parentIndex: 0, textOffset: 46 },
+  text: "Use a read-only Pi consolidation turn",
+  blockId: "block-001",
+  sourceLine: 5,
+};
+
 test("StatusEventSchema preserves an optional actor field", () => {
   const parsed = StatusEventSchema.parse({
     type: "status",
@@ -135,13 +144,7 @@ test("CLIToDOMessageSchema accepts agent requests", () => {
 });
 
 test("CLIToDOMessageSchema accepts collaborative annotation messages", () => {
-  const anchor = {
-    quote: "Use a read-only Pi consolidation turn",
-    prefix: "Resolve conflicts by calling",
-    suffix: "then dispatch a brief.",
-    startOffset: 10,
-    endOffset: 46,
-  };
+  const anchor = validAnchor;
 
   const created = AnnotationCreateMessageSchema.parse({
     type: "annotation_create",
@@ -170,7 +173,7 @@ test("CLIToDOMessageSchema accepts collaborative annotation messages", () => {
     deciding_instruction: "Prefer the read-only consolidation wording.",
   });
 
-  assert.equal(created.anchor.quote, anchor.quote);
+  assert.equal(created.anchor.text, anchor.text);
   assert.equal(replied.comment, "Agreed, and keep the turn no-tools.");
   assert.equal(withdrawn.thread_id, "ann_123");
   assert.equal(selected.selected_thread_id, "ann_123");
@@ -230,13 +233,7 @@ test("agent request and run lifecycle events carry run identity", () => {
 
 test("DOToCLIEventSchema accepts annotation collaboration events", () => {
   const actor = { id: "usr_123", name: "Alice" };
-  const anchor = {
-    quote: "Use a read-only Pi consolidation turn",
-    prefix: "Resolve conflicts by calling",
-    suffix: "then dispatch a brief.",
-    startOffset: 10,
-    endOffset: 46,
-  };
+  const anchor = validAnchor;
   const annotation = {
     id: "ann_123",
     run_id: "run_123",

@@ -3,9 +3,23 @@ import { CostInfoSchema } from "./cost.js";
 import { PreviewAppSchema } from "./preview.js";
 import {
   AnnotationConflictSchema,
-  AnnotationThreadSchema,
   BriefItemSchema,
 } from "./annotations.js";
+
+// Minimal per-thread shape the consolidation sandbox agent receives.
+// Excludes raw anchor internals (startMeta/endMeta/blockId) — only the
+// human-readable fields needed to reason about the annotation are included.
+export const ConsolidationAnnotationSchema = z.object({
+  id: z.string(),
+  anchoredQuote: z.string().min(1),
+  sourceLine: z.number().int().positive(),
+  authorName: z.string(),
+  comment: z.string(),
+  replies: z.array(z.object({
+    authorName: z.string(),
+    body: z.string(),
+  })),
+});
 
 // --- DO → Sandbox messages ---
 
@@ -96,7 +110,7 @@ export const ConsolidateAnnotationsMessageSchema = z.object({
   round: z.number().int().nonnegative(),
   plan_revision_id: z.string(),
   plan: z.string(),
-  annotations: z.array(AnnotationThreadSchema),
+  annotations: z.array(ConsolidationAnnotationSchema),
   conflicts: z.array(AnnotationConflictSchema),
   model: z.string(),
   provider: z.string().optional(),
@@ -127,6 +141,7 @@ export type CredentialResponseMessage = z.infer<typeof CredentialResponseMessage
 export type CreatePRResponseMessage = z.infer<typeof CreatePRResponseMessageSchema>;
 export type PreviewStartSandboxMessage = z.infer<typeof PreviewStartSandboxMessageSchema>;
 export type PreviewStopSandboxMessage = z.infer<typeof PreviewStopSandboxMessageSchema>;
+export type ConsolidationAnnotation = z.infer<typeof ConsolidationAnnotationSchema>;
 export type ConsolidateAnnotationsMessage = z.infer<typeof ConsolidateAnnotationsMessageSchema>;
 export type DOToSandboxMessage = z.infer<typeof DOToSandboxMessageSchema>;
 

@@ -8,7 +8,7 @@ import type {
   CostInfo,
   ParticipantIdentity,
   AgentRunState,
-  TextQuoteAnchor,
+  AnnotationAnchor,
   AnnotationThread,
   AnnotationConflict,
   BriefItem,
@@ -153,7 +153,7 @@ export class Orchestrator extends DurableObject<Env> {
         id TEXT PRIMARY KEY,
         revision_run_id TEXT NOT NULL,
         revision_round INTEGER NOT NULL,
-        anchor_json TEXT NOT NULL,
+        anchor_json TEXT NOT NULL, -- web-highlighter HighlightSource { startMeta, endMeta, text } + { blockId, sourceLine }
         author_id TEXT NOT NULL,
         author_name TEXT NOT NULL,
         comment TEXT NOT NULL,
@@ -622,7 +622,7 @@ export class Orchestrator extends DurableObject<Env> {
   private handleAnnotationCreate(
     runId: string,
     round: number,
-    anchor: TextQuoteAnchor,
+    anchor: AnnotationAnchor,
     comment: string,
     actor: ParticipantIdentity,
   ): void {
@@ -860,7 +860,17 @@ export class Orchestrator extends DurableObject<Env> {
       round,
       plan_revision_id: `${runId}:${round}`,
       plan: revision.markdown,
-      annotations: threads,
+      annotations: threads.map((thread) => ({
+        id: thread.id,
+        anchoredQuote: thread.anchor.text,
+        sourceLine: thread.anchor.sourceLine,
+        authorName: thread.author.name,
+        comment: thread.comment,
+        replies: (thread.replies ?? []).map((reply) => ({
+          authorName: reply.author.name,
+          body: reply.comment,
+        })),
+      })),
       conflicts: [],
       model: this.meta.plan_model,
       provider: this.meta.provider,
@@ -1873,7 +1883,7 @@ export class Orchestrator extends DurableObject<Env> {
         id,
         run_id: runId,
         round,
-        anchor: JSON.parse(row["anchor_json"] as string) as TextQuoteAnchor,
+        anchor: JSON.parse(row["anchor_json"] as string) as AnnotationAnchor,
         author: {
           id: row["author_id"] as string,
           name: row["author_name"] as string,

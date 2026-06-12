@@ -1,12 +1,18 @@
 import { z } from "zod";
 import { ParticipantIdentitySchema } from "./room.js";
 
-export const TextQuoteAnchorSchema = z.object({
-  quote: z.string().min(1),
-  prefix: z.string(),
-  suffix: z.string(),
-  startOffset: z.number().int().nonnegative(),
-  endOffset: z.number().int().nonnegative(),
+export const DomMetaSchema = z.object({
+  parentTagName: z.string().min(1),
+  parentIndex: z.number().int().nonnegative(),
+  textOffset: z.number().int().nonnegative(),
+});
+
+export const AnnotationAnchorSchema = z.object({
+  startMeta: DomMetaSchema,
+  endMeta: DomMetaSchema,
+  text: z.string().min(1),
+  blockId: z.string().min(1),
+  sourceLine: z.number().int().positive(),
 });
 
 export const AnnotationStatusSchema = z.enum(["open", "withdrawn", "consumed"]);
@@ -22,7 +28,7 @@ export const AnnotationThreadSchema = z.object({
   id: z.string(),
   run_id: z.string(),
   round: z.number().int().nonnegative(),
-  anchor: TextQuoteAnchorSchema,
+  anchor: AnnotationAnchorSchema,
   author: ParticipantIdentitySchema,
   comment: z.string().trim().min(1).max(20_000),
   status: AnnotationStatusSchema,
@@ -51,7 +57,8 @@ export const BriefItemSchema = z.object({
   source_thread_ids: z.array(z.string()),
 });
 
-export type TextQuoteAnchor = z.infer<typeof TextQuoteAnchorSchema>;
+export type DomMeta = z.infer<typeof DomMetaSchema>;
+export type AnnotationAnchor = z.infer<typeof AnnotationAnchorSchema>;
 export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
 export type AnnotationReply = z.infer<typeof AnnotationReplySchema>;
 export type AnnotationThread = z.infer<typeof AnnotationThreadSchema>;

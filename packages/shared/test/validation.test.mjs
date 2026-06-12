@@ -8,6 +8,9 @@ import {
   DOToCLIEventSchema,
   PersistedDOToCLIEventSchema,
   PiAgentEventSchema,
+  AnnotationAnchorSchema,
+  AnnotationCreateMessageSchema,
+  AnnotationCreatedEventSchema,
   parseInbound,
   setValidationDropSink,
 } from "../dist/index.js";
@@ -120,19 +123,11 @@ test("DO→Sandbox and Sandbox→DO: consolidation messages parse", () => {
       annotations: [
         {
           id: "ann_1",
-          run_id: "run_1",
-          round: 0,
-          anchor: {
-            quote: "Use a read-only Pi consolidation turn",
-            prefix: "Resolve conflicts by calling",
-            suffix: "then dispatch a brief.",
-            startOffset: 10,
-            endOffset: 46,
-          },
-          author: { id: "usr_1", name: "Alice" },
+          anchoredQuote: "Use a read-only Pi consolidation turn",
+          sourceLine: 5,
+          authorName: "Alice",
           comment: "Mention the sandbox contract.",
-          status: "open",
-          created_at: "2026-06-12T00:00:00.000Z",
+          replies: [],
         },
       ],
       conflicts: [],
@@ -261,4 +256,110 @@ test("Validation drop log captures issues from zod", () => {
   assert.equal(drops[0].kind, "validation_drop");
   assert.ok(Array.isArray(drops[0].issues));
   assert.ok(drops[0].issues.length > 0);
+});
+
+// --- AnnotationAnchorSchema (new web-highlighter shape) ---
+
+const validAnchor = {
+  startMeta: { parentTagName: "P", parentIndex: 0, textOffset: 10 },
+  endMeta: { parentTagName: "P", parentIndex: 0, textOffset: 46 },
+  text: "Use a read-only Pi consolidation turn",
+  blockId: "block-001",
+  sourceLine: 5,
+};
+
+test("AnnotationAnchorSchema: accepts a valid anchor", () => {
+  const result = AnnotationAnchorSchema.parse(validAnchor);
+  assert.equal(result.text, validAnchor.text);
+  assert.equal(result.sourceLine, 5);
+  assert.equal(result.startMeta.parentTagName, "P");
+  assert.equal(result.endMeta.textOffset, 46);
+});
+
+test("AnnotationAnchorSchema: rejects empty text", () => {
+  assert.throws(() => AnnotationAnchorSchema.parse({ ...validAnchor, text: "" }));
+});
+
+test("AnnotationAnchorSchema: rejects sourceLine < 1", () => {
+  assert.throws(() => AnnotationAnchorSchema.parse({ ...validAnchor, sourceLine: 0 }));
+});
+
+test("AnnotationAnchorSchema: rejects negative parentIndex in startMeta", () => {
+  assert.throws(() => AnnotationAnchorSchema.parse({
+    ...validAnchor,
+    startMeta: { ...validAnchor.startMeta, parentIndex: -1 },
+  }));
+});
+
+test("AnnotationAnchorSchema: rejects negative textOffset in endMeta", () => {
+  assert.throws(() => AnnotationAnchorSchema.parse({
+    ...validAnchor,
+    endMeta: { ...validAnchor.endMeta, textOffset: -5 },
+  }));
+});
+
+test("AnnotationAnchorSchema: rejects empty parentTagName", () => {
+  assert.throws(() => AnnotationAnchorSchema.parse({
+    ...validAnchor,
+    startMeta: { ...validAnchor.startMeta, parentTagName: "" },
+  }));
+});
+
+test("AnnotationAnchorSchema: rejects empty blockId", () => {
+  assert.throws(() => AnnotationAnchorSchema.parse({ ...validAnchor, blockId: "" }));
+});
+
+test("AnnotationAnchorSchema: rejects missing startMeta", () => {
+  const { startMeta: _dropped, ...rest } = validAnchor;
+  assert.throws(() => AnnotationAnchorSchema.parse(rest));
+});
+
+test("AnnotationAnchorSchema: rejects missing endMeta", () => {
+  const { endMeta: _dropped, ...rest } = validAnchor;
+  assert.throws(() => AnnotationAnchorSchema.parse(rest));
+});
+
+test("annotation_create message parses with new anchor shape", () => {
+  const result = AnnotationCreateMessageSchema.parse({
+    type: "annotation_create",
+    run_id: "run_1",
+    round: 0,
+    anchor: validAnchor,
+    comment: "This needs a review.",
+  });
+  assert.equal(result.anchor.text, validAnchor.text);
+  assert.equal(result.anchor.sourceLine, 5);
+  assert.equal(result.anchor.blockId, "block-001");
+});
+
+test("annotation_create message rejects old-shape anchor (missing startMeta)", () => {
+  assert.throws(() => AnnotationCreateMessageSchema.parse({
+    type: "annotation_create",
+    run_id: "run_1",
+    round: 0,
+    anchor: {
+      quote: "old shape",
+      prefix: "before",
+      suffix: "after",
+      startOffset: 0,
+      endOffset: 9,
+    },
+    comment: "Should be rejected.",
+  }));
+});
+
+test("annotation_created event parses with new anchor shape", () => {
+  const annotation = {
+    id: "ann_1",
+    run_id: "run_1",
+    round: 0,
+    anchor: validAnchor,
+    author: { id: "usr_1", name: "Alice" },
+    comment: "Looks good.",
+    status: "open",
+    created_at: "2026-06-12T00:00:00.000Z",
+  };
+  const result = AnnotationCreatedEventSchema.parse({ type: "annotation_created", annotation });
+  assert.equal(result.annotation.anchor.text, validAnchor.text);
+  assert.equal(result.annotation.anchor.sourceLine, 5);
 });

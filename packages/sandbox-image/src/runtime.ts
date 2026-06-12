@@ -6,7 +6,7 @@ import type {
   CostInfo,
   DOToSandboxMessage,
   AnnotationConflict,
-  AnnotationThread,
+  ConsolidationAnnotation,
   BriefItem,
   PreviewApp,
   PreviewFramework,
@@ -67,7 +67,7 @@ export interface ConsolidationInput {
   provider: string;
   llmKey?: string;
   plan: string;
-  annotations: AnnotationThread[];
+  annotations: ConsolidationAnnotation[];
   conflicts: AnnotationConflict[];
 }
 
@@ -909,7 +909,7 @@ function addCost(left: CostInfo, right: CostInfo): CostInfo {
   };
 }
 
-function fallbackConsolidation(annotations: AnnotationThread[]): ConsolidationResult {
+function fallbackConsolidation(annotations: ConsolidationAnnotation[]): ConsolidationResult {
   return {
     brief_items: annotations.map((annotation) => ({
       instruction: annotation.comment,

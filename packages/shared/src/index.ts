@@ -20,7 +20,8 @@ export {
 } from "./cost.js";
 
 export type {
-  TextQuoteAnchor,
+  DomMeta,
+  AnnotationAnchor,
   AnnotationStatus,
   AnnotationReply,
   AnnotationThread,
@@ -30,7 +31,8 @@ export type {
   BriefItem,
 } from "./annotations.js";
 export {
-  TextQuoteAnchorSchema,
+  DomMetaSchema,
+  AnnotationAnchorSchema,
   AnnotationStatusSchema,
   AnnotationReplySchema,
   AnnotationThreadSchema,
@@ -163,6 +165,7 @@ export type {
   CreatePRResponseMessage,
   PreviewStartSandboxMessage,
   PreviewStopSandboxMessage,
+  ConsolidationAnnotation,
   ConsolidateAnnotationsMessage,
   DOToSandboxMessage,
   SandboxAgentEvent,
@@ -201,6 +204,7 @@ export {
   CreatePRResponseMessageSchema,
   PreviewStartSandboxMessageSchema,
   PreviewStopSandboxMessageSchema,
+  ConsolidationAnnotationSchema,
   ConsolidateAnnotationsMessageSchema,
   DOToSandboxMessageSchema,
   SandboxAgentEventSchema,

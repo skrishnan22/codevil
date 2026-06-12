@@ -3,11 +3,11 @@ import { CostInfoSchema } from "./cost.js";
 import { PreviewAppSchema } from "./preview.js";
 import { ParticipantIdentitySchema } from "./room.js";
 import {
+  AnnotationAnchorSchema,
   AnnotationConflictSchema,
   AnnotationReplySchema,
   AnnotationThreadSchema,
   BriefItemSchema,
-  TextQuoteAnchorSchema,
 } from "./annotations.js";
 
 // --- DO → CLI events ---
@@ -350,7 +350,7 @@ export const AnnotationCreateMessageSchema = z.object({
   type: z.literal("annotation_create"),
   run_id: z.string(),
   round: z.number().int().nonnegative(),
-  anchor: TextQuoteAnchorSchema,
+  anchor: AnnotationAnchorSchema,
   comment: z.string().trim().min(1).max(20_000),
 });
 

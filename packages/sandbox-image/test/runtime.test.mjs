@@ -151,13 +151,11 @@ test("consolidate_annotations uses a fresh agent and emits structured result", a
     annotations: [
       {
         id: "ann_1",
-        run_id: "run_1",
-        round: 0,
-        anchor: { quote: "Redis", prefix: "Use", suffix: "for storage", startOffset: 4, endOffset: 9 },
-        author: { id: "usr_1", name: "Alice" },
+        anchoredQuote: "Redis",
+        sourceLine: 3,
+        authorName: "Alice",
         comment: "Use D1-backed storage.",
-        status: "open",
-        created_at: "2026-06-12T00:00:00.000Z",
+        replies: [],
       },
     ],
     conflicts: [],

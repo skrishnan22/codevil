@@ -240,6 +240,7 @@ function consolidationPrompt(input: ConsolidationInput): string {
     "Return only valid JSON with keys brief_items and conflicts.",
     "Merge compatible feedback into concise instructions.",
     "If two annotations contradict each other, do not choose. Emit a conflict with options.",
+    "Each annotation has: id, anchoredQuote (the highlighted text), sourceLine (1-based line), authorName, comment, and replies.",
     "",
     "Plan markdown:",
     input.plan,

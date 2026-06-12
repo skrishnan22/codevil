@@ -8,10 +8,19 @@ import { useSessionStore } from "@/stores/session-store";
  * Minimal structural type for the hast node position we need.
  * This avoids a direct `import from 'hast'` which isn't resolvable in
  * this package without adding @types/hast as a devDependency.
+ *
+ * `offset` mirrors the optional field in the unist `Point` spec
+ * (0-indexed character offset from the start of the document).
  */
+interface HastPoint {
+  line: number;
+  column: number;
+  offset?: number | undefined;
+}
+
 interface HastPosition {
-  start: { line: number; column: number };
-  end: { line: number; column: number };
+  start: HastPoint;
+  end: HastPoint;
 }
 
 interface HastNodeWithPosition {
@@ -19,24 +28,29 @@ interface HastNodeWithPosition {
 }
 
 /**
- * Derive a stable, deterministic block identifier from the source line number.
- * The same frozen markdown always produces the same id on every client because
- * the id is derived solely from the source line.
- */
-export function blockIdForLine(line: number): string {
-  return `block-L${line}`;
-}
-
-/**
- * Derive a stable block id from a hast-like node with an optional position.
- * Returns null when position data is absent (generated nodes).
+ * Derive a stable, deterministic block identifier from a hast-like node.
+ *
+ * Strategy (in order of preference):
+ *  1. If the position carries character `offset` values, use
+ *     `block-{start.offset}-{end.offset}`.  This is unique for every
+ *     distinct source span even when two nodes share the same start line
+ *     (e.g. a loose-list `li` and its child `p`).
+ *  2. Otherwise fall back to `block-{sl}:{sc}-{el}:{ec}` using line +
+ *     column, which is still unique per source span.
+ *  3. Returns null when position data is absent (generated / synthetic
+ *     nodes) — callers must handle null gracefully.
+ *
+ * Determinism: the id is derived solely from the frozen source span, so
+ * the same markdown always produces the same ids on every client.
  */
 export function blockIdForNode(node: HastNodeWithPosition): string | null {
   if (!node.position) return null;
-  return blockIdForLine(node.position.start.line);
+  const { start, end } = node.position;
+  if (start.offset !== undefined && end.offset !== undefined) {
+    return `block-${start.offset}-${end.offset}`;
+  }
+  return `block-${start.line}:${start.column}-${end.line}:${end.column}`;
 }
-
-type BlockProps = React.HTMLAttributes<HTMLElement> & ExtraProps;
 
 function makeBlockComponent<T extends keyof React.JSX.IntrinsicElements>(Tag: T) {
   return function BlockComponent(props: React.JSX.IntrinsicElements[T] & ExtraProps) {
@@ -53,9 +67,6 @@ function makeBlockComponent<T extends keyof React.JSX.IntrinsicElements>(Tag: T)
     return <ElementTag {...rest} {...dataAttrs} />;
   };
 }
-
-// Suppress the unused variable warning — BlockProps is used as documentation
-void (undefined as unknown as BlockProps);
 
 const blockComponents = {
   p: makeBlockComponent("p"),

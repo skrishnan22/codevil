@@ -5,6 +5,15 @@ import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
 import { projectEvents } from "../lib/event-mapper";
 
+export interface PlanRevisionState {
+  runId: string;
+  round: number;
+  markdown: string;
+  locked: boolean;
+  createdAt: string | null;
+  revisionId: string | null;
+}
+
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 export type PreviewStatus = "idle" | "starting" | "ready" | "error";
 
@@ -32,6 +41,7 @@ interface SessionStoreState {
   error: string | null;
   planApproved: boolean;
   preview: PreviewState;
+  planRevision: PlanRevisionState | null;
 }
 
 interface SessionStoreActions {
@@ -75,6 +85,7 @@ const initialState: SessionStoreState = {
     reloadRevision: 0,
     outputLines: [],
   },
+  planRevision: null,
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
@@ -133,6 +144,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         error: null,
         planApproved: false,
         preview: initialState.preview,
+        planRevision: null,
       }),
       sessionId,
       wsUrl,
@@ -153,6 +165,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           const planApproved = inferPlanApproved(envelope.event, state.planApproved);
           const preview = reducePreviewState(state.preview, envelope.event);
           const participants = reduceParticipants(state.participants, envelope.event);
+          const planRevision = reducePlanRevision(state.planRevision, envelope.event);
 
           return {
             cursor: envelope.cursor,
@@ -160,6 +173,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             planApproved,
             preview,
             participants,
+            planRevision,
           };
         });
 
@@ -418,6 +432,37 @@ export function reducePreviewState(current: PreviewState, event: DOToCLIEvent): 
     default:
       return current;
   }
+}
+
+export function reducePlanRevision(
+  current: PlanRevisionState | null,
+  event: DOToCLIEvent,
+): PlanRevisionState | null {
+  if (event.type !== "plan_revision_frozen") return current;
+
+  const { run_id, round, markdown, locked, created_at, revision_id } = event;
+
+  if (markdown && markdown.length > 0) {
+    // Full revision with new markdown content
+    return {
+      runId: run_id,
+      round,
+      markdown,
+      locked: locked ?? false,
+      createdAt: created_at ?? null,
+      revisionId: revision_id ?? null,
+    };
+  }
+
+  // Lock-only signal (no markdown) — update locked on existing revision if present
+  if (current !== null) {
+    return {
+      ...current,
+      locked: locked ?? current.locked,
+    };
+  }
+
+  return current;
 }
 
 export function reduceParticipants(

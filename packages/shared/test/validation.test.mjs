@@ -51,6 +51,33 @@ test("CLI→DO: unknown message type is dropped", () => {
   assert.equal(drops[0].raw_type, "garbage");
 });
 
+test("CLI→DO: conflict_resolve requires exactly one resolution field", () => {
+  const drops = captureDrops(() => {
+    const missing = parseInbound(
+      CLIToDOMessageSchema,
+      { type: "conflict_resolve", conflict_id: "conf_1" },
+      "cli_to_do",
+    );
+    const conflicting = parseInbound(
+      CLIToDOMessageSchema,
+      {
+        type: "conflict_resolve",
+        conflict_id: "conf_1",
+        selected_thread_id: "ann_1",
+        deciding_instruction: "Use the read-only consolidation path.",
+      },
+      "cli_to_do",
+    );
+
+    assert.equal(missing, null);
+    assert.equal(conflicting, null);
+  });
+
+  assert.equal(drops.length, 2);
+  assert.equal(drops[0].raw_type, "conflict_resolve");
+  assert.equal(drops[1].raw_type, "conflict_resolve");
+});
+
 test("Sandbox→DO: clone_progress parses", () => {
   const result = parseInbound(
     SandboxToDOMessageSchema,
@@ -79,6 +106,68 @@ test("DO→Sandbox: agent turn parses with optional provider", () => {
     "do_to_sandbox",
   );
   assert.equal(result?.type, "agent_turn");
+});
+
+test("DO→Sandbox and Sandbox→DO: consolidation messages parse", () => {
+  const request = parseInbound(
+    DOToSandboxMessageSchema,
+    {
+      type: "consolidate_annotations",
+      run_id: "run_1",
+      round: 0,
+      plan_revision_id: "rev_1",
+      plan: "## Plan",
+      annotations: [
+        {
+          id: "ann_1",
+          run_id: "run_1",
+          round: 0,
+          anchor: {
+            quote: "Use a read-only Pi consolidation turn",
+            prefix: "Resolve conflicts by calling",
+            suffix: "then dispatch a brief.",
+            startOffset: 10,
+            endOffset: 46,
+          },
+          author: { id: "usr_1", name: "Alice" },
+          comment: "Mention the sandbox contract.",
+          status: "open",
+          created_at: "2026-06-12T00:00:00.000Z",
+        },
+      ],
+      conflicts: [],
+      model: "claude-sonnet-4-6",
+    },
+    "do_to_sandbox",
+  );
+  const complete = parseInbound(
+    SandboxToDOMessageSchema,
+    {
+      type: "consolidation_complete",
+      run_id: "run_1",
+      round: 0,
+      brief_items: [
+        { instruction: "Mention the sandbox contract.", source_thread_ids: ["ann_1"] },
+      ],
+      cost: { input_tokens: 1, output_tokens: 2, total_cost_usd: 0 },
+    },
+    "sandbox_to_do",
+  );
+  const failed = parseInbound(
+    SandboxToDOMessageSchema,
+    {
+      type: "consolidation_failed",
+      run_id: "run_1",
+      round: 0,
+      message: "conflict remains",
+      cost: { input_tokens: 1, output_tokens: 2, total_cost_usd: 0 },
+    },
+    "sandbox_to_do",
+  );
+
+  assert.equal(request?.type, "consolidate_annotations");
+  assert.equal(complete?.type, "consolidation_complete");
+  assert.equal(failed?.type, "consolidation_failed");
 });
 
 test("Sandbox→DO: agent turn completion and PR request parse", () => {

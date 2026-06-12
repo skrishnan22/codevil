@@ -8,6 +8,10 @@ import type {
   CostInfo,
   ParticipantIdentity,
   AgentRunState,
+  TextQuoteAnchor,
+  AnnotationThread,
+  AnnotationConflict,
+  BriefItem,
 } from "@codevil/shared";
 import {
   DEFAULT_CONFIG,
@@ -80,6 +84,7 @@ interface SessionMeta {
   latest_plan?: string;
   active_run?: AgentRun | null;
   queued_runs: AgentRun[];
+  created_by?: ParticipantIdentity;
   preview_token_hash?: string;
   preview_url?: string;
   preview_port?: number;
@@ -99,6 +104,7 @@ export interface InitOptions {
   max_cost?: string;
   max_time?: string;
   max_steps?: number;
+  created_by?: ParticipantIdentity;
 }
 
 // State → phase span name. Phase spans live across multiple WS messages,
@@ -135,6 +141,50 @@ export class Orchestrator extends DurableObject<Env> {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS plan_revisions (
+        run_id TEXT NOT NULL,
+        round INTEGER NOT NULL,
+        markdown TEXT NOT NULL,
+        locked_at TEXT,
+        frozen_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, round)
+      );
+      CREATE TABLE IF NOT EXISTS annotations (
+        id TEXT PRIMARY KEY,
+        revision_run_id TEXT NOT NULL,
+        revision_round INTEGER NOT NULL,
+        anchor_json TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        comment TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS annotation_replies (
+        id TEXT PRIMARY KEY,
+        annotation_id TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        author_name TEXT NOT NULL,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS annotation_conflicts (
+        id TEXT PRIMARY KEY,
+        revision_run_id TEXT NOT NULL,
+        revision_round INTEGER NOT NULL,
+        summary TEXT NOT NULL,
+        options_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS conflict_resolutions (
+        conflict_id TEXT PRIMARY KEY,
+        decider_id TEXT NOT NULL,
+        decider_name TEXT NOT NULL,
+        selected_thread_id TEXT,
+        deciding_instruction TEXT,
+        created_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -156,6 +206,7 @@ export class Orchestrator extends DurableObject<Env> {
       cost_total_usd: 0,
       active_run: null,
       queued_runs: [],
+      created_by: options.created_by,
       created_at: new Date().toISOString(),
     };
     this.saveMeta();
@@ -286,7 +337,19 @@ export class Orchestrator extends DurableObject<Env> {
         this.handleHumanMessage(msg.text, participant);
         break;
       case "agent_request":
-        this.handleAgentRequest(msg.text, participant);
+        this.handleAgentRequest(msg.text, participant, msg.plan_first ?? false);
+        break;
+      case "annotation_create":
+        this.handleAnnotationCreate(msg.run_id, msg.round, msg.anchor, msg.comment, participant);
+        break;
+      case "annotation_reply":
+        this.handleAnnotationReply(msg.thread_id, msg.comment, participant);
+        break;
+      case "annotation_withdraw":
+        this.handleAnnotationWithdraw(msg.thread_id, participant);
+        break;
+      case "conflict_resolve":
+        this.appendAndBroadcast({ type: "error", message: "Conflict resolution is not available yet." });
         break;
       case "approve":
         this.handleApprove(actor);
@@ -332,7 +395,12 @@ export class Orchestrator extends DurableObject<Env> {
 
     if (isSandbox && this.meta) {
       this.revokePreview();
-      if (!this.meta.expected_close && !isTerminalState(this.meta.state) && this.meta.state !== "awaiting_approval") {
+      if (
+        !this.meta.expected_close
+        && !isTerminalState(this.meta.state)
+        && this.meta.state !== "awaiting_approval"
+        && this.meta.state !== "awaiting_resolution"
+      ) {
         this.transition("failed");
         this.appendAndBroadcast({
           type: "error",
@@ -494,7 +562,7 @@ export class Orchestrator extends DurableObject<Env> {
     this.updateDirectory({});
   }
 
-  private handleAgentRequest(text: string, actor: ParticipantIdentity): void {
+  private handleAgentRequest(text: string, actor: ParticipantIdentity, planFirst: boolean): void {
     if (!this.meta) return;
 
     const trimmed = text.trim();
@@ -504,6 +572,7 @@ export class Orchestrator extends DurableObject<Env> {
       actor,
       text: trimmed,
       now: new Date().toISOString(),
+      planFirst,
     });
 
     this.appendAndBroadcast({
@@ -548,6 +617,110 @@ export class Orchestrator extends DurableObject<Env> {
     if (next.started) {
       this.startAgentRun(next.started);
     }
+  }
+
+  private handleAnnotationCreate(
+    runId: string,
+    round: number,
+    anchor: TextQuoteAnchor,
+    comment: string,
+    actor: ParticipantIdentity,
+  ): void {
+    if (!this.ensureAnnotatableRevision(runId, round)) return;
+
+    const now = new Date().toISOString();
+    const annotation: AnnotationThread = {
+      id: `ann_${crypto.randomUUID().replace(/-/g, "")}`,
+      run_id: runId,
+      round,
+      anchor,
+      author: actor,
+      comment: comment.trim(),
+      status: "open",
+      created_at: now,
+    };
+
+    this.sql.exec(
+      `INSERT INTO annotations (
+        id, revision_run_id, revision_round, anchor_json, author_id,
+        author_name, comment, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      annotation.id,
+      runId,
+      round,
+      JSON.stringify(anchor),
+      actor.id,
+      actor.name,
+      annotation.comment,
+      annotation.status,
+      now,
+    );
+
+    this.appendAndBroadcast({ type: "annotation_created", annotation });
+  }
+
+  private handleAnnotationReply(threadId: string, comment: string, actor: ParticipantIdentity): void {
+    const annotation = this.loadAnnotation(threadId);
+    if (!annotation) {
+      this.appendAndBroadcast({ type: "error", message: "Annotation not found." });
+      return;
+    }
+    if (!this.ensureAnnotatableRevision(annotation.revision_run_id, annotation.revision_round)) return;
+    if (annotation.status !== "open") {
+      this.appendAndBroadcast({ type: "error", message: "Cannot reply to a closed annotation." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const reply = {
+      id: `rep_${crypto.randomUUID().replace(/-/g, "")}`,
+      author: actor,
+      comment: comment.trim(),
+      created_at: now,
+    };
+
+    this.sql.exec(
+      `INSERT INTO annotation_replies (
+        id, annotation_id, author_id, author_name, body, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+      reply.id,
+      threadId,
+      actor.id,
+      actor.name,
+      reply.comment,
+      now,
+    );
+
+    this.appendAndBroadcast({ type: "annotation_replied", thread_id: threadId, reply });
+  }
+
+  private handleAnnotationWithdraw(threadId: string, actor: ParticipantIdentity): void {
+    const annotation = this.loadAnnotation(threadId);
+    if (!annotation) {
+      this.appendAndBroadcast({ type: "error", message: "Annotation not found." });
+      return;
+    }
+    if (!this.ensureAnnotatableRevision(annotation.revision_run_id, annotation.revision_round)) return;
+    if (annotation.status !== "open") {
+      this.appendAndBroadcast({ type: "error", message: "Cannot withdraw a closed annotation." });
+      return;
+    }
+    if (annotation.author_id !== actor.id) {
+      this.appendAndBroadcast({ type: "error", message: "Only the annotation author can withdraw it." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    this.sql.exec(
+      "UPDATE annotations SET status = 'withdrawn' WHERE id = ?",
+      threadId,
+    );
+    this.appendAndBroadcast({
+      type: "annotation_withdrawn",
+      thread_id: threadId,
+      withdrawn_by: actor,
+      withdrawn_at: now,
+    });
   }
 
   // Abort is an always-available kill switch, not a plan decision — it is
@@ -638,15 +811,104 @@ export class Orchestrator extends DurableObject<Env> {
       // Record the decision against the round being refined (before the
       // increment) so a same-round rejection can be attributed correctly.
       this.recordDecision({ actor, action: "refine", refinement_round: this.meta.refinement_round });
-      this.meta.refinement_round++;
-      this.saveMeta();
       this.appendAndBroadcast({
         type: "status",
-        message: `Refining plan (round ${this.meta.refinement_round}/${MAX_REFINEMENT_ROUNDS}): ${feedback}`,
+        message: `Refining plan (round ${this.meta.refinement_round + 1}/${MAX_REFINEMENT_ROUNDS}): ${feedback}`,
         actor,
       });
-      this.sendToSandbox({ type: "refine_plan", feedback });
+
+      if (this.meta.active_run?.plan_first) {
+        this.startPlanFirstRefinement(feedback);
+        return;
+      }
+
+      this.dispatchRefinementBrief([{ instruction: feedback, source_thread_ids: [] }]);
     }
+  }
+
+  private startPlanFirstRefinement(feedback: string): void {
+    if (!this.meta?.active_run) return;
+
+    const runId = this.meta.active_run.id;
+    const round = this.meta.refinement_round;
+    const revision = this.loadFullPlanRevision(runId, round);
+    if (!revision) {
+      this.transition("awaiting_approval");
+      this.setActiveRunState("awaiting_approval");
+      this.appendAndBroadcast({ type: "error", message: "Plan revision not found." });
+      return;
+    }
+
+    this.lockPlanRevision(runId, round);
+    const threads = this.loadOpenAnnotationThreads(runId, round);
+    const briefItems = this.directBriefItems(feedback, threads);
+
+    if (threads.length <= 1) {
+      this.dispatchRefinementBrief(briefItems);
+      return;
+    }
+
+    const requestId = `con_${crypto.randomUUID().replace(/-/g, "")}`;
+    this.appendAndBroadcast({
+      type: "consolidation_started",
+      run_id: runId,
+      round,
+    });
+    this.sendToSandbox({
+      type: "consolidate_annotations",
+      run_id: runId,
+      round,
+      plan_revision_id: `${runId}:${round}`,
+      plan: revision.markdown,
+      annotations: threads,
+      conflicts: [],
+      model: this.meta.plan_model,
+      provider: this.meta.provider,
+    });
+    this.getTracer()?.log("INFO", "consolidation.requested", { request_id: requestId, run_id: runId, round });
+  }
+
+  private dispatchRefinementBrief(briefItems: BriefItem[]): void {
+    if (!this.meta?.active_run) return;
+    const fromRound = this.meta.refinement_round;
+    const toRound = fromRound + 1;
+    const feedback = briefItems.map((item) => `- ${item.instruction}`).join("\n");
+
+    this.meta.refinement_round = toRound;
+    this.saveMeta();
+    this.appendAndBroadcast({
+      type: "brief_dispatched",
+      run_id: this.meta.active_run.id,
+      from_round: fromRound,
+      to_round: toRound,
+      brief_items: briefItems,
+    });
+    this.sendToSandbox({
+      type: "refine_plan",
+      feedback: feedback.length > 0 ? `Refinement brief:\n${feedback}` : "Refine the plan.",
+    });
+  }
+
+  private directBriefItems(feedback: string, threads: AnnotationThread[]): BriefItem[] {
+    const items: BriefItem[] = [];
+    const trimmedFeedback = feedback.trim();
+    if (trimmedFeedback.length > 0) {
+      items.push({ instruction: trimmedFeedback, source_thread_ids: [] });
+    }
+
+    for (const thread of threads) {
+      const replies = (thread.replies ?? [])
+        .map((reply) => `${reply.author.name}: ${reply.comment}`)
+        .join(" ");
+      items.push({
+        instruction: replies.length > 0
+          ? `${thread.comment} Replies: ${replies}`
+          : thread.comment,
+        source_thread_ids: [thread.id],
+      });
+    }
+
+    return items.length > 0 ? items : [{ instruction: "Refine the plan.", source_thread_ids: [] }];
   }
 
   private ensureActiveRun(runId?: string): boolean {
@@ -684,6 +946,33 @@ export class Orchestrator extends DurableObject<Env> {
         message: `Cannot start agent run in state: ${this.meta.state}`,
       });
       this.finishRunAndDrainQueue("failed");
+      return;
+    }
+
+    if (run.plan_first) {
+      if (!this.transition("planning")) {
+        this.failActiveRunAndReturnReady(`Cannot start agent run in state: ${this.meta.state}`);
+        return;
+      }
+
+      this.setActiveRunState("thinking");
+      this.appendAndBroadcast({
+        type: "agent_run_started",
+        run_id: run.id,
+        actor: run.actor,
+        text: run.text,
+      });
+      this.appendAndBroadcast({
+        type: "phase",
+        phase: "planning",
+        model: this.meta.plan_model,
+      });
+      this.sendToSandbox({
+        type: "plan",
+        prompt: run.text,
+        model: this.meta.plan_model,
+        provider: this.meta.provider,
+      });
       return;
     }
 
@@ -907,6 +1196,12 @@ export class Orchestrator extends DurableObject<Env> {
       case "execution_complete":
         this.handleSandboxExecutionComplete(parsed.cost);
         return;
+      case "consolidation_complete":
+        this.handleConsolidationComplete(parsed.run_id, parsed.round, parsed.brief_items, parsed.conflicts ?? [], parsed.cost);
+        return;
+      case "consolidation_failed":
+        this.handleConsolidationFailed(parsed.run_id, parsed.round, parsed.message);
+        return;
       case "verification_failed":
         this.handleSandboxVerificationFailed(parsed.attempts, parsed.last_error);
         return;
@@ -982,6 +1277,9 @@ export class Orchestrator extends DurableObject<Env> {
     if (!this.recordCost(cost)) return;
 
     if (this.meta.state === "planning") {
+      if (this.meta.active_run?.plan_first) {
+        this.freezePlanRevision(this.meta.active_run.id, this.meta.refinement_round, plan);
+      }
       if (this.transition("awaiting_approval")) {
         this.setActiveRunState("awaiting_approval");
         this.appendAndBroadcast({
@@ -997,6 +1295,9 @@ export class Orchestrator extends DurableObject<Env> {
     }
 
     if (this.meta.state === "refining") {
+      if (this.meta.active_run?.plan_first) {
+        this.freezePlanRevision(this.meta.active_run.id, this.meta.refinement_round, plan);
+      }
       if (this.transition("awaiting_approval")) {
         this.setActiveRunState("awaiting_approval");
         this.appendAndBroadcast({
@@ -1008,6 +1309,53 @@ export class Orchestrator extends DurableObject<Env> {
         });
         this.appendAndBroadcast({ type: "status", message: "Waiting for user approval." });
       }
+    }
+  }
+
+  private handleConsolidationComplete(
+    runId: string,
+    round: number,
+    briefItems: BriefItem[],
+    conflicts: AnnotationConflict[],
+    cost: CostInfo,
+  ): void {
+    if (!this.meta?.active_run || this.meta.state !== "refining") return;
+    if (this.meta.active_run.id !== runId || this.meta.refinement_round !== round) return;
+    if (!this.recordCost(cost)) return;
+
+    if (conflicts.length > 0) {
+      for (const conflict of conflicts) {
+        this.sql.exec(
+          `INSERT OR REPLACE INTO annotation_conflicts (
+            id, revision_run_id, revision_round, summary, options_json, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          conflict.id,
+          runId,
+          round,
+          conflict.summary,
+          JSON.stringify(conflict.options),
+          "open",
+          new Date().toISOString(),
+        );
+        this.appendAndBroadcast({ type: "conflict_raised", conflict: { ...conflict, status: "open" } });
+      }
+
+      if (this.transition("awaiting_resolution")) {
+        this.setActiveRunState("awaiting_resolution");
+      }
+      return;
+    }
+
+    this.dispatchRefinementBrief(briefItems);
+  }
+
+  private handleConsolidationFailed(runId: string, round: number, message: string): void {
+    if (!this.meta?.active_run || this.meta.state !== "refining") return;
+    if (this.meta.active_run.id !== runId || this.meta.refinement_round !== round) return;
+
+    if (this.transition("awaiting_approval")) {
+      this.setActiveRunState("awaiting_approval");
+      this.appendAndBroadcast({ type: "error", message });
     }
   }
 
@@ -1265,7 +1613,8 @@ export class Orchestrator extends DurableObject<Env> {
       message.type !== "execute" &&
       message.type !== "refine_plan" &&
       message.type !== "create_pr" &&
-      message.type !== "preview_start"
+      message.type !== "preview_start" &&
+      message.type !== "consolidate_annotations"
     ) {
       return message;
     }
@@ -1402,6 +1751,184 @@ export class Orchestrator extends DurableObject<Env> {
           });
         }),
     );
+  }
+
+  private freezePlanRevision(runId: string, round: number, markdown: string): void {
+    const now = new Date().toISOString();
+    if (round > 0) {
+      this.consumeOpenAnnotations(runId, round - 1);
+    }
+    this.sql.exec(
+      `INSERT OR REPLACE INTO plan_revisions (
+        run_id, round, markdown, locked_at, frozen_at
+      ) VALUES (?, ?, ?, NULL, ?)`,
+      runId,
+      round,
+      markdown,
+      now,
+    );
+    this.appendAndBroadcast({
+      type: "plan_revision_frozen",
+      run_id: runId,
+      round,
+      markdown,
+      locked: false,
+      created_at: now,
+    });
+  }
+
+  private lockPlanRevision(runId: string, round: number): void {
+    this.sql.exec(
+      `UPDATE plan_revisions
+       SET locked_at = COALESCE(locked_at, ?)
+       WHERE run_id = ? AND round = ?`,
+      new Date().toISOString(),
+      runId,
+      round,
+    );
+  }
+
+  private consumeOpenAnnotations(runId: string, round: number): void {
+    const ids = this.loadOpenAnnotationThreads(runId, round).map((thread) => thread.id);
+    if (ids.length === 0) return;
+
+    this.sql.exec(
+      "UPDATE annotations SET status = 'consumed' WHERE revision_run_id = ? AND revision_round = ? AND status = 'open'",
+      runId,
+      round,
+    );
+    this.appendAndBroadcast({
+      type: "annotations_consumed",
+      run_id: runId,
+      round,
+      thread_ids: ids,
+    });
+  }
+
+  private ensureAnnotatableRevision(runId: string, round: number): boolean {
+    if (!this.meta) return false;
+    if (!this.meta.active_run?.plan_first) {
+      this.appendAndBroadcast({ type: "error", message: "Annotations are only available on plan-first runs." });
+      return false;
+    }
+    if (this.meta.state !== "awaiting_approval") {
+      this.appendAndBroadcast({ type: "error", message: `Cannot annotate in state: ${this.meta.state}` });
+      return false;
+    }
+    if (this.meta.active_run.id !== runId || this.meta.refinement_round !== round) {
+      this.appendAndBroadcast({ type: "error", message: "Annotation target is not the active plan revision." });
+      return false;
+    }
+
+    const revision = this.loadPlanRevision(runId, round);
+    if (!revision) {
+      this.appendAndBroadcast({ type: "error", message: "Plan revision not found." });
+      return false;
+    }
+    if (revision.locked_at) {
+      this.appendAndBroadcast({ type: "error", message: "Plan revision is locked." });
+      return false;
+    }
+
+    return true;
+  }
+
+  private loadPlanRevision(runId: string, round: number): { locked_at: string | null } | null {
+    for (const row of this.sql.exec(
+      "SELECT locked_at FROM plan_revisions WHERE run_id = ? AND round = ?",
+      runId,
+      round,
+    )) {
+      return { locked_at: row["locked_at"] as string | null };
+    }
+    return null;
+  }
+
+  private loadFullPlanRevision(runId: string, round: number): { markdown: string; locked_at: string | null } | null {
+    for (const row of this.sql.exec(
+      "SELECT markdown, locked_at FROM plan_revisions WHERE run_id = ? AND round = ?",
+      runId,
+      round,
+    )) {
+      return {
+        markdown: row["markdown"] as string,
+        locked_at: row["locked_at"] as string | null,
+      };
+    }
+    return null;
+  }
+
+  private loadOpenAnnotationThreads(runId: string, round: number): AnnotationThread[] {
+    const threads: AnnotationThread[] = [];
+    for (const row of this.sql.exec(
+      `SELECT id, anchor_json, author_id, author_name, comment, status, created_at
+       FROM annotations
+       WHERE revision_run_id = ? AND revision_round = ? AND status = 'open'
+       ORDER BY created_at ASC`,
+      runId,
+      round,
+    )) {
+      const id = row["id"] as string;
+      threads.push({
+        id,
+        run_id: runId,
+        round,
+        anchor: JSON.parse(row["anchor_json"] as string) as TextQuoteAnchor,
+        author: {
+          id: row["author_id"] as string,
+          name: row["author_name"] as string,
+        },
+        comment: row["comment"] as string,
+        status: row["status"] as "open",
+        created_at: row["created_at"] as string,
+        replies: this.loadAnnotationReplies(id),
+      });
+    }
+    return threads;
+  }
+
+  private loadAnnotationReplies(annotationId: string): NonNullable<AnnotationThread["replies"]> {
+    const replies: NonNullable<AnnotationThread["replies"]> = [];
+    for (const row of this.sql.exec(
+      `SELECT id, author_id, author_name, body, created_at
+       FROM annotation_replies
+       WHERE annotation_id = ?
+       ORDER BY created_at ASC`,
+      annotationId,
+    )) {
+      replies.push({
+        id: row["id"] as string,
+        author: {
+          id: row["author_id"] as string,
+          name: row["author_name"] as string,
+        },
+        comment: row["body"] as string,
+        created_at: row["created_at"] as string,
+      });
+    }
+    return replies;
+  }
+
+  private loadAnnotation(id: string): {
+    revision_run_id: string;
+    revision_round: number;
+    author_id: string;
+    status: string;
+  } | null {
+    for (const row of this.sql.exec(
+      `SELECT revision_run_id, revision_round, author_id, status
+       FROM annotations
+       WHERE id = ?`,
+      id,
+    )) {
+      return {
+        revision_run_id: row["revision_run_id"] as string,
+        revision_round: row["revision_round"] as number,
+        author_id: row["author_id"] as string,
+        status: row["status"] as string,
+      };
+    }
+    return null;
   }
 
   // --- Event log ---

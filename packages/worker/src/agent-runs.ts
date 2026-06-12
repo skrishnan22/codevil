@@ -4,6 +4,7 @@ export interface AgentRun {
   id: string;
   actor: ParticipantIdentity;
   text: string;
+  plan_first: boolean;
   state: AgentRunState;
   created_at: string;
 }
@@ -23,11 +24,13 @@ export function createAgentRun(input: {
   text: string;
   now: string;
   id?: string;
+  planFirst?: boolean;
 }): AgentRun {
   return {
     id: input.id ?? `run_${crypto.randomUUID().replace(/-/g, "")}`,
     actor: input.actor,
     text: input.text.trim(),
+    plan_first: input.planFirst ?? false,
     state: "queued",
     created_at: input.now,
   };

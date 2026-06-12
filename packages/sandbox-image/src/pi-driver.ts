@@ -11,12 +11,18 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
-import type { CostInfo } from "@codevil/shared";
+import {
+  AnnotationConflictSchema,
+  BriefItemSchema,
+  type CostInfo,
+} from "@codevil/shared";
 
 import type {
   AgentDriver,
   AgentStartOptions,
   CreatePullRequestToolOptions,
+  ConsolidationInput,
+  ConsolidationResult,
   PlanResult,
   TurnResult,
 } from "./runtime.js";
@@ -113,6 +119,45 @@ export class PiAgentDriver implements AgentDriver {
     };
   }
 
+  async consolidateAnnotations(input: ConsolidationInput): Promise<ConsolidationResult> {
+    const authStorage = AuthStorage.create();
+    if (input.llmKey) {
+      authStorage.setRuntimeApiKey(input.provider, input.llmKey);
+    }
+
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    const provider = input.provider as KnownProvider;
+    const model = modelRegistry.find(provider, input.model)
+      ?? findKnownModel(provider, input.model);
+
+    if (!model) {
+      throw new Error(`Model not found: ${input.provider}/${input.model}`);
+    }
+
+    const { session } = await createAgentSession({
+      cwd: input.cwd,
+      model,
+      authStorage,
+      modelRegistry,
+      customTools: [],
+      sessionManager: SessionManager.inMemory(input.cwd),
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: true, maxRetries: 2 },
+      }),
+    });
+
+    try {
+      session.setActiveToolsByName(["read", "grep", "find", "ls"]);
+      await session.prompt(consolidationPrompt(input));
+      await waitForQueuedAgentEvents(session);
+      const text = latestAssistantText(session.messages);
+      return parseConsolidationResult(text);
+    } finally {
+      session.dispose();
+    }
+  }
+
   async switchToExecution(modelId: string, provider = "anthropic"): Promise<void> {
     const session = this.requireSession();
     const modelRegistry = this.modelRegistry;
@@ -187,6 +232,47 @@ function latestAssistantText(messages: readonly unknown[]): string {
   }
 
   return "";
+}
+
+function consolidationPrompt(input: ConsolidationInput): string {
+  return [
+    "You are consolidating human feedback on a frozen markdown plan.",
+    "Return only valid JSON with keys brief_items and conflicts.",
+    "Merge compatible feedback into concise instructions.",
+    "If two annotations contradict each other, do not choose. Emit a conflict with options.",
+    "",
+    "Plan markdown:",
+    input.plan,
+    "",
+    "Open annotations JSON:",
+    JSON.stringify(input.annotations),
+    "",
+    "Existing conflicts JSON:",
+    JSON.stringify(input.conflicts),
+  ].join("\n");
+}
+
+function parseConsolidationResult(text: string): ConsolidationResult {
+  const parsed = JSON.parse(extractJsonObject(text));
+  const briefItems = BriefItemSchema.array().parse(parsed.brief_items ?? []);
+  const conflicts = AnnotationConflictSchema.array().parse(parsed.conflicts ?? []);
+  return {
+    brief_items: briefItems,
+    conflicts,
+    cost: zeroCost,
+  };
+}
+
+function extractJsonObject(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) return fenced[1].trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error("Consolidation did not return a JSON object");
+  }
+  return trimmed.slice(start, end + 1);
 }
 
 function assistantText(message: unknown): string {

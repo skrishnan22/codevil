@@ -46,7 +46,7 @@ interface SessionStoreActions {
   selectPreviewApp: (appKey: string) => void;
   disconnect: () => void;
   addUserMessage: (content: string) => void;
-  sendRoomMessage: (content: string) => void;
+  sendRoomMessage: (content: string, options?: { planFirst?: boolean }) => void;
   sendHumanMessage: (content: string) => void;
   reset: () => void;
 }
@@ -302,12 +302,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     wsHandle?.send({ type: "human_message", text });
   },
 
-  sendRoomMessage(content) {
+  sendRoomMessage(content, options) {
     const text = content.trim();
     if (!text) return;
     const request = parseAgentMention(text);
     if (request) {
-      wsHandle?.send({ type: "agent_request", text: request });
+      wsHandle?.send({ type: "agent_request", text: request, ...(options?.planFirst ? { plan_first: true } : {}) });
       return;
     }
     wsHandle?.send({ type: "human_message", text });

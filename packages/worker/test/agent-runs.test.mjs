@@ -9,6 +9,19 @@ import {
 
 const actor = { id: "usr_123", name: "Alice" };
 
+test("createAgentRun records whether a request starts with planning", () => {
+  const regular = createAgentRun({ actor, text: "fix bug", now: "2026-06-03T00:00:00.000Z" });
+  const planFirst = createAgentRun({
+    actor,
+    text: "draft a plan",
+    now: "2026-06-03T00:00:01.000Z",
+    planFirst: true,
+  });
+
+  assert.equal(regular.plan_first, false);
+  assert.equal(planFirst.plan_first, true);
+});
+
 test("enqueueAgentRun starts immediately when no run is active", () => {
   const run = createAgentRun({ actor, text: "fix bug", now: "2026-06-03T00:00:00.000Z" });
   const next = enqueueAgentRun({ active: null, queue: [] }, run);

@@ -1,12 +1,15 @@
 import { useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
+import { parseAgentMention } from "@/stores/session-store";
 
 export function ChatInput() {
   const { connectionStatus, sendRoomMessage } = useSessionStore();
   const [input, setInput] = useState("");
+  const [planFirst, setPlanFirst] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canSend = connectionStatus === "connected" || connectionStatus === "connecting";
+  const isAgentRequest = parseAgentMention(input) !== null;
   const connectionLabel =
     connectionStatus === "connecting"
       ? "Reconnecting. Messages will send when connected."
@@ -15,8 +18,9 @@ export function ChatInput() {
   function handleSend() {
     const trimmed = input.trim();
     if (!trimmed || !canSend) return;
-    sendRoomMessage(trimmed);
+    sendRoomMessage(trimmed, { planFirst: planFirst && isAgentRequest });
     setInput("");
+    setPlanFirst(false);
   }
 
   function handleMention() {
@@ -56,6 +60,15 @@ export function ChatInput() {
           >
             @ Mention Codevil
           </button>
+          <label className={`chat-input-plan-first ${!isAgentRequest ? "is-disabled" : ""}`}>
+            <input
+              type="checkbox"
+              checked={planFirst}
+              onChange={(e) => setPlanFirst(e.target.checked)}
+              disabled={!canSend || !isAgentRequest}
+            />
+            Plan first
+          </label>
           <span className="chat-input-hint">
             <kbd>↵</kbd> to send · <kbd>⇧↵</kbd> for newline
           </span>

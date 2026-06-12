@@ -116,6 +116,69 @@ test("init uses credential_response for authenticated GitHub clone", async () =>
   ]);
 });
 
+test("consolidate_annotations uses a fresh agent and emits structured result", async () => {
+  const sent = [];
+  const git = new FakeGitDriver();
+  const agents = [];
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => {
+      const agent = new FakeAgentDriver({
+        consolidation: {
+          brief_items: [
+            { instruction: "Use D1-backed storage.", source_thread_ids: ["ann_1"] },
+          ],
+          conflicts: [],
+        },
+      });
+      agents.push(agent);
+      return agent;
+    },
+    git,
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  sent.length = 0;
+
+  await runtime.handleMessage({
+    type: "consolidate_annotations",
+    run_id: "run_1",
+    round: 0,
+    plan_revision_id: "run_1:0",
+    plan: "## Plan",
+    annotations: [
+      {
+        id: "ann_1",
+        run_id: "run_1",
+        round: 0,
+        anchor: { quote: "Redis", prefix: "Use", suffix: "for storage", startOffset: 4, endOffset: 9 },
+        author: { id: "usr_1", name: "Alice" },
+        comment: "Use D1-backed storage.",
+        status: "open",
+        created_at: "2026-06-12T00:00:00.000Z",
+      },
+    ],
+    conflicts: [],
+    model: "claude-sonnet-4-6",
+  });
+
+  assert.deepEqual(sent, [{
+    type: "consolidation_complete",
+    run_id: "run_1",
+    round: 0,
+    brief_items: [
+      { instruction: "Use D1-backed storage.", source_thread_ids: ["ann_1"] },
+    ],
+    conflicts: [],
+    cost: zeroCost,
+  }]);
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0].calls[0][0], "consolidateAnnotations");
+  assert.deepEqual(agents[0].disposed, true);
+});
+
 test("detectSetupCommand prefers explicit setup script, then package manager lockfiles", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-setup-detect-"));
   try {
@@ -892,6 +955,7 @@ class FakeAgentDriver {
   calls = [];
   responses;
   onEvent;
+  disposed = false;
 
   constructor(responses = {}) {
     this.responses = responses;
@@ -920,6 +984,11 @@ class FakeAgentDriver {
     return this.responses.refine;
   }
 
+  async consolidateAnnotations(input) {
+    this.calls.push(["consolidateAnnotations", input]);
+    return this.responses.consolidation;
+  }
+
   async switchToExecution(model) {
     this.calls.push(["switchToExecution", model]);
   }
@@ -930,5 +999,9 @@ class FakeAgentDriver {
       return this.responses.execute.shift();
     }
     return this.responses.execute;
+  }
+
+  dispose() {
+    this.disposed = true;
   }
 }

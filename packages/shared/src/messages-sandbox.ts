@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { CostInfoSchema } from "./cost.js";
 import { PreviewAppSchema } from "./preview.js";
+import {
+  AnnotationConflictSchema,
+  AnnotationThreadSchema,
+  BriefItemSchema,
+} from "./annotations.js";
 
 // --- DO → Sandbox messages ---
 
@@ -85,6 +90,19 @@ export const PreviewStopSandboxMessageSchema = z.object({
   type: z.literal("preview_stop"),
 });
 
+export const ConsolidateAnnotationsMessageSchema = z.object({
+  type: z.literal("consolidate_annotations"),
+  run_id: z.string(),
+  round: z.number().int().nonnegative(),
+  plan_revision_id: z.string(),
+  plan: z.string(),
+  annotations: z.array(AnnotationThreadSchema),
+  conflicts: z.array(AnnotationConflictSchema),
+  model: z.string(),
+  provider: z.string().optional(),
+  ...TraceContextFields,
+});
+
 export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   InitMessageSchema,
   AgentTurnMessageSchema,
@@ -96,6 +114,7 @@ export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   CreatePRResponseMessageSchema,
   PreviewStartSandboxMessageSchema,
   PreviewStopSandboxMessageSchema,
+  ConsolidateAnnotationsMessageSchema,
 ]);
 
 export type InitMessage = z.infer<typeof InitMessageSchema>;
@@ -108,6 +127,7 @@ export type CredentialResponseMessage = z.infer<typeof CredentialResponseMessage
 export type CreatePRResponseMessage = z.infer<typeof CreatePRResponseMessageSchema>;
 export type PreviewStartSandboxMessage = z.infer<typeof PreviewStartSandboxMessageSchema>;
 export type PreviewStopSandboxMessage = z.infer<typeof PreviewStopSandboxMessageSchema>;
+export type ConsolidateAnnotationsMessage = z.infer<typeof ConsolidateAnnotationsMessageSchema>;
 export type DOToSandboxMessage = z.infer<typeof DOToSandboxMessageSchema>;
 
 // --- Sandbox → DO messages ---
@@ -237,6 +257,23 @@ export const SandboxPreviewAppsSchema = z.object({
   apps: z.array(PreviewAppSchema),
 });
 
+export const ConsolidationCompleteSchema = z.object({
+  type: z.literal("consolidation_complete"),
+  run_id: z.string(),
+  round: z.number().int().nonnegative(),
+  brief_items: z.array(BriefItemSchema),
+  conflicts: z.array(AnnotationConflictSchema).optional(),
+  cost: CostInfoSchema,
+});
+
+export const ConsolidationFailedSchema = z.object({
+  type: z.literal("consolidation_failed"),
+  run_id: z.string(),
+  round: z.number().int().nonnegative(),
+  message: z.string(),
+  cost: CostInfoSchema.optional(),
+});
+
 export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [
   SandboxAgentEventSchema,
   SandboxCloneStartedSchema,
@@ -259,6 +296,8 @@ export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [
   SandboxPreviewErrorSchema,
   SandboxPreviewStoppedSchema,
   SandboxPreviewAppsSchema,
+  ConsolidationCompleteSchema,
+  ConsolidationFailedSchema,
 ]);
 
 export type SandboxAgentEvent = z.infer<typeof SandboxAgentEventSchema>;
@@ -282,4 +321,6 @@ export type SandboxPreviewReady = z.infer<typeof SandboxPreviewReadySchema>;
 export type SandboxPreviewError = z.infer<typeof SandboxPreviewErrorSchema>;
 export type SandboxPreviewStopped = z.infer<typeof SandboxPreviewStoppedSchema>;
 export type SandboxPreviewApps = z.infer<typeof SandboxPreviewAppsSchema>;
+export type ConsolidationComplete = z.infer<typeof ConsolidationCompleteSchema>;
+export type ConsolidationFailed = z.infer<typeof ConsolidationFailedSchema>;
 export type SandboxToDOMessage = z.infer<typeof SandboxToDOMessageSchema>;

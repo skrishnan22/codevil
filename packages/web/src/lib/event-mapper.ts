@@ -225,6 +225,97 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
 
     case "agent_event":
       return mapAgentEventToChat(event.event);
+
+    case "plan_revision_frozen":
+      return [];
+
+    case "annotation_created":
+      return [
+        {
+          id: event.annotation.id,
+          role: "system",
+          variant: "status",
+          content: `${event.annotation.author.name} annotated the plan: ${event.annotation.comment}`,
+          timestamp: Date.parse(event.annotation.created_at) || ts,
+          actor: event.annotation.author.name,
+          meta: { run_id: event.annotation.run_id, refinement_round: event.annotation.round },
+        },
+      ];
+
+    case "annotation_replied":
+      return [
+        {
+          id: event.reply.id,
+          role: "system",
+          variant: "status",
+          content: `${event.reply.author.name} replied to an annotation: ${event.reply.comment}`,
+          timestamp: Date.parse(event.reply.created_at) || ts,
+          actor: event.reply.author.name,
+        },
+      ];
+
+    case "annotation_withdrawn":
+      return [
+        {
+          id: uid(),
+          role: "system",
+          variant: "status",
+          content: `${event.withdrawn_by.name} withdrew an annotation.`,
+          timestamp: Date.parse(event.withdrawn_at) || ts,
+          actor: event.withdrawn_by.name,
+        },
+      ];
+
+    case "consolidation_started":
+      return [
+        {
+          id: uid(),
+          role: "system",
+          variant: "status",
+          content: "Consolidating plan feedback.",
+          timestamp: ts,
+          meta: { run_id: event.run_id, refinement_round: event.round },
+        },
+      ];
+
+    case "conflict_raised":
+      return [
+        {
+          id: event.conflict.id,
+          role: "system",
+          variant: "status",
+          content: `Conflict needs a decision: ${event.conflict.summary}`,
+          timestamp: ts,
+          meta: { run_id: event.conflict.run_id, refinement_round: event.conflict.round },
+        },
+      ];
+
+    case "conflict_resolved":
+      return [
+        {
+          id: uid(),
+          role: "system",
+          variant: "status",
+          content: `${event.resolved_by.name} resolved a plan feedback conflict.`,
+          timestamp: ts,
+          actor: event.resolved_by.name,
+        },
+      ];
+
+    case "brief_dispatched":
+      return [
+        {
+          id: uid(),
+          role: "system",
+          variant: "status",
+          content: `Refinement brief dispatched with ${event.brief_items.length} item${event.brief_items.length === 1 ? "" : "s"}.`,
+          timestamp: ts,
+          meta: { run_id: event.run_id, refinement_round: event.to_round },
+        },
+      ];
+
+    case "annotations_consumed":
+      return [];
   }
 }
 
@@ -292,6 +383,33 @@ export function mapEventToActivity(event: DOToCLIEvent): ActivityEntry[] {
 
     case "agent_run_failed":
       return [eventEntry("Agent failed", ts, event.message, "error")];
+
+    case "plan_revision_frozen":
+      return [eventEntry("Plan revision frozen", ts, `Round ${event.round}`)];
+
+    case "annotation_created":
+      return [eventEntry("Plan annotation", ts, event.annotation.comment)];
+
+    case "annotation_replied":
+      return [eventEntry("Annotation reply", ts, event.reply.comment)];
+
+    case "annotation_withdrawn":
+      return [eventEntry("Annotation withdrawn", ts, event.thread_id)];
+
+    case "consolidation_started":
+      return [eventEntry("Consolidation started", ts, `Round ${event.round}`)];
+
+    case "conflict_raised":
+      return [eventEntry("Conflict raised", ts, event.conflict.summary)];
+
+    case "conflict_resolved":
+      return [eventEntry("Conflict resolved", ts, event.conflict_id)];
+
+    case "brief_dispatched":
+      return [eventEntry("Brief dispatched", ts, `${event.brief_items.length} items`)];
+
+    case "annotations_consumed":
+      return [eventEntry("Annotations consumed", ts, `${event.thread_ids.length} annotations`)];
 
     default:
       return [];

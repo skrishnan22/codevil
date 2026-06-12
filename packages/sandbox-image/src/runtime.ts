@@ -5,6 +5,9 @@ import { spawn } from "node:child_process";
 import type {
   CostInfo,
   DOToSandboxMessage,
+  AnnotationConflict,
+  AnnotationThread,
+  BriefItem,
   PreviewApp,
   PreviewFramework,
   SandboxToDOMessage,
@@ -58,11 +61,28 @@ export interface PlanResult {
   cost: CostInfo;
 }
 
+export interface ConsolidationInput {
+  cwd: string;
+  model: string;
+  provider: string;
+  llmKey?: string;
+  plan: string;
+  annotations: AnnotationThread[];
+  conflicts: AnnotationConflict[];
+}
+
+export interface ConsolidationResult {
+  brief_items: BriefItem[];
+  conflicts: AnnotationConflict[];
+  cost: CostInfo;
+}
+
 export interface AgentDriver {
   start(options: AgentStartOptions): Promise<void>;
   turn(prompt: string): Promise<TurnResult>;
   plan(prompt: string): Promise<PlanResult>;
   refine(feedback: string): Promise<PlanResult>;
+  consolidateAnnotations?(input: ConsolidationInput): Promise<ConsolidationResult>;
   switchToExecution(model: string, provider?: string): Promise<void>;
   execute(plan: string): Promise<CostInfo>;
   dispose?(): Promise<void> | void;
@@ -199,6 +219,9 @@ export class SandboxRuntime {
           return;
         case "refine_plan":
           await this.handleRefine(message.feedback, parent);
+          return;
+        case "consolidate_annotations":
+          await this.handleConsolidateAnnotations(message, parent);
           return;
         case "execute":
           await this.handleExecute(message.plan, message.model, message.provider, parent);
@@ -425,6 +448,52 @@ export class SandboxRuntime {
       agent.refine(refinePrompt(feedback)),
     );
     this.send({ type: "plan_ready", ...result });
+  }
+
+  private async handleConsolidateAnnotations(
+    message: Extract<DOToSandboxMessage, { type: "consolidate_annotations" }>,
+    parent: SpanContext | undefined,
+  ): Promise<void> {
+    const repoDir = this.requireRepo().dir;
+    const agent = this.agentFactory();
+
+    try {
+      const result = await this.maybeSpan(
+        "llm.consolidate_annotations",
+        { parent, attributes: { run_id: message.run_id, round: message.round, model: message.model } },
+        () => {
+          if (agent.consolidateAnnotations) {
+            return agent.consolidateAnnotations({
+              cwd: repoDir,
+              model: message.model,
+              provider: message.provider ?? this.provider,
+              llmKey: this.llmKey,
+              plan: message.plan,
+              annotations: message.annotations,
+              conflicts: message.conflicts,
+            });
+          }
+          return Promise.resolve(fallbackConsolidation(message.annotations));
+        },
+      );
+      this.send({
+        type: "consolidation_complete",
+        run_id: message.run_id,
+        round: message.round,
+        brief_items: result.brief_items,
+        conflicts: result.conflicts,
+        cost: result.cost ?? zeroCost(),
+      });
+    } catch (error) {
+      this.send({
+        type: "consolidation_failed",
+        run_id: message.run_id,
+        round: message.round,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      await agent.dispose?.();
+    }
   }
 
   private async handleExecute(
@@ -837,6 +906,17 @@ function addCost(left: CostInfo, right: CostInfo): CostInfo {
     input_tokens: left.input_tokens + right.input_tokens,
     output_tokens: left.output_tokens + right.output_tokens,
     total_cost_usd: Number((left.total_cost_usd + right.total_cost_usd).toFixed(6)),
+  };
+}
+
+function fallbackConsolidation(annotations: AnnotationThread[]): ConsolidationResult {
+  return {
+    brief_items: annotations.map((annotation) => ({
+      instruction: annotation.comment,
+      source_thread_ids: [annotation.id],
+    })),
+    conflicts: [],
+    cost: zeroCost(),
   };
 }
 

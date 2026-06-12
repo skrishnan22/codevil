@@ -148,6 +148,8 @@ export function mapSandboxMessageToCLIEvents(message: SandboxToDOMessage): DOToC
     case "agent_turn_complete":
     case "create_pr_request":
     case "plan_ready":
+    case "consolidation_complete":
+    case "consolidation_failed":
       return [];
     case "execution_complete":
       return [{ type: "status", message: "Execution completed. Creating pull request." }];

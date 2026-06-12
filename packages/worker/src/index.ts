@@ -700,6 +700,7 @@ async function handleCreateSession(
       max_cost: normalized.max_cost,
       max_time: normalized.max_session_time,
       max_steps: normalized.max_steps,
+      created_by: { id: auth.userId, name: auth.name },
     });
   } catch (error) {
     const failedAt = new Date().toISOString();

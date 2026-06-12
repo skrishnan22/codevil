@@ -5,6 +5,7 @@ export type SessionState =
   | "ready"
   | "planning"
   | "awaiting_approval"
+  | "awaiting_resolution"
   | "refining"
   | "executing"
   | "verifying"
@@ -24,7 +25,8 @@ const transitions: Record<SessionState, readonly SessionState[]> = {
   ready: ["planning", "executing", "failed", "timed_out", "cost_exceeded"],
   planning: ["awaiting_approval", "ready", "failed", "timed_out", "cost_exceeded"],
   awaiting_approval: ["refining", "executing", "ready", "failed", "timed_out", "cost_exceeded"],
-  refining: ["awaiting_approval", "ready", "failed", "timed_out", "cost_exceeded"],
+  awaiting_resolution: ["refining", "executing", "failed", "timed_out", "cost_exceeded"],
+  refining: ["awaiting_approval", "awaiting_resolution", "ready", "failed", "timed_out", "cost_exceeded"],
   executing: ["verifying", "ready", "failed", "timed_out", "cost_exceeded"],
   verifying: ["retrying", "creating_pr", "ready", "failed", "timed_out", "cost_exceeded"],
   retrying: ["verifying", "failed", "timed_out", "cost_exceeded"],

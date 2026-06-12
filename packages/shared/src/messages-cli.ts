@@ -2,6 +2,13 @@ import { z } from "zod";
 import { CostInfoSchema } from "./cost.js";
 import { PreviewAppSchema } from "./preview.js";
 import { ParticipantIdentitySchema } from "./room.js";
+import {
+  AnnotationConflictSchema,
+  AnnotationReplySchema,
+  AnnotationThreadSchema,
+  BriefItemSchema,
+  TextQuoteAnchorSchema,
+} from "./annotations.js";
 
 // --- DO → CLI events ---
 
@@ -159,6 +166,68 @@ export const AgentResponseEventSchema = z.object({
   text: z.string(),
 });
 
+export const PlanRevisionFrozenEventSchema = z.object({
+  type: z.literal("plan_revision_frozen"),
+  run_id: z.string(),
+  round: z.number().int().nonnegative(),
+  markdown: z.string().optional(),
+  locked: z.boolean().optional(),
+  created_at: z.string().optional(),
+  revision_id: z.string().optional(),
+});
+
+export const AnnotationCreatedEventSchema = z.object({
+  type: z.literal("annotation_created"),
+  annotation: AnnotationThreadSchema,
+});
+
+export const AnnotationRepliedEventSchema = z.object({
+  type: z.literal("annotation_replied"),
+  thread_id: z.string(),
+  reply: AnnotationReplySchema,
+});
+
+export const AnnotationWithdrawnEventSchema = z.object({
+  type: z.literal("annotation_withdrawn"),
+  thread_id: z.string(),
+  withdrawn_by: ParticipantIdentitySchema,
+  withdrawn_at: z.string(),
+});
+
+export const ConsolidationStartedEventSchema = z.object({
+  type: z.literal("consolidation_started"),
+  run_id: z.string(),
+  round: z.number().int().nonnegative(),
+});
+
+export const ConflictRaisedEventSchema = z.object({
+  type: z.literal("conflict_raised"),
+  conflict: AnnotationConflictSchema,
+});
+
+export const ConflictResolvedEventSchema = z.object({
+  type: z.literal("conflict_resolved"),
+  conflict_id: z.string(),
+  resolved_by: ParticipantIdentitySchema,
+  selected_thread_id: z.string().optional(),
+  deciding_instruction: z.string().trim().min(1).max(20_000).optional(),
+});
+
+export const BriefDispatchedEventSchema = z.object({
+  type: z.literal("brief_dispatched"),
+  run_id: z.string(),
+  from_round: z.number().int().nonnegative(),
+  to_round: z.number().int().nonnegative(),
+  brief_items: z.array(BriefItemSchema),
+});
+
+export const AnnotationsConsumedEventSchema = z.object({
+  type: z.literal("annotations_consumed"),
+  run_id: z.string(),
+  round: z.number().int().nonnegative(),
+  thread_ids: z.array(z.string()),
+});
+
 export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   StatusEventSchema,
@@ -185,6 +254,15 @@ export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   AgentRunCompletedEventSchema,
   AgentRunFailedEventSchema,
   AgentResponseEventSchema,
+  PlanRevisionFrozenEventSchema,
+  AnnotationCreatedEventSchema,
+  AnnotationRepliedEventSchema,
+  AnnotationWithdrawnEventSchema,
+  ConsolidationStartedEventSchema,
+  ConflictRaisedEventSchema,
+  ConflictResolvedEventSchema,
+  BriefDispatchedEventSchema,
+  AnnotationsConsumedEventSchema,
 ]);
 
 // Lenient variant for replaying persisted history from DO SQLite.
@@ -218,6 +296,15 @@ export type ApprovalRequestedEvent = z.infer<typeof ApprovalRequestedEventSchema
 export type AgentRunCompletedEvent = z.infer<typeof AgentRunCompletedEventSchema>;
 export type AgentRunFailedEvent = z.infer<typeof AgentRunFailedEventSchema>;
 export type AgentResponseEvent = z.infer<typeof AgentResponseEventSchema>;
+export type PlanRevisionFrozenEvent = z.infer<typeof PlanRevisionFrozenEventSchema>;
+export type AnnotationCreatedEvent = z.infer<typeof AnnotationCreatedEventSchema>;
+export type AnnotationRepliedEvent = z.infer<typeof AnnotationRepliedEventSchema>;
+export type AnnotationWithdrawnEvent = z.infer<typeof AnnotationWithdrawnEventSchema>;
+export type ConsolidationStartedEvent = z.infer<typeof ConsolidationStartedEventSchema>;
+export type ConflictRaisedEvent = z.infer<typeof ConflictRaisedEventSchema>;
+export type ConflictResolvedEvent = z.infer<typeof ConflictResolvedEventSchema>;
+export type BriefDispatchedEvent = z.infer<typeof BriefDispatchedEventSchema>;
+export type AnnotationsConsumedEvent = z.infer<typeof AnnotationsConsumedEventSchema>;
 export type DOToCLIEvent = z.infer<typeof DOToCLIEventSchema>;
 
 // --- CLI → DO messages ---
@@ -256,7 +343,46 @@ export const HumanChatMessageSchema = z.object({
 export const AgentRequestMessageSchema = z.object({
   type: z.literal("agent_request"),
   text: z.string().trim().min(1).max(20_000),
+  plan_first: z.boolean().optional(),
 });
+
+export const AnnotationCreateMessageSchema = z.object({
+  type: z.literal("annotation_create"),
+  run_id: z.string(),
+  round: z.number().int().nonnegative(),
+  anchor: TextQuoteAnchorSchema,
+  comment: z.string().trim().min(1).max(20_000),
+});
+
+export const AnnotationReplyMessageSchema = z.object({
+  type: z.literal("annotation_reply"),
+  thread_id: z.string(),
+  comment: z.string().trim().min(1).max(20_000),
+});
+
+export const AnnotationWithdrawMessageSchema = z.object({
+  type: z.literal("annotation_withdraw"),
+  thread_id: z.string(),
+});
+
+export const ConflictResolveSelectionMessageSchema = z.object({
+  type: z.literal("conflict_resolve"),
+  conflict_id: z.string(),
+  selected_thread_id: z.string(),
+  deciding_instruction: z.never().optional(),
+});
+
+export const ConflictResolveInstructionMessageSchema = z.object({
+  type: z.literal("conflict_resolve"),
+  conflict_id: z.string(),
+  selected_thread_id: z.never().optional(),
+  deciding_instruction: z.string().trim().min(1).max(20_000),
+});
+
+export const ConflictResolveMessageSchema = z.union([
+  ConflictResolveSelectionMessageSchema,
+  ConflictResolveInstructionMessageSchema,
+]);
 
 export const ApproveRunMessageSchema = z.object({
   type: z.literal("approve_run"),
@@ -274,7 +400,7 @@ export const AbortRunMessageSchema = z.object({
   run_id: z.string(),
 });
 
-export const CLIToDOMessageSchema = z.discriminatedUnion("type", [
+export const CLIToDOMessageSchema = z.union([
   ApproveMessageSchema,
   AbortMessageSchema,
   RefinePlanMessageSchema,
@@ -283,6 +409,10 @@ export const CLIToDOMessageSchema = z.discriminatedUnion("type", [
   StopSessionMessageSchema,
   HumanChatMessageSchema,
   AgentRequestMessageSchema,
+  AnnotationCreateMessageSchema,
+  AnnotationReplyMessageSchema,
+  AnnotationWithdrawMessageSchema,
+  ConflictResolveMessageSchema,
   ApproveRunMessageSchema,
   RefineRunMessageSchema,
   AbortRunMessageSchema,
@@ -296,6 +426,12 @@ export type PreviewStopMessage = z.infer<typeof PreviewStopMessageSchema>;
 export type StopSessionMessage = z.infer<typeof StopSessionMessageSchema>;
 export type HumanChatMessage = z.infer<typeof HumanChatMessageSchema>;
 export type AgentRequestMessage = z.infer<typeof AgentRequestMessageSchema>;
+export type AnnotationCreateMessage = z.infer<typeof AnnotationCreateMessageSchema>;
+export type AnnotationReplyMessage = z.infer<typeof AnnotationReplyMessageSchema>;
+export type AnnotationWithdrawMessage = z.infer<typeof AnnotationWithdrawMessageSchema>;
+export type ConflictResolveSelectionMessage = z.infer<typeof ConflictResolveSelectionMessageSchema>;
+export type ConflictResolveInstructionMessage = z.infer<typeof ConflictResolveInstructionMessageSchema>;
+export type ConflictResolveMessage = z.infer<typeof ConflictResolveMessageSchema>;
 export type ApproveRunMessage = z.infer<typeof ApproveRunMessageSchema>;
 export type RefineRunMessage = z.infer<typeof RefineRunMessageSchema>;
 export type AbortRunMessage = z.infer<typeof AbortRunMessageSchema>;

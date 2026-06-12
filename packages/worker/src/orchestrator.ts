@@ -49,6 +49,7 @@ import {
   finishActiveAgentRun,
   type AgentRun,
 } from "./agent-runs.js";
+import { toConsolidationAnnotations } from "./annotations.js";
 import { activeMembershipByUserSelect, type MembershipRow } from "./memberships.js";
 import {
   authorizeSocketMessage,
@@ -860,17 +861,7 @@ export class Orchestrator extends DurableObject<Env> {
       round,
       plan_revision_id: `${runId}:${round}`,
       plan: revision.markdown,
-      annotations: threads.map((thread) => ({
-        id: thread.id,
-        anchoredQuote: thread.anchor.text,
-        sourceLine: thread.anchor.sourceLine,
-        authorName: thread.author.name,
-        comment: thread.comment,
-        replies: (thread.replies ?? []).map((reply) => ({
-          authorName: reply.author.name,
-          body: reply.comment,
-        })),
-      })),
+      annotations: toConsolidationAnnotations(threads),
       conflicts: [],
       model: this.meta.plan_model,
       provider: this.meta.provider,

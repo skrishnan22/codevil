@@ -13,11 +13,11 @@ export const ConsolidationAnnotationSchema = z.object({
   id: z.string(),
   anchoredQuote: z.string().min(1),
   sourceLine: z.number().int().positive(),
-  authorName: z.string(),
-  comment: z.string(),
+  authorName: z.string().min(1),
+  comment: z.string().trim().min(1).max(20_000),
   replies: z.array(z.object({
-    authorName: z.string(),
-    body: z.string(),
+    authorName: z.string().min(1),
+    body: z.string().trim().min(1).max(20_000),
   })),
 });
 

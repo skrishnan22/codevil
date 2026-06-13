@@ -26,36 +26,6 @@ class FakeWebSocket {
   close() {}
 }
 
-function setupConnectedStore(): { socket: FakeWebSocket; restore: () => void } {
-  const sockets: FakeWebSocket[] = [];
-  const OriginalWebSocket = globalThis.WebSocket;
-  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
-
-  useSessionStore.getState().connectToSession(
-    { endpoint: "https://example.com" },
-    "ses_1",
-    "https://example.com/sessions/ses_1/ws",
-  );
-
-  const socket = (globalThis.WebSocket as unknown as typeof FakeWebSocket).prototype.constructor
-    ? sockets[0]
-    : null;
-
-  // The fake sockets array isn't populated in this closure; re-read it via the
-  // constructor spy. Instead, reconstruct by listening on the prototype.
-  // Simpler: just re-query what was constructed.
-  // Use the globalThis replacement to capture the instance.
-
-  return {
-    // Re-query: after connectToSession the FakeWebSocket constructor ran once.
-    // We can't easily access instances from the class without a sockets array.
-    // Replicate the pattern from session-store.test.ts exactly.
-    socket: socket!, // see helper below
-    restore: () => { globalThis.WebSocket = OriginalWebSocket; },
-  };
-}
-
-// Use the exact same pattern as session-store.test.ts: sockets array via closure.
 function withConnectedStore(cb: (socket: FakeWebSocket) => void) {
   const sockets: FakeWebSocket[] = [];
   const OriginalWebSocket = globalThis.WebSocket;

@@ -174,24 +174,6 @@ function ThreadItem({
         </form>
       )}
 
-      {/* When locked and author, show withdraw-only (no reply form) */}
-      {!showReply && showWithdraw && (
-        <div
-          className="annotation-reply-actions"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="btn btn-ghost annotation-withdraw-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onWithdraw();
-            }}
-          >
-            Withdraw
-          </button>
-        </div>
-      )}
     </div>
   );
 }

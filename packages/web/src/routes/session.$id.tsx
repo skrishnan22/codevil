@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import { loadConfig } from "@/lib/config";
 import { getSession, getAuthMe } from "@/lib/api-client";
@@ -14,14 +14,34 @@ import { Timeline } from "@/components/session/Timeline";
 import { ChatInput } from "@/components/session/ChatInput";
 import { WorkspacePane } from "@/components/session/workspace-pane";
 import { RoomHeader } from "@/components/session/room-header";
-import { PlanRevisionView } from "@/components/session/plan-revision-view";
-import { AnnotationPanel } from "@/components/session/annotation-panel";
-import { ConflictPanel } from "@/components/session/conflict-panel";
-import { openThreadsSorted, canSendToAgent, sendToAgentLabel } from "@/lib/annotation-predicates";
+import { PlanReviewPanel } from "@/components/session/plan-review-panel";
+import { openThreadsSorted } from "@/lib/annotation-predicates";
 
 export const Route = createFileRoute("/session/$id")({
   component: SessionPage,
 });
+
+/**
+ * Returns a stable key string for the current plan revision, or null when
+ * there is no revision. Used to detect when a new revision arrives so we can
+ * auto-open the review panel exactly once per revision.
+ */
+export function revisionKey(runId: string, round: number): string {
+  return `${runId}:${round}`;
+}
+
+/**
+ * Pure predicate: should we auto-open the panel for this revision?
+ * Returns true when the revision key has changed from the last-seen key.
+ * Extractable as a pure function so it can be unit-tested without jsdom.
+ */
+export function shouldAutoOpen(
+  lastSeenKey: string | null,
+  currentKey: string | null,
+): boolean {
+  if (currentKey === null) return false;
+  return currentKey !== lastSeenKey;
+}
 
 function SessionPage() {
   const { id } = Route.useParams();
@@ -33,8 +53,6 @@ function SessionPage() {
     preview,
     planRevision,
     annotations,
-    refine,
-    approve,
   } = useSessionStore();
   const previewOn = preview.status === "starting" || preview.status === "ready";
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
@@ -42,7 +60,13 @@ function SessionPage() {
     getInitialWorkspaceTab(previewOn),
   );
   const [previousPreviewOn, setPreviousPreviewOn] = useState(previewOn);
-  const [agentNote, setAgentNote] = useState("");
+
+  // Panel open/close state.
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  // Track the last revision key for which we auto-opened the panel. Stored in
+  // a ref so it doesn't cause extra renders.
+  const lastAutoOpenedKey = useRef<string | null>(null);
 
   useEffect(() => {
     const config = loadConfig();
@@ -73,6 +97,16 @@ function SessionPage() {
     setPreviousPreviewOn(previewOn);
   }, [previewOn, previousPreviewOn]);
 
+  // Auto-open the panel once whenever a new plan revision arrives.
+  useEffect(() => {
+    if (!planRevision) return;
+    const key = revisionKey(planRevision.runId, planRevision.round);
+    if (shouldAutoOpen(lastAutoOpenedKey.current, key)) {
+      lastAutoOpenedKey.current = key;
+      setPanelOpen(true);
+    }
+  }, [planRevision?.runId, planRevision?.round]);
+
   function handleSelectWorkspaceTab(tab: WorkspaceTab) {
     setActiveWorkspaceTab(getWorkspaceTabAfterUserSelection(tab));
   }
@@ -82,20 +116,10 @@ function SessionPage() {
     setActiveWorkspaceTab("activity");
   }
 
-  // Compute open-annotation count for the current plan revision.
+  // Compute open-annotation count for the trigger card summary.
   const openCount = planRevision
     ? openThreadsSorted(annotations, planRevision.runId, planRevision.round).length
     : 0;
-
-  const locked = planRevision?.locked ?? false;
-  const sendEnabled = canSendToAgent(openCount, agentNote, locked);
-  const sendLabel = sendToAgentLabel(openCount);
-
-  function handleSendToAgent() {
-    if (!sendEnabled) return;
-    refine(agentNote.trim());
-    setAgentNote("");
-  }
 
   return (
     <div className="session-shell">
@@ -104,52 +128,26 @@ function SessionPage() {
         <section className="conversation-pane" aria-label="Conversation">
           <RoomHeader />
           {planRevision && (
-            <section className="plan-collab-pane" aria-label="Plan collaboration">
-              <div className="plan-collab-header">
-                <div>
-                  <p className="plan-collab-eyebrow">Plan collaboration</p>
-                  <h2 className="plan-collab-title">Round {planRevision.round + 1}</h2>
-                </div>
-                <span className={`plan-collab-state${planRevision.locked ? " is-locked" : ""}`}>
-                  {planRevision.locked ? "Locked" : "Open for comments"}
-                </span>
-              </div>
-              <PlanRevisionView />
-              <ConflictPanel />
-              <AnnotationPanel />
-              {!locked && (
-                <div className="plan-collab-actions">
-                  <input
-                    className="plan-collab-note-input"
-                    type="text"
-                    placeholder="Optional note to agent…"
-                    value={agentNote}
-                    onChange={(e) => setAgentNote(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && sendEnabled) handleSendToAgent();
-                    }}
-                  />
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleSendToAgent}
-                    disabled={!sendEnabled}
-                    title={sendEnabled ? undefined : "Add a comment or note to send"}
-                  >
-                    {sendLabel}
-                  </button>
-                  <button
-                    className="btn btn-ghost"
-                    onClick={approve}
-                    title="Approve the plan and start execution"
-                  >
-                    Approve
-                  </button>
-                  {!sendEnabled && (
-                    <span className="plan-collab-hint">Add a comment or note to send</span>
+            <div className="plan-trigger-card">
+              <div className="plan-trigger-card-copy">
+                <span className="plan-trigger-card-label">
+                  Plan ready · Round {planRevision.round + 1}
+                  {openCount > 0 && (
+                    <> · {openCount} {openCount === 1 ? "comment" : "comments"}</>
                   )}
-                </div>
-              )}
-            </section>
+                </span>
+                {planRevision.locked && (
+                  <span className="plan-trigger-card-locked">Locked</span>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary plan-trigger-card-btn"
+                onClick={() => setPanelOpen(true)}
+              >
+                Review &amp; annotate
+              </button>
+            </div>
           )}
           <Timeline
             onOpenActivity={handleOpenActivity}
@@ -163,6 +161,11 @@ function SessionPage() {
           onSelectActivity={setSelectedActivityId}
         />
       </div>
+
+      {/* Full-screen slide-out panel — PlanRevisionView lives here ONLY */}
+      {planRevision && panelOpen && (
+        <PlanReviewPanel onClose={() => setPanelOpen(false)} />
+      )}
     </div>
   );
 }

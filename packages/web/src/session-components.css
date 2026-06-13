@@ -4817,9 +4817,196 @@ button.current-activity:hover { background: var(--surface-3); }
 }
 
 .plan-revision-view-content {
-  max-height: 320px;
-  overflow: auto;
+  /* Fix 2: no cramped fixed cap — let the pane scroll naturally */
   padding-right: 4px;
+}
+
+/* Fix 1: scoped typographic CSS for plan markdown
+ *
+ * @tailwindcss/typography is installed but not activated via @plugin, so
+ * `prose` classes are no-ops. Adding explicit, scoped rules here is the
+ * low-risk approach — it affects only .plan-revision-view-content and leaves
+ * all other surfaces untouched.
+ */
+.plan-revision-view-content {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--fg);
+}
+
+/* Block-level spacing */
+.plan-revision-view-content p,
+.plan-revision-view-content ul,
+.plan-revision-view-content ol,
+.plan-revision-view-content blockquote,
+.plan-revision-view-content pre,
+.plan-revision-view-content table {
+  margin-top: 0;
+  margin-bottom: 0.85em;
+}
+.plan-revision-view-content p:last-child,
+.plan-revision-view-content ul:last-child,
+.plan-revision-view-content ol:last-child,
+.plan-revision-view-content blockquote:last-child,
+.plan-revision-view-content pre:last-child,
+.plan-revision-view-content table:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings */
+.plan-revision-view-content h1,
+.plan-revision-view-content h2,
+.plan-revision-view-content h3,
+.plan-revision-view-content h4 {
+  margin-top: 1.4em;
+  margin-bottom: 0.45em;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+.plan-revision-view-content h1:first-child,
+.plan-revision-view-content h2:first-child,
+.plan-revision-view-content h3:first-child,
+.plan-revision-view-content h4:first-child {
+  margin-top: 0;
+}
+.plan-revision-view-content h1 { font-size: 1.25em; }
+.plan-revision-view-content h2 {
+  font-size: 1.1em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--line);
+}
+.plan-revision-view-content h3 {
+  font-size: 0.95em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+  font-weight: 700;
+}
+.plan-revision-view-content h4 { font-size: 0.9em; color: var(--fg-2); }
+
+/* Lists */
+.plan-revision-view-content ul,
+.plan-revision-view-content ol {
+  padding-left: 1.5em;
+}
+.plan-revision-view-content li {
+  margin-bottom: 0.3em;
+  line-height: 1.6;
+}
+.plan-revision-view-content li > ul,
+.plan-revision-view-content li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+.plan-revision-view-content ul { list-style: disc; }
+.plan-revision-view-content ol { list-style: decimal; }
+
+/* Inline code */
+.plan-revision-view-content :not(pre) > code {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--fg);
+  border: 1px solid var(--line-2);
+}
+
+/* Code blocks */
+.plan-revision-view-content pre {
+  font-family: var(--mono);
+  font-size: 0.82em;
+  line-height: 1.6;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  overflow-x: auto;
+  white-space: pre;
+}
+.plan-revision-view-content pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  border-radius: 0;
+}
+
+/* Blockquote */
+.plan-revision-view-content blockquote {
+  border-left: 3px solid var(--accent);
+  padding: 4px 0 4px 14px;
+  color: var(--fg-2);
+  font-style: italic;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+/* Tables */
+.plan-revision-view-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.plan-revision-view-content th,
+.plan-revision-view-content td {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+}
+.plan-revision-view-content th {
+  background: var(--surface-2);
+  font-weight: 600;
+  color: var(--fg-2);
+}
+.plan-revision-view-content tr:nth-child(even) td {
+  background: var(--surface-2);
+}
+
+/* Horizontal rule */
+.plan-revision-view-content hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 1.2em 0;
+}
+
+/* ─── Plan collab action bar ──────────────────────────────────────────────── */
+.plan-collab-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-2);
+  flex-wrap: wrap;
+}
+
+.plan-collab-note-input {
+  flex: 1;
+  min-width: 120px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  background: var(--surface-2);
+  color: var(--fg);
+  outline: none;
+}
+.plan-collab-note-input:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.plan-collab-note-input::placeholder {
+  color: var(--fg-4);
+}
+
+.plan-collab-hint {
+  font-size: 11px;
+  color: var(--fg-4);
+  margin-left: 2px;
 }
 
 /* Pending / confirmed annotation highlight wraps */

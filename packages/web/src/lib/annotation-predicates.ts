@@ -53,3 +53,28 @@ export function openThreadsSorted(
     .filter((t) => t.run_id === runId && t.round === round && t.status === "open")
     .sort(compareThreads);
 }
+
+/**
+ * Returns true when the "Send to agent" button should be enabled:
+ *  - the revision is not locked
+ *  - there is at least one open annotation OR the user has typed a non-empty note
+ */
+export function canSendToAgent(
+  openCount: number,
+  note: string,
+  locked: boolean,
+): boolean {
+  if (locked) return false;
+  return openCount > 0 || note.trim().length > 0;
+}
+
+/**
+ * Builds the label for the "Send to agent" button.
+ * Shows the count when there are open annotations.
+ */
+export function sendToAgentLabel(openCount: number): string {
+  if (openCount === 0) return "Send to agent";
+  return openCount === 1
+    ? "Send 1 comment to agent"
+    : `Send ${openCount} comments to agent`;
+}

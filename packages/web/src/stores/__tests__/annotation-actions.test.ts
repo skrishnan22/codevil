@@ -138,3 +138,54 @@ describe("setCurrentUserId", () => {
     expect(useSessionStore.getState().currentUserId).toBeNull();
   });
 });
+
+describe("refine", () => {
+  afterEach(() => {
+    useSessionStore.getState().reset();
+  });
+
+  it("sends refine_plan with the provided feedback", () => {
+    withConnectedStore((socket) => {
+      useSessionStore.getState().refine("please simplify step 2");
+      expect(JSON.parse(socket.sent[0])).toEqual({
+        type: "refine_plan",
+        feedback: "please simplify step 2",
+      });
+    });
+  });
+
+  it("sends refine_plan with empty feedback when called with empty string", () => {
+    withConnectedStore((socket) => {
+      useSessionStore.getState().refine("");
+      expect(JSON.parse(socket.sent[0])).toEqual({
+        type: "refine_plan",
+        feedback: "",
+      });
+    });
+  });
+
+  it("is a no-op when not connected (wsHandle is null)", () => {
+    expect(() => {
+      useSessionStore.getState().refine("anything");
+    }).not.toThrow();
+  });
+});
+
+describe("approve", () => {
+  afterEach(() => {
+    useSessionStore.getState().reset();
+  });
+
+  it("sends the correct approve message", () => {
+    withConnectedStore((socket) => {
+      useSessionStore.getState().approve();
+      expect(JSON.parse(socket.sent[0])).toEqual({ type: "approve" });
+    });
+  });
+
+  it("is a no-op when not connected (wsHandle is null)", () => {
+    expect(() => {
+      useSessionStore.getState().approve();
+    }).not.toThrow();
+  });
+});

@@ -17,6 +17,7 @@ import { RoomHeader } from "@/components/session/room-header";
 import { PlanRevisionView } from "@/components/session/plan-revision-view";
 import { AnnotationPanel } from "@/components/session/annotation-panel";
 import { ConflictPanel } from "@/components/session/conflict-panel";
+import { openThreadsSorted, canSendToAgent, sendToAgentLabel } from "@/lib/annotation-predicates";
 
 export const Route = createFileRoute("/session/$id")({
   component: SessionPage,
@@ -31,6 +32,9 @@ function SessionPage() {
     setSessionCreatorId,
     preview,
     planRevision,
+    annotations,
+    refine,
+    approve,
   } = useSessionStore();
   const previewOn = preview.status === "starting" || preview.status === "ready";
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
@@ -38,6 +42,7 @@ function SessionPage() {
     getInitialWorkspaceTab(previewOn),
   );
   const [previousPreviewOn, setPreviousPreviewOn] = useState(previewOn);
+  const [agentNote, setAgentNote] = useState("");
 
   useEffect(() => {
     const config = loadConfig();
@@ -77,6 +82,25 @@ function SessionPage() {
     setActiveWorkspaceTab("activity");
   }
 
+  // Compute open-annotation count for the current plan revision.
+  const openCount = planRevision
+    ? openThreadsSorted(annotations, planRevision.runId, planRevision.round).length
+    : 0;
+
+  const locked = planRevision?.locked ?? false;
+  const sendEnabled = canSendToAgent(openCount, agentNote, locked);
+  const sendLabel = sendToAgentLabel(openCount);
+
+  function handleSendToAgent() {
+    if (!sendEnabled) return;
+    refine(agentNote.trim());
+    setAgentNote("");
+  }
+
+  function handleApprove() {
+    approve();
+  }
+
   return (
     <div className="session-shell">
       <SessionTopBar />
@@ -97,6 +121,38 @@ function SessionPage() {
               <PlanRevisionView />
               <ConflictPanel />
               <AnnotationPanel />
+              {!locked && (
+                <div className="plan-collab-actions">
+                  <input
+                    className="plan-collab-note-input"
+                    type="text"
+                    placeholder="Optional note to agent…"
+                    value={agentNote}
+                    onChange={(e) => setAgentNote(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && sendEnabled) handleSendToAgent();
+                    }}
+                  />
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleSendToAgent}
+                    disabled={!sendEnabled}
+                    title={sendEnabled ? undefined : "Add a comment or note to send"}
+                  >
+                    {sendLabel}
+                  </button>
+                  <button
+                    className="btn btn-ghost"
+                    onClick={handleApprove}
+                    title="Approve the plan and start execution"
+                  >
+                    Approve
+                  </button>
+                  {!sendEnabled && openCount === 0 && agentNote.trim() === "" && (
+                    <span className="plan-collab-hint">Add a comment to send</span>
+                  )}
+                </div>
+              )}
             </section>
           )}
           <Timeline

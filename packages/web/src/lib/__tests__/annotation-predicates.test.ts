@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canWithdraw, canReply, openThreadsSorted, compareThreads } from "../annotation-predicates";
+import { canWithdraw, canReply, openThreadsSorted, compareThreads, canSendToAgent, sendToAgentLabel } from "../annotation-predicates";
 import type { AnnotationThread } from "@codevil/shared";
 
 function makeThread(overrides: Partial<AnnotationThread> = {}): AnnotationThread {
@@ -124,5 +124,50 @@ describe("openThreadsSorted", () => {
     ];
     const result = openThreadsSorted(threads, "run_1", 0);
     expect(result.map((t) => t.id)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("canSendToAgent", () => {
+  it("returns true when there are open annotations and no note (unlocked)", () => {
+    expect(canSendToAgent(2, "", false)).toBe(true);
+  });
+
+  it("returns true when there are no annotations but a non-empty note (unlocked)", () => {
+    expect(canSendToAgent(0, "Please simplify step 3", false)).toBe(true);
+  });
+
+  it("returns true when there are both open annotations and a note (unlocked)", () => {
+    expect(canSendToAgent(1, "extra note", false)).toBe(true);
+  });
+
+  it("returns false when there are no annotations and the note is empty (unlocked)", () => {
+    expect(canSendToAgent(0, "", false)).toBe(false);
+  });
+
+  it("returns false when there are no annotations and the note is whitespace-only (unlocked)", () => {
+    expect(canSendToAgent(0, "   ", false)).toBe(false);
+  });
+
+  it("returns false when locked, even with open annotations", () => {
+    expect(canSendToAgent(3, "", true)).toBe(false);
+  });
+
+  it("returns false when locked, even with a non-empty note", () => {
+    expect(canSendToAgent(0, "some note", true)).toBe(false);
+  });
+});
+
+describe("sendToAgentLabel", () => {
+  it("returns generic label when count is 0", () => {
+    expect(sendToAgentLabel(0)).toBe("Send to agent");
+  });
+
+  it("uses singular form for exactly 1 comment", () => {
+    expect(sendToAgentLabel(1)).toBe("Send 1 comment to agent");
+  });
+
+  it("uses plural form for 2 or more comments", () => {
+    expect(sendToAgentLabel(2)).toBe("Send 2 comments to agent");
+    expect(sendToAgentLabel(10)).toBe("Send 10 comments to agent");
   });
 });

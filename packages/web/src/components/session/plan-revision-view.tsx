@@ -42,6 +42,8 @@ const blockComponents = {
 export function PlanRevisionView() {
   const planRevision = useSessionStore((state) => state.planRevision);
   const createAnnotation = useSessionStore((state) => state.createAnnotation);
+  const annotations = useSessionStore((state) => state.annotations);
+  const selectAnnotation = useSessionStore((state) => state.selectAnnotation);
   const rootRef = useRef<HTMLDivElement>(null);
 
   const [pendingSelection, setPendingSelection] =
@@ -51,6 +53,8 @@ export function PlanRevisionView() {
     rootRef,
     planRevision,
     onPendingSelection: setPendingSelection,
+    annotations,
+    onSelectAnnotation: selectAnnotation,
   });
 
   // Close the composer whenever the revision identity or lock state changes.

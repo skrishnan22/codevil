@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SessionState, DOToCLIEvent, CLIToDOMessage, PreviewApp, ParticipantIdentity, AnnotationAnchor } from "@codevil/shared";
+import type { SessionState, DOToCLIEvent, CLIToDOMessage, PreviewApp, ParticipantIdentity, AnnotationAnchor, AnnotationThread, AnnotationReply } from "@codevil/shared";
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
@@ -42,6 +42,8 @@ interface SessionStoreState {
   planApproved: boolean;
   preview: PreviewState;
   planRevision: PlanRevisionState | null;
+  annotations: AnnotationThread[];
+  selectedAnnotationId: string | null;
 }
 
 interface SessionStoreActions {
@@ -59,6 +61,7 @@ interface SessionStoreActions {
   sendRoomMessage: (content: string, options?: { planFirst?: boolean }) => void;
   sendHumanMessage: (content: string) => void;
   createAnnotation: (anchor: AnnotationAnchor, comment: string) => void;
+  selectAnnotation: (id: string | null) => void;
   reset: () => void;
 }
 
@@ -87,6 +90,8 @@ const initialState: SessionStoreState = {
     outputLines: [],
   },
   planRevision: null,
+  annotations: [],
+  selectedAnnotationId: null,
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
@@ -146,6 +151,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         planApproved: false,
         preview: initialState.preview,
         planRevision: null,
+        annotations: [],
+        selectedAnnotationId: null,
       }),
       sessionId,
       wsUrl,
@@ -168,6 +175,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           const participants = reduceParticipants(state.participants, envelope.event);
           const planRevision = reducePlanRevision(state.planRevision, envelope.event);
 
+          // Reset annotations when a new revision (different run_id or round) arrives.
+          const isNewRevision =
+            envelope.event.type === "plan_revision_frozen" &&
+            envelope.event.markdown &&
+            envelope.event.markdown.length > 0 &&
+            (state.planRevision === null ||
+              state.planRevision.runId !== envelope.event.run_id ||
+              state.planRevision.round !== envelope.event.round);
+
+          const annotationsAfterRevisionReset = isNewRevision ? [] : state.annotations;
+          const annotations = reduceAnnotations(annotationsAfterRevisionReset, envelope.event);
+
           return {
             cursor: envelope.cursor,
             sessionPhase: nextPhase ?? state.sessionPhase,
@@ -175,6 +194,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             preview,
             participants,
             planRevision,
+            annotations,
           };
         });
 
@@ -340,6 +360,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     });
   },
 
+  selectAnnotation(id) {
+    set({ selectedAnnotationId: id });
+  },
+
   reset() {
     connectionGeneration++;
     wsHandle?.close();
@@ -499,6 +523,61 @@ function upsertParticipant(
   const existingIndex = current.findIndex((item) => item.id === participant.id);
   if (existingIndex === -1) return [...current, participant];
   return current.map((item, index) => index === existingIndex ? participant : item);
+}
+
+export function reduceAnnotations(
+  current: AnnotationThread[],
+  event: DOToCLIEvent,
+): AnnotationThread[] {
+  switch (event.type) {
+    case "annotation_created": {
+      const annotation = event.annotation;
+      // Dedupe by id — ignore if already present.
+      if (current.some((t) => t.id === annotation.id)) return current;
+      return [...current, annotation];
+    }
+    case "annotation_replied": {
+      const { thread_id, reply } = event;
+      const index = current.findIndex((t) => t.id === thread_id);
+      // Unknown thread — unchanged.
+      if (index === -1) return current;
+      const thread = current[index];
+      const existingReplies: AnnotationReply[] = thread.replies ?? [];
+      // Dedupe replies by id.
+      if (existingReplies.some((r) => r.id === reply.id)) return current;
+      const updatedThread: AnnotationThread = {
+        ...thread,
+        replies: [...existingReplies, reply],
+      };
+      return current.map((t, i) => (i === index ? updatedThread : t));
+    }
+    case "annotation_withdrawn": {
+      const { thread_id } = event;
+      const index = current.findIndex((t) => t.id === thread_id);
+      // Unknown thread — unchanged.
+      if (index === -1) return current;
+      if (current[index].status === "withdrawn") return current;
+      return current.map((t, i) =>
+        i === index ? { ...t, status: "withdrawn" as const } : t,
+      );
+    }
+    case "annotations_consumed": {
+      const { thread_ids } = event;
+      if (thread_ids.length === 0) return current;
+      const idSet = new Set(thread_ids);
+      let changed = false;
+      const next = current.map((t) => {
+        if (idSet.has(t.id) && t.status !== "consumed") {
+          changed = true;
+          return { ...t, status: "consumed" as const };
+        }
+        return t;
+      });
+      return changed ? next : current;
+    }
+    default:
+      return current;
+  }
 }
 
 export function parseAgentMention(text: string): string | null {

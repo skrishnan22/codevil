@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { reducePlanRevision } from "../session-store";
-import { blockIdForNode } from "../../components/session/plan-revision-view";
+import { blockIdForNode } from "../../lib/block-id";
 
 // ---------------------------------------------------------------------------
 // blockIdForNode helper

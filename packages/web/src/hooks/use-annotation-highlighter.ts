@@ -23,8 +23,14 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { buildAnnotationAnchor } from "../lib/annotation-anchor";
-import type { AnnotationAnchor, DomMeta } from "@codevil/shared";
+import type { AnnotationAnchor } from "@codevil/shared";
 import type { PlanRevisionState } from "../stores/session-store";
+// Type-only imports — erased at runtime, so the module (which accesses `window`
+// at evaluation time) is NOT loaded here.  The actual runtime load happens via
+// dynamic import() inside the useEffect below.
+import type Highlighter from "@plannotator/web-highlighter";
+import type { DomMeta, CreateFrom, EventType } from "@plannotator/web-highlighter/dist/types/index";
+import type HighlightSource from "@plannotator/web-highlighter/dist/model/source/index";
 
 export interface PendingSelection {
   highlightId: string;
@@ -40,16 +46,6 @@ interface UseAnnotationHighlighterOptions {
 export interface UseAnnotationHighlighterReturn {
   /** Remove a pending highlight by id (no-op if the highlighter is gone). */
   removeHighlight: (id: string) => void;
-}
-
-// Minimal shape we need from a live Highlighter instance.
-interface HighlighterInstance {
-  run: () => void;
-  on: (event: string, handler: (...args: unknown[]) => void) => unknown;
-  off: (event: string, handler: (...args: unknown[]) => void) => unknown;
-  getDoms: (id: string) => HTMLElement[];
-  remove: (id: string) => void;
-  dispose: () => void;
 }
 
 export function useAnnotationHighlighter({
@@ -70,7 +66,7 @@ export function useAnnotationHighlighter({
   const locked = planRevision?.locked ?? false;
 
   // Ref to the live highlighter instance so removeHighlight can reach it.
-  const highlighterRef = useRef<HighlighterInstance | null>(null);
+  const highlighterRef = useRef<Highlighter | null>(null);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -79,36 +75,42 @@ export function useAnnotationHighlighter({
     if (!root || !runId || round === null || locked) return;
 
     let disposed = false;
-    let hInstance: HighlighterInstance | null = null;
-    // Handler stored here so we can call off() during cleanup.
-    let attachedHandler: ((...args: unknown[]) => void) | null = null;
-    const CREATE_EVENT = "selection:create";
+    let hInstance: Highlighter | null = null;
+    // Handler and event name stored here so the cleanup closure can call off().
+    let attachedHandler: ((data: { sources: HighlightSource[]; type: CreateFrom }, h: Highlighter) => void) | null = null;
+    let createEventName: EventType | null = null;
 
     // Dynamic import keeps the module out of the node.js module graph during
     // test execution (it accesses window at evaluation time).
-    import("@plannotator/web-highlighter").then(({ default: Highlighter }) => {
+    // Note: CreateFrom is defined in the types sub-path but is not re-exported
+    // from the package root.  Values are inlined here, verified against the
+    // dist/types/index.d.ts enum declaration (`STORE = "from-store"`).
+    const CreateFrom = { STORE: "from-store" as CreateFrom, INPUT: "from-input" as CreateFrom } as const;
+    import("@plannotator/web-highlighter").then(({ default: HighlighterClass }) => {
       if (disposed) return;
 
-      const h = new Highlighter({
+      const h = new HighlighterClass({
         $root: root,
         wrapTag: "mark",
         style: { className: "annotation-highlight" },
-      }) as unknown as HighlighterInstance;
+      });
 
       hInstance = h;
       highlighterRef.current = h;
       h.run();
 
-      // CreateFrom enum: "from-store" for restores, "from-input" for user
-      // selections.  We only care about user-initiated selections.
-      const handler = (...args: unknown[]) => {
-        const data = args[0] as {
-          sources: { id: string; startMeta: DomMeta; endMeta: DomMeta; text: string }[];
-          type: string;
-        };
+      // Use the canonical enum constant rather than the raw string literal.
+      // Highlighter.event is a static alias for EventType.
+      const CREATE_EVENT = HighlighterClass.event.CREATE;
+      createEventName = CREATE_EVENT;
+
+      // CreateFrom.STORE ("from-store") covers restores from persisted data;
+      // CreateFrom.INPUT ("from-input") is a live user selection — the only
+      // case we act on.
+      const handler = (data: { sources: HighlightSource[]; type: CreateFrom }) => {
         const { sources, type } = data;
 
-        if (type === "from-store") return;
+        if (type === CreateFrom.STORE) return;
         if (!sources.length) return;
 
         const source = sources[0];
@@ -148,8 +150,8 @@ export function useAnnotationHighlighter({
 
     return () => {
       disposed = true;
-      if (hInstance && attachedHandler) {
-        hInstance.off(CREATE_EVENT, attachedHandler);
+      if (hInstance && attachedHandler && createEventName) {
+        hInstance.off(createEventName, attachedHandler);
       }
       hInstance?.dispose();
       hInstance = null;

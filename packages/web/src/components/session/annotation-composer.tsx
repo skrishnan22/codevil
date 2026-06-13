@@ -10,7 +10,7 @@
  *  - onCancel          — called when user cancels or submits empty text
  */
 
-import { useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 interface AnnotationComposerProps {
   onSubmit: (comment: string) => void;
@@ -19,7 +19,6 @@ interface AnnotationComposerProps {
 
 export function AnnotationComposer({ onSubmit, onCancel }: AnnotationComposerProps) {
   const [text, setText] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -47,7 +46,6 @@ export function AnnotationComposer({ onSubmit, onCancel }: AnnotationComposerPro
     <div className="annotation-composer" role="dialog" aria-label="Add annotation">
       <form onSubmit={handleSubmit}>
         <textarea
-          ref={textareaRef}
           className="annotation-composer-textarea"
           placeholder="Add a comment…"
           value={text}

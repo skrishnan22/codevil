@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ExtraProps } from "react-markdown";
@@ -8,9 +8,6 @@ import type { PendingSelection } from "@/hooks/use-annotation-highlighter";
 import { AnnotationComposer } from "./annotation-composer";
 import { blockIdForNode } from "@/lib/block-id";
 import type { HastNodeWithPosition } from "@/lib/block-id";
-
-// Re-export so existing imports from this module continue to work.
-export { blockIdForNode };
 
 function makeBlockComponent<T extends keyof React.JSX.IntrinsicElements>(Tag: T) {
   return function BlockComponent(props: React.JSX.IntrinsicElements[T] & ExtraProps) {
@@ -56,6 +53,14 @@ export function PlanRevisionView() {
     onPendingSelection: setPendingSelection,
   });
 
+  // Close the composer whenever the revision identity or lock state changes.
+  // This prevents a stuck composer / orphaned <mark> when the highlighter
+  // tears down mid-compose (e.g. the revision advances to the next round or
+  // becomes locked while the user is typing a comment).
+  useEffect(() => {
+    setPendingSelection(null);
+  }, [planRevision?.runId, planRevision?.round, planRevision?.locked]);
+
   if (!planRevision || !planRevision.markdown) {
     return null;
   }
@@ -63,8 +68,10 @@ export function PlanRevisionView() {
   function handleComposerSubmit(comment: string) {
     if (!pendingSelection) return;
     createAnnotation(pendingSelection.anchor, comment);
-    // Leave the transient <mark> in place — Task 4 will replace it with the
-    // server-confirmed annotation highlight.
+    // Remove the transient <mark> — the persistent highlight will be
+    // (re)rendered from the `annotation_created` broadcast once the server
+    // confirms the annotation (Task 4).
+    removeHighlight(pendingSelection.highlightId);
     setPendingSelection(null);
   }
 

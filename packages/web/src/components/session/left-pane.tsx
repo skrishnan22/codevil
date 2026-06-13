@@ -4,6 +4,7 @@ import { TaskMeta } from "./task-meta";
 import { PhaseTracker } from "./phase-tracker";
 import { PlanCard } from "./plan-card";
 import { PlanRevisionView } from "./plan-revision-view";
+import { AnnotationPanel } from "./annotation-panel";
 import { ConversationPanel } from "./conversation-panel";
 import { useEffect, useMemo, useRef } from "react";
 
@@ -49,6 +50,7 @@ export function LeftPane() {
           <PlanCard />
         </div>
         <PlanRevisionView />
+        <AnnotationPanel />
         <div ref={conversationRef}>
           <ConversationPanel />
         </div>

@@ -1,0 +1,170 @@
+/**
+ * Tests for the annotation store actions: replyToAnnotation, withdrawAnnotation,
+ * and setCurrentUserId. Follows the pattern established in session-store.test.ts.
+ */
+
+import { afterEach, describe, expect, it } from "vitest";
+import { useSessionStore } from "../session-store";
+
+class FakeWebSocket {
+  static OPEN = 1;
+  readyState = FakeWebSocket.OPEN;
+  url: string;
+  sent: string[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onclose: ((event: { code: number; reason: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+  }
+
+  send(message: string) {
+    this.sent.push(message);
+  }
+  close() {}
+}
+
+function setupConnectedStore(): { socket: FakeWebSocket; restore: () => void } {
+  const sockets: FakeWebSocket[] = [];
+  const OriginalWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+  useSessionStore.getState().connectToSession(
+    { endpoint: "https://example.com" },
+    "ses_1",
+    "https://example.com/sessions/ses_1/ws",
+  );
+
+  const socket = (globalThis.WebSocket as unknown as typeof FakeWebSocket).prototype.constructor
+    ? sockets[0]
+    : null;
+
+  // The fake sockets array isn't populated in this closure; re-read it via the
+  // constructor spy. Instead, reconstruct by listening on the prototype.
+  // Simpler: just re-query what was constructed.
+  // Use the globalThis replacement to capture the instance.
+
+  return {
+    // Re-query: after connectToSession the FakeWebSocket constructor ran once.
+    // We can't easily access instances from the class without a sockets array.
+    // Replicate the pattern from session-store.test.ts exactly.
+    socket: socket!, // see helper below
+    restore: () => { globalThis.WebSocket = OriginalWebSocket; },
+  };
+}
+
+// Use the exact same pattern as session-store.test.ts: sockets array via closure.
+function withConnectedStore(cb: (socket: FakeWebSocket) => void) {
+  const sockets: FakeWebSocket[] = [];
+  const OriginalWebSocket = globalThis.WebSocket;
+
+  class TrackingWebSocket extends FakeWebSocket {
+    constructor(url: string) {
+      super(url);
+      sockets.push(this);
+    }
+  }
+
+  globalThis.WebSocket = TrackingWebSocket as unknown as typeof WebSocket;
+
+  try {
+    useSessionStore.getState().connectToSession(
+      { endpoint: "https://example.com" },
+      "ses_1",
+      "https://example.com/sessions/ses_1/ws",
+    );
+    cb(sockets[0]);
+  } finally {
+    globalThis.WebSocket = OriginalWebSocket;
+  }
+}
+
+describe("replyToAnnotation", () => {
+  afterEach(() => {
+    useSessionStore.getState().reset();
+  });
+
+  it("sends the correct annotation_reply message shape", () => {
+    withConnectedStore((socket) => {
+      useSessionStore.getState().replyToAnnotation("thread_abc", "Looks good!");
+      expect(JSON.parse(socket.sent[0])).toEqual({
+        type: "annotation_reply",
+        thread_id: "thread_abc",
+        comment: "Looks good!",
+      });
+    });
+  });
+
+  it("trims comment whitespace before sending", () => {
+    withConnectedStore((socket) => {
+      useSessionStore.getState().replyToAnnotation("thread_abc", "  hello  ");
+      expect(JSON.parse(socket.sent[0])).toEqual({
+        type: "annotation_reply",
+        thread_id: "thread_abc",
+        comment: "hello",
+      });
+    });
+  });
+
+  it("is a no-op when comment is empty", () => {
+    withConnectedStore((socket) => {
+      useSessionStore.getState().replyToAnnotation("thread_abc", "   ");
+      expect(socket.sent).toHaveLength(0);
+    });
+  });
+
+  it("is a no-op when not connected (wsHandle is null)", () => {
+    // Don't connect — just call directly.
+    expect(() => {
+      useSessionStore.getState().replyToAnnotation("thread_abc", "hello");
+    }).not.toThrow();
+  });
+});
+
+describe("withdrawAnnotation", () => {
+  afterEach(() => {
+    useSessionStore.getState().reset();
+  });
+
+  it("sends the correct annotation_withdraw message shape", () => {
+    withConnectedStore((socket) => {
+      useSessionStore.getState().withdrawAnnotation("thread_xyz");
+      expect(JSON.parse(socket.sent[0])).toEqual({
+        type: "annotation_withdraw",
+        thread_id: "thread_xyz",
+      });
+    });
+  });
+
+  it("is a no-op when not connected (wsHandle is null)", () => {
+    expect(() => {
+      useSessionStore.getState().withdrawAnnotation("thread_xyz");
+    }).not.toThrow();
+  });
+});
+
+describe("setCurrentUserId", () => {
+  afterEach(() => {
+    useSessionStore.getState().reset();
+  });
+
+  it("updates currentUserId in store state", () => {
+    expect(useSessionStore.getState().currentUserId).toBeNull();
+    useSessionStore.getState().setCurrentUserId("usr_123");
+    expect(useSessionStore.getState().currentUserId).toBe("usr_123");
+  });
+
+  it("can be cleared back to null", () => {
+    useSessionStore.getState().setCurrentUserId("usr_123");
+    useSessionStore.getState().setCurrentUserId(null);
+    expect(useSessionStore.getState().currentUserId).toBeNull();
+  });
+
+  it("is reset to null by reset()", () => {
+    useSessionStore.getState().setCurrentUserId("usr_123");
+    useSessionStore.getState().reset();
+    expect(useSessionStore.getState().currentUserId).toBeNull();
+  });
+});

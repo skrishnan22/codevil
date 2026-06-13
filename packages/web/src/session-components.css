@@ -4823,3 +4823,175 @@ mark.annotation-highlight {
   height: 28px;
   font-size: 12px;
 }
+
+/* ─── Annotation Panel ────────────────────────────────────────────────────── */
+.annotation-panel {
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.annotation-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.annotation-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.annotation-panel-count {
+  font-size: 11px;
+  color: var(--fg-4);
+  background: var(--surface-3, var(--line));
+  border-radius: 99px;
+  padding: 1px 6px;
+}
+
+.annotation-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.annotation-thread-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.1s;
+  outline: none;
+}
+
+.annotation-thread-item:last-child {
+  border-bottom: none;
+}
+
+.annotation-thread-item:hover {
+  background: var(--surface-2);
+}
+
+.annotation-thread-item:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.annotation-thread-item.is-selected {
+  background: oklch(0.82 0.14 75 / 0.10);
+  border-left: 3px solid oklch(0.75 0.18 75);
+  padding-left: 9px;
+}
+
+.annotation-thread-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.annotation-thread-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.annotation-thread-anchor {
+  font-size: 11px;
+  color: var(--fg-4);
+}
+
+.annotation-thread-quote {
+  margin: 0 0 6px;
+  padding: 3px 8px;
+  border-left: 2px solid var(--line);
+  font-size: 11.5px;
+  color: var(--fg-3);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.annotation-thread-comment {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+.annotation-thread-replies {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+
+.annotation-reply {
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.annotation-reply-author {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.annotation-reply-comment {
+  color: var(--fg);
+}
+
+/* Reply composer inside thread item */
+.annotation-reply-form {
+  margin-top: 6px;
+}
+
+.annotation-reply-textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.annotation-reply-textarea:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.annotation-reply-textarea::placeholder { color: var(--fg-4); }
+
+.annotation-reply-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  align-items: center;
+}
+
+.annotation-reply-submit {
+  height: 26px;
+  font-size: 11.5px;
+}
+
+.annotation-withdraw-btn {
+  height: 26px;
+  font-size: 11.5px;
+  margin-left: auto;
+  color: var(--fg-3);
+}

@@ -44,6 +44,7 @@ interface SessionStoreState {
   planRevision: PlanRevisionState | null;
   annotations: AnnotationThread[];
   selectedAnnotationId: string | null;
+  currentUserId: string | null;
 }
 
 interface SessionStoreActions {
@@ -62,6 +63,9 @@ interface SessionStoreActions {
   sendHumanMessage: (content: string) => void;
   createAnnotation: (anchor: AnnotationAnchor, comment: string) => void;
   selectAnnotation: (id: string | null) => void;
+  replyToAnnotation: (threadId: string, comment: string) => void;
+  withdrawAnnotation: (threadId: string) => void;
+  setCurrentUserId: (id: string | null) => void;
   reset: () => void;
 }
 
@@ -92,6 +96,7 @@ const initialState: SessionStoreState = {
   planRevision: null,
   annotations: [],
   selectedAnnotationId: null,
+  currentUserId: null,
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
@@ -363,6 +368,20 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   selectAnnotation(id) {
     set({ selectedAnnotationId: id });
+  },
+
+  replyToAnnotation(threadId, comment) {
+    const trimmed = comment.trim();
+    if (!trimmed) return;
+    wsHandle?.send({ type: "annotation_reply", thread_id: threadId, comment: trimmed });
+  },
+
+  withdrawAnnotation(threadId) {
+    wsHandle?.send({ type: "annotation_withdraw", thread_id: threadId });
+  },
+
+  setCurrentUserId(id) {
+    set({ currentUserId: id });
   },
 
   reset() {

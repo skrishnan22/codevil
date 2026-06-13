@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import { loadConfig } from "@/lib/config";
-import { getSession } from "@/lib/api-client";
+import { getSession, getAuthMe } from "@/lib/api-client";
 import {
   getInitialWorkspaceTab,
   getWorkspaceTabAfterPreviewToggle,
@@ -21,7 +21,7 @@ export const Route = createFileRoute("/session/$id")({
 
 function SessionPage() {
   const { id } = Route.useParams();
-  const { connectToSession, disconnect, preview } = useSessionStore();
+  const { connectToSession, disconnect, setCurrentUserId, preview } = useSessionStore();
   const previewOn = preview.status === "starting" || preview.status === "ready";
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<WorkspaceTab>(() =>
@@ -38,6 +38,11 @@ function SessionPage() {
           const wsUrl = `${config.endpoint}/sessions/${id}/ws`;
           connectToSession(config, id, wsUrl);
         });
+      void getAuthMe(config).then((auth) => {
+        setCurrentUserId(auth.user?.id ?? null);
+      }).catch(() => {
+        // Auth lookup is best-effort; silently ignore failures.
+      });
     }
     return () => disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SessionState, DOToCLIEvent, CLIToDOMessage, PreviewApp, ParticipantIdentity } from "@codevil/shared";
+import type { SessionState, DOToCLIEvent, CLIToDOMessage, PreviewApp, ParticipantIdentity, AnnotationAnchor } from "@codevil/shared";
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
@@ -58,6 +58,7 @@ interface SessionStoreActions {
   addUserMessage: (content: string) => void;
   sendRoomMessage: (content: string, options?: { planFirst?: boolean }) => void;
   sendHumanMessage: (content: string) => void;
+  createAnnotation: (anchor: AnnotationAnchor, comment: string) => void;
   reset: () => void;
 }
 
@@ -325,6 +326,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       return;
     }
     wsHandle?.send({ type: "human_message", text });
+  },
+
+  createAnnotation(anchor, comment) {
+    const planRevision = get().planRevision;
+    if (!planRevision) return;
+    wsHandle?.send({
+      type: "annotation_create",
+      run_id: planRevision.runId,
+      round: planRevision.round,
+      anchor,
+      comment,
+    });
   },
 
   reset() {

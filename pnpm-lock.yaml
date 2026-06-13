@@ -73,6 +73,9 @@ importers:
       '@codevil/shared':
         specifier: workspace:*
         version: link:../shared
+      '@plannotator/web-highlighter':
+        specifier: 0.8.1
+        version: 0.8.1
       '@tanstack/react-router':
         specifier: ^1
         version: 1.168.24(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -1181,6 +1184,9 @@ packages:
   '@opentelemetry/semantic-conventions@1.41.1':
     resolution: {integrity: sha512-/UhIkaZgPutTFmQ7RnIJGgDXZmtEJ7Dvi86xNTFWcnRxVRNk/aotsqDJYeEvDP+FSMB2SdW+pQzNMcWP0rwuNA==}
     engines: {node: '>=14'}
+
+  '@plannotator/web-highlighter@0.8.1':
+    resolution: {integrity: sha512-FlteNOwRj9iNSY/AhFMtqOnVS4FvsACvTw6IiOM1y8iDyhiU/WeZOgjURENvIY+wuUaiS9DDFmg0PrHMyuMR1Q==}
 
   '@poppinss/colors@4.1.6':
     resolution: {integrity: sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg==}
@@ -5244,6 +5250,8 @@ snapshots:
   '@noble/hashes@2.2.0': {}
 
   '@opentelemetry/semantic-conventions@1.41.1': {}
+
+  '@plannotator/web-highlighter@0.8.1': {}
 
   '@poppinss/colors@4.1.6':
     dependencies:

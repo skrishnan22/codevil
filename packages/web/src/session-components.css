@@ -4757,3 +4757,69 @@ button.current-activity:hover { background: var(--surface-3); }
   border-color: transparent !important;
   box-shadow: none !important;
 }
+
+/* ─── Plan Revision View ──────────────────────────────────────────────────── */
+.plan-revision-view {
+  position: relative;
+}
+
+/* Pending / confirmed annotation highlight wraps */
+mark.annotation-highlight {
+  background: oklch(0.82 0.14 75 / 0.35);
+  border-radius: 2px;
+  color: inherit;
+  padding: 0 1px;
+}
+
+/* ─── Annotation Composer ─────────────────────────────────────────────────── */
+.annotation-composer {
+  position: sticky;
+  bottom: 16px;
+  z-index: 50;
+  margin: 10px 0 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+  padding: 12px;
+  max-width: 480px;
+  animation: composer-in 0.15s ease;
+}
+@keyframes composer-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.annotation-composer-textarea {
+  width: 100%;
+  min-height: 68px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+}
+.annotation-composer-textarea:focus {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.annotation-composer-textarea::placeholder { color: var(--fg-4); }
+.annotation-composer-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+.annotation-composer-submit {
+  height: 28px;
+  font-size: 12px;
+}
+.annotation-composer-cancel {
+  height: 28px;
+  font-size: 12px;
+}

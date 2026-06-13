@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@codevil/shared": "workspace:*",
+    "@plannotator/web-highlighter": "0.8.1",
     "@tanstack/react-router": "^1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

@@ -1,56 +1,16 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ExtraProps } from "react-markdown";
 import { useSessionStore } from "@/stores/session-store";
+import { useAnnotationHighlighter } from "@/hooks/use-annotation-highlighter";
+import type { PendingSelection } from "@/hooks/use-annotation-highlighter";
+import { AnnotationComposer } from "./annotation-composer";
+import { blockIdForNode } from "@/lib/block-id";
+import type { HastNodeWithPosition } from "@/lib/block-id";
 
-/**
- * Minimal structural type for the hast node position we need.
- * This avoids a direct `import from 'hast'` which isn't resolvable in
- * this package without adding @types/hast as a devDependency.
- *
- * `offset` mirrors the optional field in the unist `Point` spec
- * (0-indexed character offset from the start of the document).
- */
-interface HastPoint {
-  line: number;
-  column: number;
-  offset?: number | undefined;
-}
-
-interface HastPosition {
-  start: HastPoint;
-  end: HastPoint;
-}
-
-interface HastNodeWithPosition {
-  position?: HastPosition | undefined;
-}
-
-/**
- * Derive a stable, deterministic block identifier from a hast-like node.
- *
- * Strategy (in order of preference):
- *  1. If the position carries character `offset` values, use
- *     `block-{start.offset}-{end.offset}`.  This is unique for every
- *     distinct source span even when two nodes share the same start line
- *     (e.g. a loose-list `li` and its child `p`).
- *  2. Otherwise fall back to `block-{sl}:{sc}-{el}:{ec}` using line +
- *     column, which is still unique per source span.
- *  3. Returns null when position data is absent (generated / synthetic
- *     nodes) — callers must handle null gracefully.
- *
- * Determinism: the id is derived solely from the frozen source span, so
- * the same markdown always produces the same ids on every client.
- */
-export function blockIdForNode(node: HastNodeWithPosition): string | null {
-  if (!node.position) return null;
-  const { start, end } = node.position;
-  if (start.offset !== undefined && end.offset !== undefined) {
-    return `block-${start.offset}-${end.offset}`;
-  }
-  return `block-${start.line}:${start.column}-${end.line}:${end.column}`;
-}
+// Re-export so existing imports from this module continue to work.
+export { blockIdForNode };
 
 function makeBlockComponent<T extends keyof React.JSX.IntrinsicElements>(Tag: T) {
   return function BlockComponent(props: React.JSX.IntrinsicElements[T] & ExtraProps) {
@@ -84,17 +44,51 @@ const blockComponents = {
 
 export function PlanRevisionView() {
   const planRevision = useSessionStore((state) => state.planRevision);
+  const createAnnotation = useSessionStore((state) => state.createAnnotation);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  const [pendingSelection, setPendingSelection] =
+    useState<PendingSelection | null>(null);
+
+  const { removeHighlight } = useAnnotationHighlighter({
+    rootRef,
+    planRevision,
+    onPendingSelection: setPendingSelection,
+  });
 
   if (!planRevision || !planRevision.markdown) {
     return null;
   }
 
+  function handleComposerSubmit(comment: string) {
+    if (!pendingSelection) return;
+    createAnnotation(pendingSelection.anchor, comment);
+    // Leave the transient <mark> in place — Task 4 will replace it with the
+    // server-confirmed annotation highlight.
+    setPendingSelection(null);
+  }
+
+  function handleComposerCancel() {
+    if (pendingSelection) {
+      removeHighlight(pendingSelection.highlightId);
+    }
+    setPendingSelection(null);
+  }
+
   return (
-    <div ref={rootRef} className="plan-revision-view">
-      <Markdown remarkPlugins={[remarkGfm]} components={blockComponents}>
-        {planRevision.markdown}
-      </Markdown>
+    <div className="plan-revision-view" style={{ position: "relative" }}>
+      <div ref={rootRef} className="plan-revision-view-content">
+        <Markdown remarkPlugins={[remarkGfm]} components={blockComponents}>
+          {planRevision.markdown}
+        </Markdown>
+      </div>
+
+      {pendingSelection && (
+        <AnnotationComposer
+          onSubmit={handleComposerSubmit}
+          onCancel={handleComposerCancel}
+        />
+      )}
     </div>
   );
 }

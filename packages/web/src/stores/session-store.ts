@@ -287,18 +287,23 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   refine(feedback) {
     wsHandle?.send({ type: "refine_plan", feedback });
-    set((state) => ({
-      messages: [
-        ...state.messages,
-        {
-          id: `user_${Date.now()}`,
-          role: "user" as const,
-          variant: "text" as const,
-          content: feedback,
-          timestamp: Date.now(),
-        },
-      ],
-    }));
+    // Only append a chat bubble when there is actual feedback text; the
+    // "Send to agent" path with no note (empty feedback) is now common and
+    // should not produce an empty bubble.
+    if (feedback.trim()) {
+      set((state) => ({
+        messages: [
+          ...state.messages,
+          {
+            id: `user_${Date.now()}`,
+            role: "user" as const,
+            variant: "text" as const,
+            content: feedback,
+            timestamp: Date.now(),
+          },
+        ],
+      }));
+    }
   },
 
   startPreview() {

@@ -4772,6 +4772,12 @@ button.current-activity:hover { background: var(--surface-3); }
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--surface);
+  /* Cap total pane height so actions bar is always reachable.
+   * The pane scrolls when plan + comments together overflow this limit;
+   * .plan-collab-actions is sticky:bottom so it stays pinned in that case. */
+  max-height: min(80vh, 860px);
+  overflow-y: auto;
+  flex-shrink: 0;
 }
 
 .plan-collab-header {
@@ -4817,7 +4823,13 @@ button.current-activity:hover { background: var(--surface-3); }
 }
 
 .plan-revision-view-content {
-  /* Fix 2: no cramped fixed cap — let the pane scroll naturally */
+  /* Cap the scrollable plan content so the action bar stays reachable on a
+   * long plan. The value is generous (nowhere near the old 320px) but keeps
+   * the header and .plan-collab-actions outside the scroll region so they are
+   * always visible. The comments/AnnotationPanel sit below this element and
+   * above the action bar — they are typically short and stay unbound. */
+  max-height: min(58vh, 620px);
+  overflow-y: auto;
   padding-right: 4px;
 }
 
@@ -4980,6 +4992,12 @@ button.current-activity:hover { background: var(--surface-3); }
   padding-top: 12px;
   border-top: 1px solid var(--line-2);
   flex-wrap: wrap;
+  /* Stays pinned at the bottom of .plan-collab-pane (the scroll container)
+   * so the action bar is always reachable even when plan + comments overflow. */
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  margin-top: auto;
 }
 
 .plan-collab-note-input {

@@ -97,10 +97,6 @@ function SessionPage() {
     setAgentNote("");
   }
 
-  function handleApprove() {
-    approve();
-  }
-
   return (
     <div className="session-shell">
       <SessionTopBar />
@@ -143,13 +139,13 @@ function SessionPage() {
                   </button>
                   <button
                     className="btn btn-ghost"
-                    onClick={handleApprove}
+                    onClick={approve}
                     title="Approve the plan and start execution"
                   >
                     Approve
                   </button>
-                  {!sendEnabled && openCount === 0 && agentNote.trim() === "" && (
-                    <span className="plan-collab-hint">Add a comment to send</span>
+                  {!sendEnabled && (
+                    <span className="plan-collab-hint">Add a comment or note to send</span>
                   )}
                 </div>
               )}

@@ -14,6 +14,9 @@ import { Timeline } from "@/components/session/Timeline";
 import { ChatInput } from "@/components/session/ChatInput";
 import { WorkspacePane } from "@/components/session/workspace-pane";
 import { RoomHeader } from "@/components/session/room-header";
+import { PlanRevisionView } from "@/components/session/plan-revision-view";
+import { AnnotationPanel } from "@/components/session/annotation-panel";
+import { ConflictPanel } from "@/components/session/conflict-panel";
 
 export const Route = createFileRoute("/session/$id")({
   component: SessionPage,
@@ -21,7 +24,14 @@ export const Route = createFileRoute("/session/$id")({
 
 function SessionPage() {
   const { id } = Route.useParams();
-  const { connectToSession, disconnect, setCurrentUserId, preview } = useSessionStore();
+  const {
+    connectToSession,
+    disconnect,
+    setCurrentUserId,
+    setSessionCreatorId,
+    preview,
+    planRevision,
+  } = useSessionStore();
   const previewOn = preview.status === "starting" || preview.status === "ready";
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<WorkspaceTab>(() =>
@@ -33,8 +43,12 @@ function SessionPage() {
     const config = loadConfig();
     if (config) {
       void getSession(config, id)
-        .then((session) => connectToSession(config, id, session.ws_url))
+        .then((session) => {
+          setSessionCreatorId(session.session.created_by?.id ?? null);
+          connectToSession(config, id, session.ws_url);
+        })
         .catch(() => {
+          setSessionCreatorId(null);
           const wsUrl = `${config.endpoint}/sessions/${id}/ws`;
           connectToSession(config, id, wsUrl);
         });
@@ -69,6 +83,22 @@ function SessionPage() {
       <div className="session-workbench">
         <section className="conversation-pane" aria-label="Conversation">
           <RoomHeader />
+          {planRevision && (
+            <section className="plan-collab-pane" aria-label="Plan collaboration">
+              <div className="plan-collab-header">
+                <div>
+                  <p className="plan-collab-eyebrow">Plan collaboration</p>
+                  <h2 className="plan-collab-title">Round {planRevision.round + 1}</h2>
+                </div>
+                <span className={`plan-collab-state${planRevision.locked ? " is-locked" : ""}`}>
+                  {planRevision.locked ? "Locked" : "Open for comments"}
+                </span>
+              </div>
+              <PlanRevisionView />
+              <ConflictPanel />
+              <AnnotationPanel />
+            </section>
+          )}
           <Timeline
             onOpenActivity={handleOpenActivity}
           />

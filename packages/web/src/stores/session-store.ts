@@ -1,5 +1,15 @@
 import { create } from "zustand";
-import type { SessionState, DOToCLIEvent, CLIToDOMessage, PreviewApp, ParticipantIdentity, AnnotationAnchor, AnnotationThread, AnnotationReply } from "@codevil/shared";
+import type {
+  SessionState,
+  DOToCLIEvent,
+  CLIToDOMessage,
+  PreviewApp,
+  ParticipantIdentity,
+  AnnotationAnchor,
+  AnnotationThread,
+  AnnotationReply,
+  AnnotationConflict,
+} from "@codevil/shared";
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
@@ -43,8 +53,10 @@ interface SessionStoreState {
   preview: PreviewState;
   planRevision: PlanRevisionState | null;
   annotations: AnnotationThread[];
+  conflicts: AnnotationConflict[];
   selectedAnnotationId: string | null;
   currentUserId: string | null;
+  sessionCreatorId: string | null;
 }
 
 interface SessionStoreActions {
@@ -66,6 +78,11 @@ interface SessionStoreActions {
   replyToAnnotation: (threadId: string, comment: string) => void;
   withdrawAnnotation: (threadId: string) => void;
   setCurrentUserId: (id: string | null) => void;
+  setSessionCreatorId: (id: string | null) => void;
+  resolveConflict: (
+    conflictId: string,
+    resolution: { selectedThreadId?: string; decidingInstruction?: string },
+  ) => void;
   reset: () => void;
 }
 
@@ -95,8 +112,10 @@ const initialState: SessionStoreState = {
   },
   planRevision: null,
   annotations: [],
+  conflicts: [],
   selectedAnnotationId: null,
   currentUserId: null,
+  sessionCreatorId: null,
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
@@ -157,7 +176,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         preview: initialState.preview,
         planRevision: null,
         annotations: [],
+        conflicts: [],
         selectedAnnotationId: null,
+        sessionCreatorId: null,
       }),
       sessionId,
       wsUrl,
@@ -191,6 +212,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
           const annotationsAfterRevisionReset = isNewRevision ? [] : state.annotations;
           const annotations = reduceAnnotations(annotationsAfterRevisionReset, envelope.event);
+          const conflictsAfterRevisionReset = isNewRevision ? [] : state.conflicts;
+          const conflicts = reduceConflicts(conflictsAfterRevisionReset, envelope.event);
 
           return {
             cursor: envelope.cursor,
@@ -200,6 +223,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             participants,
             planRevision,
             annotations,
+            conflicts,
             ...(isNewRevision ? { selectedAnnotationId: null } : {}),
           };
         });
@@ -384,6 +408,30 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ currentUserId: id });
   },
 
+  setSessionCreatorId(id) {
+    set({ sessionCreatorId: id });
+  },
+
+  resolveConflict(conflictId, resolution) {
+    const selectedThreadId = resolution.selectedThreadId?.trim();
+    const decidingInstruction = resolution.decidingInstruction?.trim();
+    if (selectedThreadId) {
+      wsHandle?.send({
+        type: "conflict_resolve",
+        conflict_id: conflictId,
+        selected_thread_id: selectedThreadId,
+      });
+      return;
+    }
+    if (decidingInstruction) {
+      wsHandle?.send({
+        type: "conflict_resolve",
+        conflict_id: conflictId,
+        deciding_instruction: decidingInstruction,
+      });
+    }
+  },
+
   reset() {
     connectionGeneration++;
     wsHandle?.close();
@@ -406,6 +454,10 @@ export function inferPhase(
     case "plan_ready":
     case "approval_requested":
       return "awaiting_approval";
+    case "conflict_raised":
+      return "awaiting_resolution";
+    case "brief_dispatched":
+      return "refining";
     case "agent_run_started":
       return "executing";
     case "agent_run_completed":
@@ -595,6 +647,44 @@ export function reduceAnnotations(
       });
       return changed ? next : current;
     }
+    default:
+      return current;
+  }
+}
+
+export function reduceConflicts(
+  current: AnnotationConflict[],
+  event: DOToCLIEvent,
+): AnnotationConflict[] {
+  switch (event.type) {
+    case "conflict_raised": {
+      const index = current.findIndex((conflict) => conflict.id === event.conflict.id);
+      if (index === -1) return [...current, event.conflict];
+      const existing = current[index];
+      const replacement = event.conflict;
+      if (
+        existing.summary === replacement.summary
+        && existing.status === replacement.status
+        && existing.run_id === replacement.run_id
+        && existing.round === replacement.round
+        && JSON.stringify(existing.options) === JSON.stringify(replacement.options)
+      ) {
+        return current;
+      }
+      return current.map((conflict, conflictIndex) =>
+        conflictIndex === index ? replacement : conflict,
+      );
+    }
+    case "conflict_resolved": {
+      const index = current.findIndex((conflict) => conflict.id === event.conflict_id);
+      if (index === -1) return current;
+      if (current[index].status === "resolved") return current;
+      return current.map((conflict, conflictIndex) =>
+        conflictIndex === index ? { ...conflict, status: "resolved" as const } : conflict,
+      );
+    }
+    case "brief_dispatched":
+      return [];
     default:
       return current;
   }

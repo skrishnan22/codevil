@@ -16,32 +16,11 @@ import { WorkspacePane } from "@/components/session/workspace-pane";
 import { RoomHeader } from "@/components/session/room-header";
 import { PlanReviewPanel } from "@/components/session/plan-review-panel";
 import { openThreadsSorted } from "@/lib/annotation-predicates";
+import { revisionKey, shouldAutoOpen } from "@/lib/plan-review";
 
 export const Route = createFileRoute("/session/$id")({
   component: SessionPage,
 });
-
-/**
- * Returns a stable key string for the current plan revision, or null when
- * there is no revision. Used to detect when a new revision arrives so we can
- * auto-open the review panel exactly once per revision.
- */
-export function revisionKey(runId: string, round: number): string {
-  return `${runId}:${round}`;
-}
-
-/**
- * Pure predicate: should we auto-open the panel for this revision?
- * Returns true when the revision key has changed from the last-seen key.
- * Extractable as a pure function so it can be unit-tested without jsdom.
- */
-export function shouldAutoOpen(
-  lastSeenKey: string | null,
-  currentKey: string | null,
-): boolean {
-  if (currentKey === null) return false;
-  return currentKey !== lastSeenKey;
-}
 
 function SessionPage() {
   const { id } = Route.useParams();

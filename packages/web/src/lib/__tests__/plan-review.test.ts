@@ -1,9 +1,9 @@
 /**
- * Unit tests for the pure auto-open helpers exported from session.$id.tsx.
+ * Unit tests for the pure auto-open helpers in lib/plan-review.ts.
  * These run in node (no jsdom needed).
  */
 import { describe, it, expect } from "vitest";
-import { revisionKey, shouldAutoOpen } from "../session.$id";
+import { revisionKey, shouldAutoOpen } from "../plan-review";
 
 describe("revisionKey", () => {
   it("combines runId and round with a colon", () => {

@@ -5,7 +5,8 @@
  * surface (PlanRevisionView + ConflictPanel + AnnotationPanel + action bar).
  *
  * Layout guarantee:
- *   - The panel is `display:flex; flex-direction:column; height:100vh`.
+ *   - The panel is `position:fixed; top:0; bottom:0; display:flex; flex-direction:column`.
+ *     top+bottom define the height (no explicit height) to avoid mobile-chrome under-counting.
  *   - Header and Footer are `flex:none` — they never shrink.
  *   - Body is `flex:1; min-height:0; overflow-y:auto` — it scrolls and absorbs
  *     all remaining space, so the footer is ALWAYS visible.
@@ -17,7 +18,7 @@
  *   anywhere else while this panel can be open.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import { openThreadsSorted, canSendToAgent, sendToAgentLabel } from "@/lib/annotation-predicates";
 import { PlanRevisionView } from "./plan-revision-view";
@@ -35,14 +36,36 @@ export function PlanReviewPanel({ onClose }: PlanReviewPanelProps) {
   const approve = useSessionStore((state) => state.approve);
 
   const [agentNote, setAgentNote] = useState("");
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Close on Escape key.
+  // Focus management, scroll-lock, and Escape-to-close.
+  // On mount: lock background scroll, store the trigger element, and focus the
+  // close button so keyboard users land inside the dialog immediately.
+  // On unmount: restore scroll and return focus to the element that opened the panel.
   useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    // Defer focus so the browser has rendered the panel.
+    const frameId = requestAnimationFrame(() => {
+      closeButtonRef.current?.focus();
+    });
+
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
     document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      // Return focus to the trigger only when it is still in the document.
+      if (trigger && document.contains(trigger)) {
+        trigger.focus();
+      }
+    };
   }, [onClose]);
 
   if (!planRevision) return null;
@@ -90,8 +113,9 @@ export function PlanReviewPanel({ onClose }: PlanReviewPanelProps) {
               </span>
             )}
             <button
+              ref={closeButtonRef}
               type="button"
-              className="plan-slideout-close"
+              className="plan-review-panel-close"
               onClick={onClose}
               aria-label="Close plan review"
             >

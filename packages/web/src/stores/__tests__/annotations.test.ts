@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { reduceAnnotations } from "../session-store";
-import { findTextOffset } from "../../hooks/use-annotation-highlighter";
+import { findTextOffset, diffAnnotations } from "../../hooks/use-annotation-highlighter";
 import type { AnnotationThread, AnnotationReply } from "@codevil/shared";
 
 // ---------------------------------------------------------------------------
@@ -121,7 +121,6 @@ describe("reduceAnnotations: annotation_replied", () => {
       reply: makeReply("r1", { comment: "duplicate" }),
     });
     // Same array reference — no change
-    expect(result).toBe(result); // just confirm it doesn't throw
     expect(result[0].replies).toHaveLength(1);
     expect(result[0].replies![0].comment).toBe("Reply r1");
   });
@@ -352,5 +351,78 @@ describe("findTextOffset", () => {
 
   it("returns the first occurrence when needle appears multiple times", () => {
     expect(findTextOffset("ababab", "ab")).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// diffAnnotations — pure reconcile set-diffing helper
+// ---------------------------------------------------------------------------
+
+describe("diffAnnotations", () => {
+  it("open annotation not yet applied → appears in toApply", () => {
+    const t1 = makeThread("t1"); // status: "open"
+    const { toApply, toRemove } = diffAnnotations([t1], new Set());
+    expect(toApply).toHaveLength(1);
+    expect(toApply[0]).toBe(t1);
+    expect(toRemove).toHaveLength(0);
+  });
+
+  it("applied annotation that is now withdrawn → appears in toRemove", () => {
+    const t1 = makeThread("t1", { status: "withdrawn" });
+    const { toApply, toRemove } = diffAnnotations([t1], new Set(["t1"]));
+    expect(toApply).toHaveLength(0);
+    expect(toRemove).toEqual(["t1"]);
+  });
+
+  it("applied annotation that is now consumed → appears in toRemove", () => {
+    const t1 = makeThread("t1", { status: "consumed" });
+    const { toApply, toRemove } = diffAnnotations([t1], new Set(["t1"]));
+    expect(toApply).toHaveLength(0);
+    expect(toRemove).toEqual(["t1"]);
+  });
+
+  it("applied annotation that is now absent from the list → appears in toRemove", () => {
+    const { toApply, toRemove } = diffAnnotations([], new Set(["t1"]));
+    expect(toApply).toHaveLength(0);
+    expect(toRemove).toEqual(["t1"]);
+  });
+
+  it("withdrawn annotation never applied → neither toApply nor toRemove", () => {
+    const t1 = makeThread("t1", { status: "withdrawn" });
+    const { toApply, toRemove } = diffAnnotations([t1], new Set());
+    expect(toApply).toHaveLength(0);
+    expect(toRemove).toHaveLength(0);
+  });
+
+  it("idempotent: already-applied open annotation → empty/empty", () => {
+    const t1 = makeThread("t1"); // status: "open"
+    const { toApply, toRemove } = diffAnnotations([t1], new Set(["t1"]));
+    expect(toApply).toHaveLength(0);
+    expect(toRemove).toHaveLength(0);
+  });
+
+  it("dedupe: same id appearing only once even if passed as array", () => {
+    const t1 = makeThread("t1");
+    // appliedIds as array (the function accepts both Set and string[])
+    const { toApply, toRemove } = diffAnnotations([t1], ["t1"]);
+    expect(toApply).toHaveLength(0);
+    expect(toRemove).toHaveLength(0);
+  });
+
+  it("accepts appliedIds as string[] in addition to Set", () => {
+    const t1 = makeThread("t1");
+    const { toApply, toRemove } = diffAnnotations([t1], []);
+    expect(toApply).toHaveLength(1);
+    expect(toApply[0]).toBe(t1);
+    expect(toRemove).toHaveLength(0);
+  });
+
+  it("mixed scenario: one to apply, one to remove", () => {
+    const t1 = makeThread("t1"); // open, not applied
+    const t2 = makeThread("t2", { status: "withdrawn" }); // withdrawn, was applied
+    const { toApply, toRemove } = diffAnnotations([t1, t2], new Set(["t2"]));
+    expect(toApply).toHaveLength(1);
+    expect(toApply[0]).toBe(t1);
+    expect(toRemove).toEqual(["t2"]);
   });
 });

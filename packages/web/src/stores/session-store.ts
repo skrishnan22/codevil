@@ -195,6 +195,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             participants,
             planRevision,
             annotations,
+            ...(isNewRevision ? { selectedAnnotationId: null } : {}),
           };
         });
 

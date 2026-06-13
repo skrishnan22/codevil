@@ -59,7 +59,7 @@ export interface UseAnnotationHighlighterReturn {
 }
 
 /**
- * findTextInElement
+ * findTextOffset
  *
  * Pure helper: given an element's text content and an anchor text, returns the
  * start character offset of the first occurrence of `needle` within the
@@ -70,6 +70,39 @@ export interface UseAnnotationHighlighterReturn {
 export function findTextOffset(haystack: string, needle: string): number {
   if (!needle) return -1;
   return haystack.indexOf(needle);
+}
+
+/**
+ * diffAnnotations
+ *
+ * Pure helper: given the current annotation list and the set of already-applied
+ * ids, returns which annotations need to be applied and which applied ids need
+ * to be removed.
+ *
+ *  - `toApply`:  threads with status === "open" whose id is NOT in appliedIds.
+ *  - `toRemove`: ids in appliedIds that are NOT the id of a currently-open annotation
+ *                (i.e. withdrawn, consumed, or absent from the list).
+ *
+ * Exported so it can be unit-tested in a Node environment without DOM.
+ */
+export function diffAnnotations(
+  annotations: AnnotationThread[],
+  appliedIds: Set<string> | string[],
+): { toApply: AnnotationThread[]; toRemove: string[] } {
+  const appliedSet =
+    appliedIds instanceof Set ? appliedIds : new Set(appliedIds);
+
+  const openIds = new Set(
+    annotations.filter((t) => t.status === "open").map((t) => t.id),
+  );
+
+  const toApply = annotations.filter(
+    (t) => t.status === "open" && !appliedSet.has(t.id),
+  );
+
+  const toRemove = [...appliedSet].filter((id) => !openIds.has(id));
+
+  return { toApply, toRemove };
 }
 
 /**
@@ -216,24 +249,33 @@ export function useAnnotationHighlighter({
         const currentAnnotations = annotationsRef.current;
         const applied = appliedIdsRef.current;
 
-        // --- Apply open annotations that haven't been applied yet ---
-        for (const thread of currentAnnotations) {
-          if (thread.status !== "open") continue;
-          if (applied.has(thread.id)) continue;
+        const { toApply, toRemove } = diffAnnotations(currentAnnotations, applied);
 
+        // --- Apply open annotations that haven't been applied yet ---
+        for (const thread of toApply) {
           const { anchor } = thread;
-          hl.fromStore(
+
+          // Idempotency guard: if a highlight already exists (from a prior
+          // partial apply or fallback), just register it as applied and skip.
+          const alreadyHighlighted =
+            hl.getDoms(thread.id).length > 0 ||
+            !!root.querySelector(`mark[data-bind-id="${thread.id}"]`);
+          if (alreadyHighlighted) {
+            applied.add(thread.id);
+            continue;
+          }
+
+          const fromStoreResult = hl.fromStore(
             anchor.startMeta as DomMeta,
             anchor.endMeta as DomMeta,
             anchor.text,
             thread.id,
           );
 
-          const doms = hl.getDoms(thread.id);
-          if (doms.length > 0) {
+          if (fromStoreResult !== null && hl.getDoms(thread.id).length > 0) {
             applied.add(thread.id);
           } else {
-            // Restore failed — try quote-search fallback in the block element.
+            // fromStore failed — try quote-search fallback in the block element.
             const blockEl = root.querySelector<HTMLElement>(
               `[data-block-id="${anchor.blockId}"]`,
             );
@@ -246,18 +288,10 @@ export function useAnnotationHighlighter({
         }
 
         // --- Remove highlights for threads that are no longer open ---
-        const openIds = new Set(
-          currentAnnotations
-            .filter((t) => t.status === "open")
-            .map((t) => t.id),
-        );
-
-        for (const id of [...applied]) {
-          if (!openIds.has(id)) {
-            hl.remove(id);
-            removeFallbackMark(root, id);
-            applied.delete(id);
-          }
+        for (const id of toRemove) {
+          hl.remove(id);
+          removeFallbackMark(root, id);
+          applied.delete(id);
         }
       };
 

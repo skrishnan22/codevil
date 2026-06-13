@@ -3,7 +3,7 @@
 
 const MAX_NAME_LENGTH = 64;
 const ANONYMOUS = "Anonymous";
-const PARTICIPANT_ID_PATTERN = /^usr_[a-zA-Z0-9_-]{1,64}$/;
+const PARTICIPANT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
 // Non-whitespace control characters (C0 controls except tab/newline/CR, plus
 // DEL). These are deleted outright; tab/newline/CR are handled by whitespace

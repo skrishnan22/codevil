@@ -48,7 +48,12 @@ export function authActionForClientMessage(message: CLIToDOMessage): AuthAction 
     case "refine_plan":
     case "refine_run":
     case "preview_stop":
+    case "question_answer":
       return "sessions:control";
+    default: {
+      const _exhaustive: never = message;
+      throw new Error(`Unhandled client message type: ${(_exhaustive as { type?: string }).type}`);
+    }
   }
 }
 

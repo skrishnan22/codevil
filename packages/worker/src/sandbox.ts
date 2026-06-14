@@ -177,5 +177,7 @@ export function mapSandboxMessageToCLIEvents(message: SandboxToDOMessage): DOToC
       return [{ type: "preview_apps", apps: message.apps }];
     case "error":
       return [{ type: "error", message: message.message }];
+    default:
+      return [];
   }
 }

@@ -116,67 +116,6 @@ test("init uses credential_response for authenticated GitHub clone", async () =>
   ]);
 });
 
-test("consolidate_annotations uses a fresh agent and emits structured result", async () => {
-  const sent = [];
-  const git = new FakeGitDriver();
-  const agents = [];
-  const runtime = new SandboxRuntime({
-    workspace: "/workspace",
-    send: (message) => sent.push(message),
-    agentFactory: () => {
-      const agent = new FakeAgentDriver({
-        consolidation: {
-          brief_items: [
-            { instruction: "Use D1-backed storage.", source_thread_ids: ["ann_1"] },
-          ],
-          conflicts: [],
-        },
-      });
-      agents.push(agent);
-      return agent;
-    },
-    git,
-    credentialTimeoutMs: 0,
-  });
-
-  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
-  sent.length = 0;
-
-  await runtime.handleMessage({
-    type: "consolidate_annotations",
-    run_id: "run_1",
-    round: 0,
-    plan_revision_id: "run_1:0",
-    plan: "## Plan",
-    annotations: [
-      {
-        id: "ann_1",
-        anchoredQuote: "Redis",
-        sourceLine: 3,
-        authorName: "Alice",
-        comment: "Use D1-backed storage.",
-        replies: [],
-      },
-    ],
-    conflicts: [],
-    model: "claude-sonnet-4-6",
-  });
-
-  assert.deepEqual(sent, [{
-    type: "consolidation_complete",
-    run_id: "run_1",
-    round: 0,
-    brief_items: [
-      { instruction: "Use D1-backed storage.", source_thread_ids: ["ann_1"] },
-    ],
-    conflicts: [],
-    cost: zeroCost,
-  }]);
-  assert.equal(agents.length, 1);
-  assert.equal(agents[0].calls[0][0], "consolidateAnnotations");
-  assert.deepEqual(agents[0].disposed, true);
-});
-
 test("consolidate_annotations emits brief (not brief_items) when agent returns the prose path", async () => {
   const sent = [];
   const git = new FakeGitDriver();

@@ -12,8 +12,6 @@ import {
 import { Type } from "@sinclair/typebox";
 
 import {
-  AnnotationConflictSchema,
-  BriefItemSchema,
   type CostInfo,
 } from "@codevil/shared";
 
@@ -265,112 +263,6 @@ export function consolidationPrompt(input: ConsolidationInput): string {
     "Existing conflicts JSON (already resolved by prior rounds — incorporate their resolutions if present):",
     JSON.stringify(input.conflicts),
   ].join("\n");
-}
-
-/**
- * Normalize raw LLM brief_items output into valid BriefItem objects.
- * Strings are coerced to { instruction, source_thread_ids: [] }.
- * Objects with missing/null fields get safe defaults.
- * Entries with empty instruction after trim are dropped.
- */
-export function normalizeBriefItems(raw: unknown): Array<{ instruction: string; source_thread_ids: string[] }> {
-  if (!Array.isArray(raw)) return [];
-  const result: Array<{ instruction: string; source_thread_ids: string[] }> = [];
-  for (const entry of raw) {
-    let instruction: string;
-    let source_thread_ids: string[];
-    if (typeof entry === "string") {
-      instruction = entry.trim();
-      source_thread_ids = [];
-    } else if (isRecord(entry)) {
-      instruction = String(entry.instruction ?? entry.text ?? "").trim();
-      source_thread_ids = Array.isArray(entry.source_thread_ids)
-        ? entry.source_thread_ids.filter((x): x is string => typeof x === "string")
-        : [];
-    } else {
-      continue;
-    }
-    if (!instruction) continue;
-    result.push({ instruction, source_thread_ids });
-  }
-  return result;
-}
-
-/**
- * Normalize raw LLM conflicts output into valid AnnotationConflict objects.
- * The system synthesizes id, run_id, round, and status — the LLM provides only summary + options.
- * Conflicts with fewer than 2 valid options or empty summary are dropped.
- */
-export function normalizeConflicts(
-  raw: unknown,
-  runId: string,
-  round: number,
-): Array<{ id: string; run_id: string; round: number; summary: string; options: Array<{ thread_id: string; gist: string }>; status: "open" }> {
-  if (!Array.isArray(raw)) return [];
-  const result: Array<{ id: string; run_id: string; round: number; summary: string; options: Array<{ thread_id: string; gist: string }>; status: "open" }> = [];
-  for (const entry of raw) {
-    if (!isRecord(entry)) continue;
-    const summary = String(entry.summary ?? "").trim();
-    if (!summary) continue;
-    const rawOptions = Array.isArray(entry.options) ? entry.options : [];
-    const options: Array<{ thread_id: string; gist: string }> = [];
-    for (const opt of rawOptions) {
-      if (!isRecord(opt)) continue;
-      const thread_id = String(opt.thread_id ?? "").trim();
-      const gist = String(opt.gist ?? "").trim();
-      if (!thread_id || !gist) continue;
-      options.push({ thread_id, gist });
-    }
-    if (options.length < 2) continue;
-    result.push({
-      id: `conf_${crypto.randomUUID().replace(/-/g, "")}`,
-      run_id: runId,
-      round,
-      summary,
-      options,
-      status: "open",
-    });
-  }
-  return result;
-}
-
-export function parseConsolidationResult(text: string, runId = "unknown", round = 0): ConsolidationResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(extractJsonObject(text));
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      throw new Error("Consolidation did not return valid JSON");
-    }
-    throw err;
-  }
-  const normalizedBriefItems = normalizeBriefItems((parsed as Record<string, unknown>).brief_items);
-  const briefItems = BriefItemSchema.array().parse(normalizedBriefItems);
-  const rawConflicts = (parsed as Record<string, unknown>).conflicts;
-  const rawConflictCount = Array.isArray(rawConflicts) ? rawConflicts.length : 0;
-  const normalizedConflicts = normalizeConflicts(rawConflicts, runId, round);
-  if (normalizedConflicts.length < rawConflictCount) {
-    const dropped = rawConflictCount - normalizedConflicts.length;
-    console.warn(`consolidation: dropped ${dropped} malformed conflict(s) from LLM output`);
-  }
-  const conflicts = AnnotationConflictSchema.array().parse(normalizedConflicts);
-  return {
-    brief_items: briefItems,
-    conflicts,
-    cost: zeroCost,
-  };
-}
-
-function extractJsonObject(text: string): string {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced) return fenced[1].trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start === -1 || end === -1 || end < start) {
-    throw new Error("Consolidation did not return a JSON object");
-  }
-  return trimmed.slice(start, end + 1);
 }
 
 function assistantText(message: unknown): string {

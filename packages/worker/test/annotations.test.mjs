@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { toConsolidationAnnotations } from "../dist/annotations.js";
+import { proseBriefFromNote, toConsolidationAnnotations } from "../dist/annotations.js";
 
 // Minimal valid AnnotationAnchor fixture
 const validAnchor = {
@@ -114,4 +114,27 @@ test("toConsolidationAnnotations: thread with undefined replies treated as no re
   const { replies: _dropped, ...threadWithoutReplies } = threadNoReplies;
   const result = toConsolidationAnnotations([{ ...threadWithoutReplies }]);
   assert.deepEqual(result[0].replies, []);
+});
+
+test("proseBriefFromNote: feedback only (no threads)", () => {
+  const brief = proseBriefFromNote("Tighten the error handling.", []);
+  assert.equal(brief, "Tighten the error handling.");
+});
+
+test("proseBriefFromNote: feedback plus one thread (with replies)", () => {
+  const brief = proseBriefFromNote("Tighten the error handling.", [threadWithReply]);
+  assert.equal(
+    brief,
+    "Tighten the error handling.\n\nConsider edge caching here. Replies: Alice: Good point, will update.",
+  );
+});
+
+test("proseBriefFromNote: one thread without feedback or replies", () => {
+  const brief = proseBriefFromNote("", [threadNoReplies]);
+  assert.equal(brief, "Use D1-backed storage instead.");
+});
+
+test("proseBriefFromNote: empty feedback and no threads falls back", () => {
+  assert.equal(proseBriefFromNote("", []), "Refine the plan.");
+  assert.equal(proseBriefFromNote("   ", []), "Refine the plan.");
 });

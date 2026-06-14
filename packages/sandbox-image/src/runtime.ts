@@ -7,7 +7,6 @@ import type {
   DOToSandboxMessage,
   AnnotationConflict,
   ConsolidationAnnotation,
-  BriefItem,
   PreviewApp,
   PreviewFramework,
   SandboxToDOMessage,
@@ -91,11 +90,8 @@ export interface ConsolidationInput {
 }
 
 export interface ConsolidationResult {
-  /** Prose brief emitted by the new ask_question-aware consolidation path. */
-  brief?: string;
-  /** Legacy structured path (Task 6 removes these). */
-  brief_items?: BriefItem[];
-  conflicts?: AnnotationConflict[];
+  /** Prose brief emitted by the ask_question-aware consolidation path. */
+  brief: string;
   cost: CostInfo;
 }
 
@@ -562,26 +558,13 @@ export class SandboxRuntime {
         },
       );
 
-      if (result.brief !== undefined) {
-        // New prose path: emit brief only (Task 6 removes the old fields entirely).
-        this.send({
-          type: "consolidation_complete",
-          run_id: message.run_id,
-          round: message.round,
-          brief: result.brief,
-          cost: result.cost ?? zeroCost(),
-        });
-      } else {
-        // Legacy structured path: brief_items + conflicts (unchanged; removed in Task 6).
-        this.send({
-          type: "consolidation_complete",
-          run_id: message.run_id,
-          round: message.round,
-          brief_items: result.brief_items ?? [],
-          conflicts: result.conflicts,
-          cost: result.cost ?? zeroCost(),
-        });
-      }
+      this.send({
+        type: "consolidation_complete",
+        run_id: message.run_id,
+        round: message.round,
+        brief: result.brief,
+        cost: result.cost ?? zeroCost(),
+      });
     } catch (error) {
       this.send({
         type: "consolidation_failed",
@@ -1008,12 +991,9 @@ function addCost(left: CostInfo, right: CostInfo): CostInfo {
 }
 
 function fallbackConsolidation(annotations: ConsolidationAnnotation[]): ConsolidationResult {
+  const brief = annotations.map((annotation) => annotation.comment).join("\n\n");
   return {
-    brief_items: annotations.map((annotation) => ({
-      instruction: annotation.comment,
-      source_thread_ids: [annotation.id],
-    })),
-    conflicts: [] as AnnotationConflict[],
+    brief: brief.length > 0 ? brief : "Refine the plan.",
     cost: zeroCost(),
   };
 }

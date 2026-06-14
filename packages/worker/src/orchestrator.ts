@@ -10,8 +10,6 @@ import type {
   AgentRunState,
   AnnotationAnchor,
   AnnotationThread,
-  AnnotationConflict,
-  BriefItem,
   AnswerableBy,
 } from "@codevil/shared";
 import {
@@ -51,7 +49,7 @@ import {
   finishActiveAgentRun,
   type AgentRun,
 } from "./agent-runs.js";
-import { toConsolidationAnnotations } from "./annotations.js";
+import { proseBriefFromNote, toConsolidationAnnotations } from "./annotations.js";
 import { activeMembershipByUserSelect, type MembershipRow } from "./memberships.js";
 import {
   authorizeSocketMessage,
@@ -85,7 +83,6 @@ interface SessionMeta {
   verification_attempts: number;
   cost_total_usd: number;
   latest_plan?: string;
-  pending_brief_items?: BriefItem[];
   active_run?: AgentRun | null;
   queued_runs: AgentRun[];
   created_by?: ParticipantIdentity;
@@ -170,23 +167,6 @@ export class Orchestrator extends DurableObject<Env> {
         author_id TEXT NOT NULL,
         author_name TEXT NOT NULL,
         body TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS annotation_conflicts (
-        id TEXT PRIMARY KEY,
-        revision_run_id TEXT NOT NULL,
-        revision_round INTEGER NOT NULL,
-        summary TEXT NOT NULL,
-        options_json TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS conflict_resolutions (
-        conflict_id TEXT PRIMARY KEY,
-        decider_id TEXT NOT NULL,
-        decider_name TEXT NOT NULL,
-        selected_thread_id TEXT,
-        deciding_instruction TEXT,
         created_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS questions (
@@ -379,9 +359,6 @@ export class Orchestrator extends DurableObject<Env> {
       case "annotation_withdraw":
         this.handleAnnotationWithdraw(msg.thread_id, participant);
         break;
-      case "conflict_resolve":
-        this.handleConflictResolve(msg, participant, socketAuth?.userId ?? null, authz.role ?? null);
-        break;
       case "question_answer":
         this.handleQuestionAnswer(msg, participant, socketAuth?.userId ?? null, authz.role ?? null);
         break;
@@ -569,17 +546,6 @@ export class Orchestrator extends DurableObject<Env> {
 
     if (!this.ensureActiveRun(runId)) return;
 
-    if (this.meta.state === "awaiting_resolution") {
-      if (!this.canDecideConflicts(userId ?? null, role ?? null)) {
-        this.appendAndBroadcast({ type: "error", message: "Only the session creator can resolve plan feedback conflicts." });
-        return;
-      }
-      this.recordDecision({ actor, action: "approve", refinement_round: this.meta.refinement_round });
-      this.discardOpenConflicts(this.meta.active_run!.id, this.meta.refinement_round);
-      this.dispatchResolvedRefinementBrief([]);
-      return;
-    }
-
     if (this.meta.state !== "awaiting_approval") {
       this.appendAndBroadcast(this.decisionRejection("approve", `Cannot approve in state: ${this.meta.state}`));
       return;
@@ -599,57 +565,6 @@ export class Orchestrator extends DurableObject<Env> {
         model: this.meta.exec_model,
         provider: this.meta.provider,
       });
-    }
-  }
-
-  private handleConflictResolve(
-    msg: Extract<CLIToDOMessage, { type: "conflict_resolve" }>,
-    actor: ParticipantIdentity,
-    userId: string | null,
-    role: MembershipRow["role"] | null,
-  ): void {
-    if (!this.meta?.active_run) return;
-    if (this.meta.state !== "awaiting_resolution") {
-      this.appendAndBroadcast({ type: "error", message: `Cannot resolve conflicts in state: ${this.meta.state}` });
-      return;
-    }
-    if (!this.canDecideConflicts(userId, role)) {
-      this.appendAndBroadcast({ type: "error", message: "Only the session creator can resolve plan feedback conflicts." });
-      return;
-    }
-
-    const conflict = this.loadConflict(msg.conflict_id);
-    if (!conflict || conflict.status !== "open") {
-      this.appendAndBroadcast({ type: "error", message: "Conflict not found." });
-      return;
-    }
-    if (conflict.run_id !== this.meta.active_run.id || conflict.round !== this.meta.refinement_round) {
-      this.appendAndBroadcast({ type: "error", message: "Conflict is not part of the active plan revision." });
-      return;
-    }
-
-    if ("selected_thread_id" in msg) {
-      const allowed = conflict.options.some((option) => option.thread_id === msg.selected_thread_id);
-      if (!allowed) {
-        this.appendAndBroadcast({ type: "error", message: "Selected annotation is not a valid option for this conflict." });
-        return;
-      }
-    }
-
-    this.persistConflictResolution(conflict.id, actor, msg);
-    this.updateConflictStatus(conflict.id, "resolved");
-    this.appendAndBroadcast({
-      type: "conflict_resolved",
-      conflict_id: conflict.id,
-      resolved_by: actor,
-      ...("selected_thread_id" in msg
-        ? { selected_thread_id: msg.selected_thread_id }
-        : { deciding_instruction: msg.deciding_instruction }),
-    });
-
-    if (this.loadOpenConflicts(this.meta.active_run.id, this.meta.refinement_round).length === 0) {
-      const resolutionItems = this.loadConflictResolutionBriefItems(this.meta.active_run.id, this.meta.refinement_round);
-      this.dispatchResolvedRefinementBrief(resolutionItems);
     }
   }
 
@@ -1064,7 +979,7 @@ export class Orchestrator extends DurableObject<Env> {
         return;
       }
 
-      this.dispatchRefinementBrief([{ instruction: feedback, source_thread_ids: [] }]);
+      this.dispatchProseBrief(feedback);
     }
   }
 
@@ -1083,10 +998,9 @@ export class Orchestrator extends DurableObject<Env> {
 
     this.lockPlanRevision(runId, round);
     const threads = this.loadOpenAnnotationThreads(runId, round);
-    const briefItems = this.directBriefItems(feedback, threads);
 
     if (threads.length <= 1) {
-      this.dispatchRefinementBrief(briefItems);
+      this.dispatchProseBrief(proseBriefFromNote(feedback, threads));
       return;
     }
 
@@ -1108,68 +1022,6 @@ export class Orchestrator extends DurableObject<Env> {
       provider: this.meta.provider,
     });
     this.getTracer()?.log("INFO", "consolidation.requested", { request_id: requestId, run_id: runId, round });
-  }
-
-  private dispatchRefinementBrief(briefItems: BriefItem[]): void {
-    if (!this.meta?.active_run) return;
-    const fromRound = this.meta.refinement_round;
-    const toRound = fromRound + 1;
-    const feedback = briefItems.map((item) => `- ${item.instruction}`).join("\n");
-
-    this.meta.pending_brief_items = undefined;
-    this.meta.refinement_round = toRound;
-    this.saveMeta();
-    this.appendAndBroadcast({
-      type: "brief_dispatched",
-      run_id: this.meta.active_run.id,
-      from_round: fromRound,
-      to_round: toRound,
-      brief_items: briefItems,
-    });
-    this.sendToSandbox({
-      type: "refine_plan",
-      feedback: feedback.length > 0 ? `Refinement brief:\n${feedback}` : "Refine the plan.",
-    });
-  }
-
-  private dispatchResolvedRefinementBrief(resolutionItems: BriefItem[]): void {
-    if (!this.meta?.active_run) return;
-    if (this.meta.state === "awaiting_resolution") {
-      if (!this.transition("refining")) {
-        this.appendAndBroadcast({ type: "error", message: "Could not resume refinement after conflict resolution." });
-        return;
-      }
-      this.setActiveRunState("thinking");
-    }
-    const baseItems = this.meta.pending_brief_items ?? [];
-    const combined = [...baseItems, ...resolutionItems];
-    this.dispatchRefinementBrief(
-      combined.length > 0
-        ? combined
-        : [{ instruction: "Refine the plan.", source_thread_ids: [] }],
-    );
-  }
-
-  private directBriefItems(feedback: string, threads: AnnotationThread[]): BriefItem[] {
-    const items: BriefItem[] = [];
-    const trimmedFeedback = feedback.trim();
-    if (trimmedFeedback.length > 0) {
-      items.push({ instruction: trimmedFeedback, source_thread_ids: [] });
-    }
-
-    for (const thread of threads) {
-      const replies = (thread.replies ?? [])
-        .map((reply) => `${reply.author.name}: ${reply.comment}`)
-        .join(" ");
-      items.push({
-        instruction: replies.length > 0
-          ? `${thread.comment} Replies: ${replies}`
-          : thread.comment,
-        source_thread_ids: [thread.id],
-      });
-    }
-
-    return items.length > 0 ? items : [{ instruction: "Refine the plan.", source_thread_ids: [] }];
   }
 
   private ensureActiveRun(runId?: string): boolean {
@@ -1195,7 +1047,6 @@ export class Orchestrator extends DurableObject<Env> {
     this.meta.active_run = run;
     this.meta.prompt = run.text;
     this.meta.latest_plan = undefined;
-    this.meta.pending_brief_items = undefined;
     this.meta.refinement_round = 0;
     this.meta.verification_attempts = 0;
     this.meta.last_decision = undefined;
@@ -1459,7 +1310,7 @@ export class Orchestrator extends DurableObject<Env> {
         this.handleSandboxExecutionComplete(parsed.cost);
         return;
       case "consolidation_complete":
-        this.handleConsolidationComplete(parsed.run_id, parsed.round, parsed.brief_items, parsed.conflicts ?? [], parsed.cost, parsed.brief);
+        this.handleConsolidationComplete(parsed.run_id, parsed.round, parsed.brief ?? "", parsed.cost);
         return;
       case "consolidation_failed":
         this.handleConsolidationFailed(parsed.run_id, parsed.round, parsed.message);
@@ -1585,49 +1436,16 @@ export class Orchestrator extends DurableObject<Env> {
   private handleConsolidationComplete(
     runId: string,
     round: number,
-    briefItems: BriefItem[] | undefined,
-    conflicts: AnnotationConflict[],
+    brief: string,
     cost: CostInfo,
-    brief?: string,
   ): void {
     if (!this.meta?.active_run || this.meta.state !== "refining") return;
     if (this.meta.active_run.id !== runId || this.meta.refinement_round !== round) return;
     if (!this.recordCost(cost)) return;
 
-    // New prose path: the consolidation agent resolved contradictions inline via ask_question.
-    if (brief !== undefined) {
-      this.dispatchProseBrief(brief);
-      return;
-    }
-
-    // Legacy structured path (unchanged; removed in Task 6).
-    const items = briefItems ?? [];
-    if (conflicts.length > 0) {
-      this.meta.pending_brief_items = items;
-      this.saveMeta();
-      for (const conflict of conflicts) {
-        this.sql.exec(
-          `INSERT OR REPLACE INTO annotation_conflicts (
-            id, revision_run_id, revision_round, summary, options_json, status, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          conflict.id,
-          runId,
-          round,
-          conflict.summary,
-          JSON.stringify(conflict.options),
-          "open",
-          new Date().toISOString(),
-        );
-        this.appendAndBroadcast({ type: "conflict_raised", conflict: { ...conflict, status: "open" } });
-      }
-
-      if (this.transition("awaiting_resolution")) {
-        this.setActiveRunState("awaiting_resolution");
-      }
-      return;
-    }
-
-    this.dispatchRefinementBrief(items);
+    // The consolidation agent resolved any contradictions inline via ask_question
+    // and returned a plain-prose brief.
+    this.dispatchProseBrief(brief);
   }
 
   private dispatchProseBrief(brief: string): void {
@@ -1635,7 +1453,6 @@ export class Orchestrator extends DurableObject<Env> {
     const fromRound = this.meta.refinement_round;
     const toRound = fromRound + 1;
 
-    this.meta.pending_brief_items = undefined;
     this.meta.refinement_round = toRound;
     this.saveMeta();
     this.appendAndBroadcast({
@@ -2168,118 +1985,6 @@ export class Orchestrator extends DurableObject<Env> {
     return null;
   }
 
-  private loadConflict(conflictId: string): AnnotationConflict | null {
-    for (const row of this.sql.exec(
-      `SELECT revision_run_id, revision_round, summary, options_json, status
-       FROM annotation_conflicts
-       WHERE id = ?`,
-      conflictId,
-    )) {
-      return {
-        id: conflictId,
-        run_id: row["revision_run_id"] as string,
-        round: row["revision_round"] as number,
-        summary: row["summary"] as string,
-        options: JSON.parse(row["options_json"] as string) as AnnotationConflict["options"],
-        status: row["status"] as AnnotationConflict["status"],
-      };
-    }
-    return null;
-  }
-
-  private loadOpenConflicts(runId: string, round: number): AnnotationConflict[] {
-    const conflicts: AnnotationConflict[] = [];
-    for (const row of this.sql.exec(
-      `SELECT id, summary, options_json
-       FROM annotation_conflicts
-       WHERE revision_run_id = ? AND revision_round = ? AND status = 'open'
-       ORDER BY created_at ASC`,
-      runId,
-      round,
-    )) {
-      conflicts.push({
-        id: row["id"] as string,
-        run_id: runId,
-        round,
-        summary: row["summary"] as string,
-        options: JSON.parse(row["options_json"] as string) as AnnotationConflict["options"],
-        status: "open",
-      });
-    }
-    return conflicts;
-  }
-
-  private updateConflictStatus(conflictId: string, status: "resolved" | "discarded"): void {
-    this.sql.exec(
-      "UPDATE annotation_conflicts SET status = ? WHERE id = ?",
-      status,
-      conflictId,
-    );
-  }
-
-  private discardOpenConflicts(runId: string, round: number): void {
-    this.sql.exec(
-      `UPDATE annotation_conflicts
-       SET status = 'discarded'
-       WHERE revision_run_id = ? AND revision_round = ? AND status = 'open'`,
-      runId,
-      round,
-    );
-  }
-
-  private persistConflictResolution(
-    conflictId: string,
-    actor: ParticipantIdentity,
-    msg: Extract<CLIToDOMessage, { type: "conflict_resolve" }>,
-  ): void {
-    this.sql.exec(
-      `INSERT OR REPLACE INTO conflict_resolutions (
-        conflict_id, decider_id, decider_name, selected_thread_id, deciding_instruction, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?)`,
-      conflictId,
-      actor.id,
-      actor.name,
-      "selected_thread_id" in msg ? msg.selected_thread_id : null,
-      "deciding_instruction" in msg ? msg.deciding_instruction : null,
-      new Date().toISOString(),
-    );
-  }
-
-  private loadConflictResolutionBriefItems(runId: string, round: number): BriefItem[] {
-    const items: BriefItem[] = [];
-    for (const row of this.sql.exec(
-      `SELECT c.id, r.selected_thread_id, r.deciding_instruction
-       FROM annotation_conflicts c
-       JOIN conflict_resolutions r ON r.conflict_id = c.id
-       WHERE c.revision_run_id = ? AND c.revision_round = ? AND c.status = 'resolved'
-       ORDER BY r.created_at ASC`,
-      runId,
-      round,
-    )) {
-      const selectedThreadId = row["selected_thread_id"] as string | null;
-      const decidingInstruction = row["deciding_instruction"] as string | null;
-      if (selectedThreadId) {
-        const thread = this.loadAnnotationThreadById(selectedThreadId);
-        if (thread) {
-          const replies = (thread.replies ?? [])
-            .map((reply) => `${reply.author.name}: ${reply.comment}`)
-            .join(" ");
-          items.push({
-            instruction: replies.length > 0
-              ? `${thread.comment} Replies: ${replies}`
-              : thread.comment,
-            source_thread_ids: [thread.id],
-          });
-        }
-        continue;
-      }
-      if (decidingInstruction) {
-        items.push({ instruction: decidingInstruction, source_thread_ids: [] });
-      }
-    }
-    return items;
-  }
-
   private loadOpenAnnotationThreads(runId: string, round: number): AnnotationThread[] {
     const threads: AnnotationThread[] = [];
     for (const row of this.sql.exec(
@@ -2307,31 +2012,6 @@ export class Orchestrator extends DurableObject<Env> {
       });
     }
     return threads;
-  }
-
-  private loadAnnotationThreadById(threadId: string): AnnotationThread | null {
-    for (const row of this.sql.exec(
-      `SELECT revision_run_id, revision_round, anchor_json, author_id, author_name, comment, status, created_at
-       FROM annotations
-       WHERE id = ?`,
-      threadId,
-    )) {
-      return {
-        id: threadId,
-        run_id: row["revision_run_id"] as string,
-        round: row["revision_round"] as number,
-        anchor: JSON.parse(row["anchor_json"] as string) as AnnotationAnchor,
-        author: {
-          id: row["author_id"] as string,
-          name: row["author_name"] as string,
-        },
-        comment: row["comment"] as string,
-        status: row["status"] as AnnotationThread["status"],
-        created_at: row["created_at"] as string,
-        replies: this.loadAnnotationReplies(threadId),
-      };
-    }
-    return null;
   }
 
   private loadAnnotationReplies(annotationId: string): NonNullable<AnnotationThread["replies"]> {
@@ -2376,14 +2056,6 @@ export class Orchestrator extends DurableObject<Env> {
       };
     }
     return null;
-  }
-
-  private canDecideConflicts(userId: string | null, role: MembershipRow["role"] | null): boolean {
-    if (!userId) return false;
-    if (this.meta?.created_by?.id) {
-      return this.meta.created_by.id === userId;
-    }
-    return role === "owner" || role === "admin";
   }
 
   // --- Event log ---

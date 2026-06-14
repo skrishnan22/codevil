@@ -43,6 +43,15 @@ export {
 } from "./annotations.js";
 
 export type {
+  QuestionOption,
+  AnswerableBy,
+} from "./questions.js";
+export {
+  QuestionOptionSchema,
+  AnswerableBySchema,
+} from "./questions.js";
+
+export type {
   SessionCreatedEvent,
   StatusEvent,
   CloneProgressEvent,
@@ -77,8 +86,6 @@ export type {
   ConflictResolvedEvent,
   BriefDispatchedEvent,
   AnnotationsConsumedEvent,
-  QuestionOption,
-  AnswerableBy,
   QuestionRaisedEvent,
   QuestionAnsweredEvent,
   DOToCLIEvent,
@@ -137,8 +144,6 @@ export {
   ConflictResolvedEventSchema,
   BriefDispatchedEventSchema,
   AnnotationsConsumedEventSchema,
-  QuestionOptionSchema,
-  AnswerableBySchema,
   QuestionRaisedEventSchema,
   QuestionAnsweredEventSchema,
   DOToCLIEventSchema,

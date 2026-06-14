@@ -308,7 +308,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
           id: uid(),
           role: "system",
           variant: "status",
-          content: `Refinement brief dispatched with ${event.brief_items.length} item${event.brief_items.length === 1 ? "" : "s"}.`,
+          content: event.brief ? "Refinement brief dispatched." : `Refinement brief dispatched with ${event.brief_items?.length ?? 0} item${(event.brief_items?.length ?? 0) === 1 ? "" : "s"}.`,
           timestamp: ts,
           meta: { run_id: event.run_id, refinement_round: event.to_round },
         },
@@ -410,7 +410,7 @@ export function mapEventToActivity(event: DOToCLIEvent): ActivityEntry[] {
       return [eventEntry("Conflict resolved", ts, event.conflict_id)];
 
     case "brief_dispatched":
-      return [eventEntry("Brief dispatched", ts, `${event.brief_items.length} items`)];
+      return [eventEntry("Brief dispatched", ts, event.brief ? "brief sent" : `${event.brief_items?.length ?? 0} items`)];
 
     case "annotations_consumed":
       return [eventEntry("Annotations consumed", ts, `${event.thread_ids.length} annotations`)];

@@ -11,6 +11,9 @@ import type {
   PreviewApp,
   PreviewFramework,
   SandboxToDOMessage,
+  QuestionOption,
+  AnswerableBy,
+  ParticipantIdentity,
 } from "@codevil/shared";
 import {
   MAX_VERIFICATION_ATTEMPTS,
@@ -50,6 +53,19 @@ export interface CreatePullRequestToolOptions {
   commit_message?: string;
   draft?: boolean;
 }
+
+export interface AskQuestionParams {
+  question: string;
+  context?: string;
+  options?: QuestionOption[];
+  allow_freeform: boolean;
+  allow_multiple: boolean;
+  answerable_by: AnswerableBy;
+}
+
+export type AskQuestionOutcome =
+  | { cancelled: false; option_ids: string[]; freeform?: string; answered_by: ParticipantIdentity }
+  | { cancelled: true; reason: string };
 
 export interface TurnResult {
   response: string;
@@ -182,6 +198,9 @@ export class SandboxRuntime {
     reject(error: Error): void;
     timeout: ReturnType<typeof setTimeout>;
   }>();
+  private askQuestionRequests = new Map<string, {
+    resolve(outcome: AskQuestionOutcome): void;
+  }>();
 
   constructor(options: SandboxRuntimeOptions) {
     this.workspace = options.workspace;
@@ -236,6 +255,12 @@ export class SandboxRuntime {
           return;
         case "create_pr_response":
           this.handleCreatePRResponse(message);
+          return;
+        case "ask_question_response":
+          this.handleAskQuestionResponse(message);
+          return;
+        case "ask_question_cancelled":
+          this.handleAskQuestionCancelled(message);
           return;
         case "preview_start":
           await this.handlePreviewStart(message.app_key);
@@ -442,6 +467,56 @@ export class SandboxRuntime {
       return;
     }
     pending.resolve({ url: message.url });
+  }
+
+  /**
+   * Ask the room a question and block until it is answered or cancelled.
+   * No timeout — conflict questions block until the human responds.
+   */
+  askQuestion(runId: string, params: AskQuestionParams): Promise<AskQuestionOutcome> {
+    const requestId = `q_${crypto.randomUUID().replace(/-/g, "")}`;
+    this.send({
+      type: "ask_question_request",
+      request_id: requestId,
+      run_id: runId,
+      question: params.question,
+      context: params.context,
+      options: params.options,
+      allow_freeform: params.allow_freeform,
+      allow_multiple: params.allow_multiple,
+      answerable_by: params.answerable_by,
+    });
+    return new Promise((resolve) => {
+      this.askQuestionRequests.set(requestId, { resolve });
+    });
+  }
+
+  /**
+   * Returns a run-bound callback suitable for passing to askQuestionTool.
+   * The returned function closes over runId so the tool does not need to
+   * know about it directly.
+   */
+  makeAskQuestion(runId: string): (params: AskQuestionParams) => Promise<AskQuestionOutcome> {
+    return (params) => this.askQuestion(runId, params);
+  }
+
+  private handleAskQuestionResponse(message: Extract<DOToSandboxMessage, { type: "ask_question_response" }>): void {
+    const pending = this.askQuestionRequests.get(message.request_id);
+    if (!pending) return;
+    this.askQuestionRequests.delete(message.request_id);
+    pending.resolve({
+      cancelled: false,
+      option_ids: message.option_ids,
+      freeform: message.freeform,
+      answered_by: message.answered_by,
+    });
+  }
+
+  private handleAskQuestionCancelled(message: Extract<DOToSandboxMessage, { type: "ask_question_cancelled" }>): void {
+    const pending = this.askQuestionRequests.get(message.request_id);
+    if (!pending) return;
+    this.askQuestionRequests.delete(message.request_id);
+    pending.resolve({ cancelled: true, reason: message.reason });
   }
 
   private async handleRefine(feedback: string, parent: SpanContext | undefined): Promise<void> {

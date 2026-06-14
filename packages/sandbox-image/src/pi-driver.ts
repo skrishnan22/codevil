@@ -20,6 +20,8 @@ import {
 import type {
   AgentDriver,
   AgentStartOptions,
+  AskQuestionOutcome,
+  AskQuestionParams,
   CreatePullRequestToolOptions,
   ConsolidationInput,
   ConsolidationResult,
@@ -417,6 +419,93 @@ function createPullRequestTool(
       return {
         content: [{ type: "text", text: `Pull request created: ${result.url}` }],
         details: result,
+      };
+    },
+  });
+}
+
+export function askQuestionTool(
+  askQuestion: (params: AskQuestionParams) => Promise<AskQuestionOutcome>,
+): ToolDefinition {
+  return defineTool({
+    name: "ask_question",
+    label: "Ask the room a question",
+    description: [
+      "Pose a question to the room and block until a human answers or the question is cancelled.",
+      "Use this tool whenever you need human input to proceed — for example, when two participants have",
+      "given contradictory feedback and you cannot determine which direction to take without guidance.",
+      "The question can offer a fixed list of options (participants pick one or more) and/or allow a",
+      "freeform reply. Provide stable, meaningful option ids — they are returned in the answer.",
+    ].join(" "),
+    promptSnippet: "Ask participants a question when human input is needed to resolve ambiguity.",
+    promptGuidelines: [
+      "Use ask_question when you have reached a decision point that genuinely requires human input.",
+      "Do not use it for things you can resolve yourself (e.g. reading a file, searching the codebase).",
+      "Keep the question concise. Use 'options' to give participants clear choices whenever possible.",
+      "Option ids must be stable strings you will recognise in the answer (e.g. 'option_redis', 'option_d1').",
+      "Set allow_freeform: true if a predefined list may not cover all valid answers.",
+      "Set answerable_by: 'decider' when only the session initiator should answer; otherwise use 'anyone'.",
+      "If the question is cancelled, wrap up gracefully — the human may have moved on.",
+    ],
+    parameters: Type.Object({
+      question: Type.String({ description: "The question to ask participants (max 8 000 chars)." }),
+      context: Type.Optional(Type.String({ description: "Additional context to help participants answer (max 20 000 chars)." })),
+      options: Type.Optional(
+        Type.Array(
+          Type.Object({
+            id: Type.String({ description: "Stable, unique identifier for this option." }),
+            label: Type.String({ description: "Short human-readable label." }),
+            detail: Type.Optional(Type.String({ description: "Optional longer explanation of this option." })),
+          }),
+          { description: "Predefined choices participants can select." },
+        ),
+      ),
+      allow_freeform: Type.Optional(Type.Boolean({ description: "Allow participants to type a free-text answer in addition to (or instead of) selecting options. Defaults to false." })),
+      allow_multiple: Type.Optional(Type.Boolean({ description: "Allow participants to select more than one option. Defaults to false." })),
+      answerable_by: Type.Optional(
+        Type.Union(
+          [Type.Literal("decider"), Type.Literal("anyone")],
+          { description: "Who may answer: 'decider' (session initiator only) or 'anyone' (any participant). Defaults to 'decider'." },
+        ),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const normalizedParams: AskQuestionParams = {
+        question: params.question,
+        context: params.context,
+        options: params.options as AskQuestionParams["options"],
+        allow_freeform: params.allow_freeform ?? false,
+        allow_multiple: params.allow_multiple ?? false,
+        answerable_by: (params.answerable_by ?? "decider") as AskQuestionParams["answerable_by"],
+      };
+
+      const outcome = await askQuestion(normalizedParams);
+
+      let text: string;
+      if (outcome.cancelled) {
+        text = `The question was cancelled. Reason: ${outcome.reason}. Please wrap up or proceed with the best available information.`;
+      } else {
+        const lines: string[] = [];
+
+        if (outcome.option_ids.length > 0) {
+          const optionLabels = outcome.option_ids.map((id) => {
+            const match = normalizedParams.options?.find((o) => o.id === id);
+            return match ? `${match.label} (id: ${id})` : id;
+          });
+          lines.push(`Selected option(s): ${optionLabels.join(", ")}.`);
+        }
+
+        if (outcome.freeform) {
+          lines.push(`Freeform reply: ${outcome.freeform}`);
+        }
+
+        lines.push(`Answered by: ${outcome.answered_by.name} (id: ${outcome.answered_by.id}).`);
+        text = lines.join("\n");
+      }
+
+      return {
+        content: [{ type: "text" as const, text }],
+        details: outcome as AskQuestionOutcome,
       };
     },
   });

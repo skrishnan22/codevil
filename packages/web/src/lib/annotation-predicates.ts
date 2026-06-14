@@ -78,3 +78,18 @@ export function sendToAgentLabel(openCount: number): string {
     ? "Send 1 comment to agent"
     : `Send ${openCount} comments to agent`;
 }
+
+/**
+ * Returns true when the current user may answer a question:
+ *  - "anyone"  → any signed-in user (currentUserId is non-null)
+ *  - "decider" → the session creator only
+ */
+export function canAnswerQuestion(
+  answerableBy: "decider" | "anyone",
+  currentUserId: string | null,
+  sessionCreatorId: string | null,
+): boolean {
+  if (answerableBy === "anyone") return Boolean(currentUserId);
+  // "decider"
+  return Boolean(currentUserId && sessionCreatorId && currentUserId === sessionCreatorId);
+}

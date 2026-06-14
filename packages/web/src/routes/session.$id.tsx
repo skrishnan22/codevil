@@ -15,6 +15,7 @@ import { ChatInput } from "@/components/session/ChatInput";
 import { WorkspacePane } from "@/components/session/workspace-pane";
 import { RoomHeader } from "@/components/session/room-header";
 import { PlanReviewPanel } from "@/components/session/plan-review-panel";
+import { QuestionCard } from "@/components/session/question-card";
 import { openThreadsSorted } from "@/lib/annotation-predicates";
 import { revisionKey, shouldAutoOpen } from "@/lib/plan-review";
 
@@ -128,6 +129,7 @@ function SessionPage() {
               </button>
             </div>
           )}
+          <QuestionCard />
           <Timeline
             onOpenActivity={handleOpenActivity}
           />

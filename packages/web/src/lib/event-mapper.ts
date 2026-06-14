@@ -316,6 +316,10 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
 
     case "annotations_consumed":
       return [];
+
+    case "question_raised":
+    case "question_answered":
+      return [];
   }
 }
 

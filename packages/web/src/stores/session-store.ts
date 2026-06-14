@@ -9,7 +9,28 @@ import type {
   AnnotationThread,
   AnnotationReply,
   AnnotationConflict,
+  QuestionOption,
+  AnswerableBy,
 } from "@codevil/shared";
+
+export interface QuestionAnswer {
+  optionIds: string[];
+  freeform?: string;
+  answeredBy: ParticipantIdentity;
+}
+
+export interface QuestionViewModel {
+  requestId: string;
+  runId: string;
+  question: string;
+  context?: string;
+  options?: QuestionOption[];
+  allowFreeform: boolean;
+  allowMultiple: boolean;
+  answerableBy: AnswerableBy;
+  status: "open" | "answered";
+  answer?: QuestionAnswer;
+}
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
@@ -54,6 +75,7 @@ interface SessionStoreState {
   planRevision: PlanRevisionState | null;
   annotations: AnnotationThread[];
   conflicts: AnnotationConflict[];
+  questions: QuestionViewModel[];
   selectedAnnotationId: string | null;
   currentUserId: string | null;
   sessionCreatorId: string | null;
@@ -82,6 +104,10 @@ interface SessionStoreActions {
   resolveConflict: (
     conflictId: string,
     resolution: { selectedThreadId?: string; decidingInstruction?: string },
+  ) => void;
+  answerQuestion: (
+    requestId: string,
+    answer: { optionIds: string[]; freeform?: string },
   ) => void;
   reset: () => void;
 }
@@ -113,6 +139,7 @@ const initialState: SessionStoreState = {
   planRevision: null,
   annotations: [],
   conflicts: [],
+  questions: [],
   selectedAnnotationId: null,
   currentUserId: null,
   sessionCreatorId: null,
@@ -177,6 +204,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         planRevision: null,
         annotations: [],
         conflicts: [],
+        questions: [],
         selectedAnnotationId: null,
         sessionCreatorId: null,
       }),
@@ -214,6 +242,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           const annotations = reduceAnnotations(annotationsAfterRevisionReset, envelope.event);
           const conflictsAfterRevisionReset = isNewRevision ? [] : state.conflicts;
           const conflicts = reduceConflicts(conflictsAfterRevisionReset, envelope.event);
+          const questions = reduceQuestions(state.questions, envelope.event);
 
           return {
             cursor: envelope.cursor,
@@ -224,6 +253,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             planRevision,
             annotations,
             conflicts,
+            questions,
             ...(isNewRevision ? { selectedAnnotationId: null } : {}),
           };
         });
@@ -435,6 +465,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         deciding_instruction: decidingInstruction,
       });
     }
+  },
+
+  answerQuestion(requestId, answer) {
+    const optionIds = answer.optionIds.length > 0 ? answer.optionIds : undefined;
+    const freeform = answer.freeform?.trim() || undefined;
+    // The server requires at least one of option_ids or freeform; no-op if neither.
+    if (!optionIds && !freeform) return;
+    wsHandle?.send({
+      type: "question_answer",
+      request_id: requestId,
+      ...(optionIds ? { option_ids: optionIds } : {}),
+      ...(freeform ? { freeform } : {}),
+    });
   },
 
   reset() {
@@ -690,6 +733,50 @@ export function reduceConflicts(
     }
     case "brief_dispatched":
       return [];
+    default:
+      return current;
+  }
+}
+
+export function reduceQuestions(
+  current: QuestionViewModel[],
+  event: DOToCLIEvent,
+): QuestionViewModel[] {
+  switch (event.type) {
+    case "question_raised": {
+      // Dedupe by request_id
+      if (current.some((q) => q.requestId === event.request_id)) return current;
+      const viewModel: QuestionViewModel = {
+        requestId: event.request_id,
+        runId: event.run_id,
+        question: event.question,
+        context: event.context,
+        options: event.options,
+        allowFreeform: event.allow_freeform,
+        allowMultiple: event.allow_multiple,
+        answerableBy: event.answerable_by,
+        status: "open",
+      };
+      return [...current, viewModel];
+    }
+    case "question_answered": {
+      const index = current.findIndex((q) => q.requestId === event.request_id);
+      if (index === -1) return current;
+      if (current[index].status === "answered") return current;
+      return current.map((q, i) =>
+        i === index
+          ? {
+              ...q,
+              status: "answered" as const,
+              answer: {
+                optionIds: event.option_ids,
+                freeform: event.freeform,
+                answeredBy: event.answered_by,
+              },
+            }
+          : q,
+      );
+    }
     default:
       return current;
   }

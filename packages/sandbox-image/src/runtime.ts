@@ -63,6 +63,8 @@ export interface PlanResult {
 
 export interface ConsolidationInput {
   cwd: string;
+  run_id: string;
+  round: number;
   model: string;
   provider: string;
   llmKey?: string;
@@ -465,6 +467,8 @@ export class SandboxRuntime {
           if (agent.consolidateAnnotations) {
             return agent.consolidateAnnotations({
               cwd: repoDir,
+              run_id: message.run_id,
+              round: message.round,
               model: message.model,
               provider: message.provider ?? this.provider,
               llmKey: this.llmKey,

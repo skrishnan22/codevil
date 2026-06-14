@@ -152,7 +152,7 @@ export class PiAgentDriver implements AgentDriver {
       await session.prompt(consolidationPrompt(input));
       await waitForQueuedAgentEvents(session);
       const text = latestAssistantText(session.messages);
-      return parseConsolidationResult(text);
+      return parseConsolidationResult(text, input.run_id, input.round);
     } finally {
       session.dispose();
     }
@@ -237,10 +237,24 @@ function latestAssistantText(messages: readonly unknown[]): string {
 function consolidationPrompt(input: ConsolidationInput): string {
   return [
     "You are consolidating human feedback on a frozen markdown plan.",
-    "Return only valid JSON with keys brief_items and conflicts.",
-    "Merge compatible feedback into concise instructions.",
-    "If two annotations contradict each other, do not choose. Emit a conflict with options.",
+    "Merge compatible feedback into concise, actionable instructions.",
+    "If two annotations contradict each other, do not choose — emit a conflict with options.",
     "Each annotation has: id, anchoredQuote (the highlighted text), sourceLine (1-based line), authorName, comment, and replies.",
+    "",
+    "Return ONLY valid JSON — no prose, no markdown fences — with exactly this shape:",
+    "{",
+    '  "brief_items": [',
+    '    { "instruction": "<concise actionable instruction>", "source_thread_ids": ["<annotation id this came from>", "..."] }',
+    "  ],",
+    '  "conflicts": [',
+    '    { "summary": "<what the disagreement is>", "options": [ { "thread_id": "<annotation id>", "gist": "<short label>" }, { "thread_id": "...", "gist": "..." } ] }',
+    "  ]",
+    "}",
+    "",
+    "Rules:",
+    "- Each brief_items entry MUST be an object with keys 'instruction' (string) and 'source_thread_ids' (array of annotation id strings). NEVER a plain string.",
+    "- Each conflicts entry provides ONLY 'summary' (string) and 'options' (array of at least two {thread_id, gist} objects). Do NOT include id, run_id, round, or status — the system fills those.",
+    "- If there are no conflicts, emit an empty array for conflicts.",
     "",
     "Plan markdown:",
     input.plan,
@@ -253,10 +267,79 @@ function consolidationPrompt(input: ConsolidationInput): string {
   ].join("\n");
 }
 
-function parseConsolidationResult(text: string): ConsolidationResult {
+/**
+ * Normalize raw LLM brief_items output into valid BriefItem objects.
+ * Strings are coerced to { instruction, source_thread_ids: [] }.
+ * Objects with missing/null fields get safe defaults.
+ * Entries with empty instruction after trim are dropped.
+ */
+export function normalizeBriefItems(raw: unknown): Array<{ instruction: string; source_thread_ids: string[] }> {
+  if (!Array.isArray(raw)) return [];
+  const result: Array<{ instruction: string; source_thread_ids: string[] }> = [];
+  for (const entry of raw) {
+    let instruction: string;
+    let source_thread_ids: string[];
+    if (typeof entry === "string") {
+      instruction = entry.trim();
+      source_thread_ids = [];
+    } else if (isRecord(entry)) {
+      instruction = String(entry.instruction ?? entry.text ?? "").trim();
+      source_thread_ids = Array.isArray(entry.source_thread_ids)
+        ? entry.source_thread_ids.filter((x): x is string => typeof x === "string")
+        : [];
+    } else {
+      continue;
+    }
+    if (!instruction) continue;
+    result.push({ instruction, source_thread_ids });
+  }
+  return result;
+}
+
+/**
+ * Normalize raw LLM conflicts output into valid AnnotationConflict objects.
+ * The system synthesizes id, run_id, round, and status — the LLM provides only summary + options.
+ * Conflicts with fewer than 2 valid options or empty summary are dropped.
+ */
+export function normalizeConflicts(
+  raw: unknown,
+  runId: string,
+  round: number,
+): Array<{ id: string; run_id: string; round: number; summary: string; options: Array<{ thread_id: string; gist: string }>; status: "open" }> {
+  if (!Array.isArray(raw)) return [];
+  const result: Array<{ id: string; run_id: string; round: number; summary: string; options: Array<{ thread_id: string; gist: string }>; status: "open" }> = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const summary = String(entry.summary ?? "").trim();
+    if (!summary) continue;
+    const rawOptions = Array.isArray(entry.options) ? entry.options : [];
+    const options: Array<{ thread_id: string; gist: string }> = [];
+    for (const opt of rawOptions) {
+      if (!isRecord(opt)) continue;
+      const thread_id = String(opt.thread_id ?? "").trim();
+      const gist = String(opt.gist ?? "").trim();
+      if (!thread_id || !gist) continue;
+      options.push({ thread_id, gist });
+    }
+    if (options.length < 2) continue;
+    result.push({
+      id: `conf_${crypto.randomUUID().replace(/-/g, "")}`,
+      run_id: runId,
+      round,
+      summary,
+      options,
+      status: "open",
+    });
+  }
+  return result;
+}
+
+export function parseConsolidationResult(text: string, runId = "unknown", round = 0): ConsolidationResult {
   const parsed = JSON.parse(extractJsonObject(text));
-  const briefItems = BriefItemSchema.array().parse(parsed.brief_items ?? []);
-  const conflicts = AnnotationConflictSchema.array().parse(parsed.conflicts ?? []);
+  const normalizedBriefItems = normalizeBriefItems(parsed.brief_items);
+  const briefItems = BriefItemSchema.array().parse(normalizedBriefItems);
+  const normalizedConflicts = normalizeConflicts(parsed.conflicts, runId, round);
+  const conflicts = AnnotationConflictSchema.array().parse(normalizedConflicts);
   return {
     brief_items: briefItems,
     conflicts,

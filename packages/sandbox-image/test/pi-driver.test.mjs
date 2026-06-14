@@ -201,6 +201,58 @@ test("parseConsolidationResult: non-JSON text throws clean 'did not return a JSO
   );
 });
 
+test("parseConsolidationResult: brace-wrapped but malformed JSON throws clean 'did not return valid JSON' error", () => {
+  assert.throws(
+    () => parseConsolidationResult("{ not valid json }"),
+    (err) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        err.message.includes("did not return valid JSON"),
+        `Expected clean error message but got: ${err.message}`,
+      );
+      // Must NOT be a raw SyntaxError
+      assert.notEqual(err.constructor.name, "SyntaxError");
+      return true;
+    },
+  );
+});
+
+test("parseConsolidationResult: malformed conflicts are dropped and valid ones survive", () => {
+  const json = JSON.stringify({
+    brief_items: [{ instruction: "Keep this", source_thread_ids: [] }],
+    conflicts: [
+      // Valid conflict
+      {
+        summary: "Real disagreement",
+        options: [
+          { thread_id: "t_1", gist: "Option A" },
+          { thread_id: "t_2", gist: "Option B" },
+        ],
+      },
+      // Malformed: only 1 option — will be dropped
+      {
+        summary: "Only one side",
+        options: [{ thread_id: "t_3", gist: "Lonely view" }],
+      },
+      // Malformed: empty summary — will be dropped
+      {
+        summary: "",
+        options: [
+          { thread_id: "t_4", gist: "A" },
+          { thread_id: "t_5", gist: "B" },
+        ],
+      },
+    ],
+  });
+  let result;
+  assert.doesNotThrow(() => {
+    result = parseConsolidationResult(json, "run_drop", 2);
+  });
+  assert.equal(result.brief_items.length, 1);
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(result.conflicts[0].summary, "Real disagreement");
+});
+
 test("parseConsolidationResult: JSON wrapped in markdown fences is parsed correctly", () => {
   const fenced = "Sure, here you go:\n```json\n" + JSON.stringify({
     brief_items: [{ instruction: "Refactor the auth module", source_thread_ids: ["ann_5"] }],

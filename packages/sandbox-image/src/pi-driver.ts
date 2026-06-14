@@ -335,10 +335,24 @@ export function normalizeConflicts(
 }
 
 export function parseConsolidationResult(text: string, runId = "unknown", round = 0): ConsolidationResult {
-  const parsed = JSON.parse(extractJsonObject(text));
-  const normalizedBriefItems = normalizeBriefItems(parsed.brief_items);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(extractJsonObject(text));
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error("Consolidation did not return valid JSON");
+    }
+    throw err;
+  }
+  const normalizedBriefItems = normalizeBriefItems((parsed as Record<string, unknown>).brief_items);
   const briefItems = BriefItemSchema.array().parse(normalizedBriefItems);
-  const normalizedConflicts = normalizeConflicts(parsed.conflicts, runId, round);
+  const rawConflicts = (parsed as Record<string, unknown>).conflicts;
+  const rawConflictCount = Array.isArray(rawConflicts) ? rawConflicts.length : 0;
+  const normalizedConflicts = normalizeConflicts(rawConflicts, runId, round);
+  if (normalizedConflicts.length < rawConflictCount) {
+    const dropped = rawConflictCount - normalizedConflicts.length;
+    console.warn(`consolidation: dropped ${dropped} malformed conflict(s) from LLM output`);
+  }
   const conflicts = AnnotationConflictSchema.array().parse(normalizedConflicts);
   return {
     brief_items: briefItems,

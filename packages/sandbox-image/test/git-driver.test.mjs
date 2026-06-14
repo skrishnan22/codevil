@@ -10,6 +10,7 @@ import {
   configureDefaultGitIdentity,
   DEFAULT_GIT_AUTHOR_EMAIL,
   DEFAULT_GIT_AUTHOR_NAME,
+  shallowCloneArgs,
 } from "../dist/git-driver.js";
 
 const execFileAsync = promisify(execFile);
@@ -38,4 +39,15 @@ test("configureDefaultGitIdentity sets the sandbox git author", async () => {
     }
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test("shallowCloneArgs defaults clone operations to depth 1", () => {
+  assert.deepEqual(shallowCloneArgs("https://github.com/example/app.git", "/workspace/repo"), [
+    "clone",
+    "--progress",
+    "--depth",
+    "1",
+    "https://github.com/example/app.git",
+    "/workspace/repo",
+  ]);
 });

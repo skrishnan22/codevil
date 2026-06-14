@@ -20,7 +20,7 @@ export class ShellGitDriver implements GitDriver {
     credential?: GitCredential,
   ): Promise<void> {
     await mkdir(dirname(destination), { recursive: true });
-    await run("git", ["clone", "--progress", credential ? withCredential(repo, credential) : repo, destination], {
+    await run("git", shallowCloneArgs(credential ? withCredential(repo, credential) : repo, destination), {
       onStderr: onProgress,
     });
     if (credential) {
@@ -45,6 +45,10 @@ export class ShellGitDriver implements GitDriver {
 
     await run("git", ["push", "-u", "origin", options.branch], { cwd: options.cwd });
   }
+}
+
+export function shallowCloneArgs(repo: string, destination: string): string[] {
+  return ["clone", "--progress", "--depth", "1", repo, destination];
 }
 
 function withCredential(repo: string, credential: GitCredential): string {

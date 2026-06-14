@@ -177,6 +177,62 @@ test("consolidate_annotations uses a fresh agent and emits structured result", a
   assert.deepEqual(agents[0].disposed, true);
 });
 
+test("consolidate_annotations emits brief (not brief_items) when agent returns the prose path", async () => {
+  const sent = [];
+  const git = new FakeGitDriver();
+  const agents = [];
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => {
+      const agent = new FakeAgentDriver({
+        consolidation: {
+          brief: "Use the existing D1 storage; skip the deletion.",
+          cost: zeroCost,
+        },
+      });
+      agents.push(agent);
+      return agent;
+    },
+    git,
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  sent.length = 0;
+
+  await runtime.handleMessage({
+    type: "consolidate_annotations",
+    run_id: "run_2",
+    round: 1,
+    plan_revision_id: "run_2:1",
+    plan: "## Plan",
+    annotations: [
+      {
+        id: "ann_2",
+        anchoredQuote: "delete()",
+        sourceLine: 7,
+        authorName: "Bob",
+        comment: "Use the existing D1 storage; skip the deletion.",
+        replies: [],
+      },
+    ],
+    conflicts: [],
+    model: "claude-sonnet-4-6",
+  });
+
+  assert.equal(sent.length, 1);
+  const msg = sent[0];
+  assert.equal(msg.type, "consolidation_complete");
+  assert.equal(msg.run_id, "run_2");
+  assert.equal(msg.round, 1);
+  assert.equal(msg.brief, "Use the existing D1 storage; skip the deletion.");
+  assert.equal(msg.brief_items, undefined, "prose path must not include brief_items");
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0].calls[0][0], "consolidateAnnotations");
+  assert.deepEqual(agents[0].disposed, true);
+});
+
 test("detectSetupCommand prefers explicit setup script, then package manager lockfiles", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-setup-detect-"));
   try {

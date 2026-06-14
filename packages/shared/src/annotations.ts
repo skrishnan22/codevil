@@ -36,33 +36,8 @@ export const AnnotationThreadSchema = z.object({
   replies: z.array(AnnotationReplySchema).optional(),
 });
 
-export const ConflictOptionSchema = z.object({
-  thread_id: z.string(),
-  gist: z.string().trim().min(1).max(2_000),
-});
-
-export const ConflictStatusSchema = z.enum(["open", "resolved", "discarded"]);
-
-export const AnnotationConflictSchema = z.object({
-  id: z.string(),
-  run_id: z.string(),
-  round: z.number().int().nonnegative(),
-  summary: z.string().trim().min(1).max(4_000),
-  options: z.array(ConflictOptionSchema).min(2),
-  status: ConflictStatusSchema,
-});
-
-export const BriefItemSchema = z.object({
-  instruction: z.string().trim().min(1).max(20_000),
-  source_thread_ids: z.array(z.string()),
-});
-
 export type DomMeta = z.infer<typeof DomMetaSchema>;
 export type AnnotationAnchor = z.infer<typeof AnnotationAnchorSchema>;
 export type AnnotationStatus = z.infer<typeof AnnotationStatusSchema>;
 export type AnnotationReply = z.infer<typeof AnnotationReplySchema>;
 export type AnnotationThread = z.infer<typeof AnnotationThreadSchema>;
-export type ConflictOption = z.infer<typeof ConflictOptionSchema>;
-export type ConflictStatus = z.infer<typeof ConflictStatusSchema>;
-export type AnnotationConflict = z.infer<typeof AnnotationConflictSchema>;
-export type BriefItem = z.infer<typeof BriefItemSchema>;

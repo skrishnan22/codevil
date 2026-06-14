@@ -278,37 +278,13 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
         },
       ];
 
-    case "conflict_raised":
-      return [
-        {
-          id: event.conflict.id,
-          role: "system",
-          variant: "status",
-          content: `Conflict needs a decision: ${event.conflict.summary}`,
-          timestamp: ts,
-          meta: { run_id: event.conflict.run_id, refinement_round: event.conflict.round },
-        },
-      ];
-
-    case "conflict_resolved":
-      return [
-        {
-          id: uid(),
-          role: "system",
-          variant: "status",
-          content: `${event.resolved_by.name} resolved a plan feedback conflict.`,
-          timestamp: ts,
-          actor: event.resolved_by.name,
-        },
-      ];
-
     case "brief_dispatched":
       return [
         {
           id: uid(),
           role: "system",
           variant: "status",
-          content: event.brief ? "Refinement brief dispatched." : `Refinement brief dispatched with ${event.brief_items?.length ?? 0} item${(event.brief_items?.length ?? 0) === 1 ? "" : "s"}.`,
+          content: "Refinement brief dispatched.",
           timestamp: ts,
           meta: { run_id: event.run_id, refinement_round: event.to_round },
         },
@@ -403,14 +379,8 @@ export function mapEventToActivity(event: DOToCLIEvent): ActivityEntry[] {
     case "consolidation_started":
       return [eventEntry("Consolidation started", ts, `Round ${event.round}`)];
 
-    case "conflict_raised":
-      return [eventEntry("Conflict raised", ts, event.conflict.summary)];
-
-    case "conflict_resolved":
-      return [eventEntry("Conflict resolved", ts, event.conflict_id)];
-
     case "brief_dispatched":
-      return [eventEntry("Brief dispatched", ts, event.brief ? "brief sent" : `${event.brief_items?.length ?? 0} items`)];
+      return [eventEntry("Brief dispatched", ts, "brief sent")];
 
     case "annotations_consumed":
       return [eventEntry("Annotations consumed", ts, `${event.thread_ids.length} annotations`)];

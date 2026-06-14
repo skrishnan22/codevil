@@ -410,7 +410,6 @@ export class Orchestrator extends DurableObject<Env> {
         !this.meta.expected_close
         && !isTerminalState(this.meta.state)
         && this.meta.state !== "awaiting_approval"
-        && this.meta.state !== "awaiting_resolution"
       ) {
         const activeRunId = this.meta.active_run?.id;
         this.transition("failed");
@@ -1017,7 +1016,6 @@ export class Orchestrator extends DurableObject<Env> {
       plan_revision_id: `${runId}:${round}`,
       plan: revision.markdown,
       annotations: toConsolidationAnnotations(threads),
-      conflicts: [],
       model: this.meta.plan_model,
       provider: this.meta.provider,
     });
@@ -1310,7 +1308,7 @@ export class Orchestrator extends DurableObject<Env> {
         this.handleSandboxExecutionComplete(parsed.cost);
         return;
       case "consolidation_complete":
-        this.handleConsolidationComplete(parsed.run_id, parsed.round, parsed.brief ?? "", parsed.cost);
+        this.handleConsolidationComplete(parsed.run_id, parsed.round, parsed.brief, parsed.cost);
         return;
       case "consolidation_failed":
         this.handleConsolidationFailed(parsed.run_id, parsed.round, parsed.message);

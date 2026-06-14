@@ -8,7 +8,6 @@ import type {
   AnnotationAnchor,
   AnnotationThread,
   AnnotationReply,
-  AnnotationConflict,
   QuestionOption,
   AnswerableBy,
 } from "@codevil/shared";
@@ -74,7 +73,6 @@ interface SessionStoreState {
   preview: PreviewState;
   planRevision: PlanRevisionState | null;
   annotations: AnnotationThread[];
-  conflicts: AnnotationConflict[];
   questions: QuestionViewModel[];
   selectedAnnotationId: string | null;
   currentUserId: string | null;
@@ -101,10 +99,6 @@ interface SessionStoreActions {
   withdrawAnnotation: (threadId: string) => void;
   setCurrentUserId: (id: string | null) => void;
   setSessionCreatorId: (id: string | null) => void;
-  resolveConflict: (
-    conflictId: string,
-    resolution: { selectedThreadId?: string; decidingInstruction?: string },
-  ) => void;
   answerQuestion: (
     requestId: string,
     answer: { optionIds: string[]; freeform?: string },
@@ -138,7 +132,6 @@ const initialState: SessionStoreState = {
   },
   planRevision: null,
   annotations: [],
-  conflicts: [],
   questions: [],
   selectedAnnotationId: null,
   currentUserId: null,
@@ -203,7 +196,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         preview: initialState.preview,
         planRevision: null,
         annotations: [],
-        conflicts: [],
         questions: [],
         selectedAnnotationId: null,
         sessionCreatorId: null,
@@ -240,8 +232,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
           const annotationsAfterRevisionReset = isNewRevision ? [] : state.annotations;
           const annotations = reduceAnnotations(annotationsAfterRevisionReset, envelope.event);
-          const conflictsAfterRevisionReset = isNewRevision ? [] : state.conflicts;
-          const conflicts = reduceConflicts(conflictsAfterRevisionReset, envelope.event);
           const questions = reduceQuestions(state.questions, envelope.event);
 
           return {
@@ -252,7 +242,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             participants,
             planRevision,
             annotations,
-            conflicts,
             questions,
             ...(isNewRevision ? { selectedAnnotationId: null } : {}),
           };
@@ -447,26 +436,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ sessionCreatorId: id });
   },
 
-  resolveConflict(conflictId, resolution) {
-    const selectedThreadId = resolution.selectedThreadId?.trim();
-    const decidingInstruction = resolution.decidingInstruction?.trim();
-    if (selectedThreadId) {
-      wsHandle?.send({
-        type: "conflict_resolve",
-        conflict_id: conflictId,
-        selected_thread_id: selectedThreadId,
-      });
-      return;
-    }
-    if (decidingInstruction) {
-      wsHandle?.send({
-        type: "conflict_resolve",
-        conflict_id: conflictId,
-        deciding_instruction: decidingInstruction,
-      });
-    }
-  },
-
   answerQuestion(requestId, answer) {
     const optionIds = answer.optionIds.length > 0 ? answer.optionIds : undefined;
     const freeform = answer.freeform?.trim() || undefined;
@@ -502,8 +471,6 @@ export function inferPhase(
     case "plan_ready":
     case "approval_requested":
       return "awaiting_approval";
-    case "conflict_raised":
-      return "awaiting_resolution";
     case "brief_dispatched":
       return "refining";
     case "agent_run_started":
@@ -695,44 +662,6 @@ export function reduceAnnotations(
       });
       return changed ? next : current;
     }
-    default:
-      return current;
-  }
-}
-
-export function reduceConflicts(
-  current: AnnotationConflict[],
-  event: DOToCLIEvent,
-): AnnotationConflict[] {
-  switch (event.type) {
-    case "conflict_raised": {
-      const index = current.findIndex((conflict) => conflict.id === event.conflict.id);
-      if (index === -1) return [...current, event.conflict];
-      const existing = current[index];
-      const replacement = event.conflict;
-      if (
-        existing.summary === replacement.summary
-        && existing.status === replacement.status
-        && existing.run_id === replacement.run_id
-        && existing.round === replacement.round
-        && JSON.stringify(existing.options) === JSON.stringify(replacement.options)
-      ) {
-        return current;
-      }
-      return current.map((conflict, conflictIndex) =>
-        conflictIndex === index ? replacement : conflict,
-      );
-    }
-    case "conflict_resolved": {
-      const index = current.findIndex((conflict) => conflict.id === event.conflict_id);
-      if (index === -1) return current;
-      if (current[index].status === "resolved") return current;
-      return current.map((conflict, conflictIndex) =>
-        conflictIndex === index ? { ...conflict, status: "resolved" as const } : conflict,
-      );
-    }
-    case "brief_dispatched":
-      return [];
     default:
       return current;
   }

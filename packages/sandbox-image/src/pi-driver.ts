@@ -259,9 +259,6 @@ export function consolidationPrompt(input: ConsolidationInput): string {
     "",
     "Open annotations JSON:",
     JSON.stringify(input.annotations),
-    "",
-    "Existing conflicts JSON (already resolved by prior rounds — incorporate their resolutions if present):",
-    JSON.stringify(input.conflicts),
   ].join("\n");
 }
 

@@ -2,7 +2,7 @@
  * PlanReviewPanel
  *
  * Full-screen slide-out overlay that hosts the collaborative plan annotation
- * surface (PlanRevisionView + ConflictPanel + AnnotationPanel + action bar).
+ * surface (PlanRevisionView + AnnotationPanel + action bar).
  *
  * Layout guarantee:
  *   - The panel is `position:fixed; top:0; bottom:0; display:flex; flex-direction:column`.
@@ -22,7 +22,6 @@ import { useEffect, useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import { openThreadsSorted, canSendToAgent, sendToAgentLabel } from "@/lib/annotation-predicates";
 import { PlanRevisionView } from "./plan-revision-view";
-import { ConflictPanel } from "./conflict-panel";
 import { AnnotationPanel } from "./annotation-panel";
 
 interface PlanReviewPanelProps {
@@ -127,7 +126,6 @@ export function PlanReviewPanel({ onClose }: PlanReviewPanelProps) {
         {/* ── Body (flex:1, scrolls) ── */}
         <div className="plan-review-panel-body">
           <PlanRevisionView />
-          <ConflictPanel />
           <AnnotationPanel />
         </div>
 

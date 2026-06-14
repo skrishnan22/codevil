@@ -13,7 +13,6 @@ import {
   AnnotationCreateMessageSchema,
   AnnotationReplyMessageSchema,
   AnnotationWithdrawMessageSchema,
-  ConflictResolveMessageSchema,
   AgentRequestEventSchema,
   AgentRequestQueuedEventSchema,
   AgentRunStartedEventSchema,
@@ -26,8 +25,6 @@ import {
   AnnotationRepliedEventSchema,
   AnnotationWithdrawnEventSchema,
   ConsolidationStartedEventSchema,
-  ConflictRaisedEventSchema,
-  ConflictResolvedEventSchema,
   BriefDispatchedEventSchema,
   AnnotationsConsumedEventSchema,
   ApproveRunMessageSchema,
@@ -167,26 +164,13 @@ test("CLIToDOMessageSchema accepts collaborative annotation messages", () => {
     type: "annotation_withdraw",
     thread_id: "ann_123",
   });
-  const selected = ConflictResolveMessageSchema.parse({
-    type: "conflict_resolve",
-    conflict_id: "conf_123",
-    selected_thread_id: "ann_123",
-  });
-  const instructed = ConflictResolveMessageSchema.parse({
-    type: "conflict_resolve",
-    conflict_id: "conf_124",
-    deciding_instruction: "Prefer the read-only consolidation wording.",
-  });
 
   assert.equal(created.anchor.text, anchor.text);
   assert.equal(replied.comment, "Agreed, and keep the turn no-tools.");
   assert.equal(withdrawn.thread_id, "ann_123");
-  assert.equal(selected.selected_thread_id, "ann_123");
-  assert.equal(instructed.deciding_instruction, "Prefer the read-only consolidation wording.");
   assert.equal(CLIToDOMessageSchema.parse(created).type, "annotation_create");
   assert.equal(CLIToDOMessageSchema.parse(replied).type, "annotation_reply");
   assert.equal(CLIToDOMessageSchema.parse(withdrawn).type, "annotation_withdraw");
-  assert.equal(CLIToDOMessageSchema.parse(selected).type, "conflict_resolve");
 });
 
 test("agent request and run lifecycle events carry run identity", () => {
@@ -249,18 +233,6 @@ test("DOToCLIEventSchema accepts annotation collaboration events", () => {
     status: "open",
     created_at: "2026-06-12T00:00:00.000Z",
   };
-  const conflict = {
-    id: "conf_123",
-    run_id: "run_123",
-    round: 0,
-    summary: "Two comments disagree on read-only enforcement.",
-    options: [
-      { thread_id: "ann_123", gist: "Require read-only Pi consolidation." },
-      { thread_id: "ann_124", gist: "Allow full sandbox tools." },
-    ],
-    status: "open",
-  };
-
   assert.equal(PlanRevisionFrozenEventSchema.parse({
     type: "plan_revision_frozen",
     run_id: "run_123",
@@ -289,22 +261,13 @@ test("DOToCLIEventSchema accepts annotation collaboration events", () => {
     run_id: "run_123",
     round: 0,
   }).round, 0);
-  assert.equal(ConflictRaisedEventSchema.parse({ type: "conflict_raised", conflict }).conflict.options.length, 2);
-  assert.equal(ConflictResolvedEventSchema.parse({
-    type: "conflict_resolved",
-    conflict_id: "conf_123",
-    resolved_by: actor,
-    selected_thread_id: "ann_123",
-  }).selected_thread_id, "ann_123");
   assert.equal(BriefDispatchedEventSchema.parse({
     type: "brief_dispatched",
     run_id: "run_123",
     from_round: 0,
     to_round: 1,
-    brief_items: [
-      { instruction: "Require read-only Pi consolidation.", source_thread_ids: ["ann_123"] },
-    ],
-  }).brief_items[0].source_thread_ids[0], "ann_123");
+    brief: "Require read-only Pi consolidation.",
+  }).brief, "Require read-only Pi consolidation.");
   assert.equal(AnnotationsConsumedEventSchema.parse({
     type: "annotations_consumed",
     run_id: "run_123",

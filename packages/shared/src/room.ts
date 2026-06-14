@@ -22,7 +22,6 @@ export const AgentRunStateSchema = z.enum([
   "queued",
   "thinking",
   "awaiting_approval",
-  "awaiting_resolution",
   "executing",
   "verifying",
   "publishing",

@@ -41,7 +41,6 @@ export function authActionForClientMessage(message: CLIToDOMessage): AuthAction 
     case "annotation_create":
     case "annotation_reply":
     case "annotation_withdraw":
-    case "conflict_resolve":
     case "abort":
     case "abort_run":
     case "stop_session":

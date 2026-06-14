@@ -4,10 +4,8 @@ import { PreviewAppSchema } from "./preview.js";
 import { ParticipantIdentitySchema } from "./room.js";
 import {
   AnnotationAnchorSchema,
-  AnnotationConflictSchema,
   AnnotationReplySchema,
   AnnotationThreadSchema,
-  BriefItemSchema,
 } from "./annotations.js";
 import { QuestionOptionSchema, AnswerableBySchema } from "./questions.js";
 
@@ -203,26 +201,12 @@ export const ConsolidationStartedEventSchema = z.object({
   round: z.number().int().nonnegative(),
 });
 
-export const ConflictRaisedEventSchema = z.object({
-  type: z.literal("conflict_raised"),
-  conflict: AnnotationConflictSchema,
-});
-
-export const ConflictResolvedEventSchema = z.object({
-  type: z.literal("conflict_resolved"),
-  conflict_id: z.string(),
-  resolved_by: ParticipantIdentitySchema,
-  selected_thread_id: z.string().optional(),
-  deciding_instruction: z.string().trim().min(1).max(20_000).optional(),
-});
-
 export const BriefDispatchedEventSchema = z.object({
   type: z.literal("brief_dispatched"),
   run_id: z.string(),
   from_round: z.number().int().nonnegative(),
   to_round: z.number().int().nonnegative(),
-  brief: z.string().optional(),
-  brief_items: z.array(BriefItemSchema).optional(),
+  brief: z.string(),
 });
 
 export const AnnotationsConsumedEventSchema = z.object({
@@ -285,8 +269,6 @@ export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   AnnotationRepliedEventSchema,
   AnnotationWithdrawnEventSchema,
   ConsolidationStartedEventSchema,
-  ConflictRaisedEventSchema,
-  ConflictResolvedEventSchema,
   BriefDispatchedEventSchema,
   AnnotationsConsumedEventSchema,
   QuestionRaisedEventSchema,
@@ -329,8 +311,6 @@ export type AnnotationCreatedEvent = z.infer<typeof AnnotationCreatedEventSchema
 export type AnnotationRepliedEvent = z.infer<typeof AnnotationRepliedEventSchema>;
 export type AnnotationWithdrawnEvent = z.infer<typeof AnnotationWithdrawnEventSchema>;
 export type ConsolidationStartedEvent = z.infer<typeof ConsolidationStartedEventSchema>;
-export type ConflictRaisedEvent = z.infer<typeof ConflictRaisedEventSchema>;
-export type ConflictResolvedEvent = z.infer<typeof ConflictResolvedEventSchema>;
 export type BriefDispatchedEvent = z.infer<typeof BriefDispatchedEventSchema>;
 export type AnnotationsConsumedEvent = z.infer<typeof AnnotationsConsumedEventSchema>;
 export type QuestionOption = z.infer<typeof QuestionOptionSchema>;
@@ -397,25 +377,6 @@ export const AnnotationWithdrawMessageSchema = z.object({
   thread_id: z.string(),
 });
 
-export const ConflictResolveSelectionMessageSchema = z.object({
-  type: z.literal("conflict_resolve"),
-  conflict_id: z.string(),
-  selected_thread_id: z.string(),
-  deciding_instruction: z.never().optional(),
-});
-
-export const ConflictResolveInstructionMessageSchema = z.object({
-  type: z.literal("conflict_resolve"),
-  conflict_id: z.string(),
-  selected_thread_id: z.never().optional(),
-  deciding_instruction: z.string().trim().min(1).max(20_000),
-});
-
-export const ConflictResolveMessageSchema = z.union([
-  ConflictResolveSelectionMessageSchema,
-  ConflictResolveInstructionMessageSchema,
-]);
-
 export const ApproveRunMessageSchema = z.object({
   type: z.literal("approve_run"),
   run_id: z.string(),
@@ -458,7 +419,6 @@ export const CLIToDOMessageSchema = z.union([
   AnnotationCreateMessageSchema,
   AnnotationReplyMessageSchema,
   AnnotationWithdrawMessageSchema,
-  ConflictResolveMessageSchema,
   ApproveRunMessageSchema,
   RefineRunMessageSchema,
   AbortRunMessageSchema,
@@ -476,9 +436,6 @@ export type AgentRequestMessage = z.infer<typeof AgentRequestMessageSchema>;
 export type AnnotationCreateMessage = z.infer<typeof AnnotationCreateMessageSchema>;
 export type AnnotationReplyMessage = z.infer<typeof AnnotationReplyMessageSchema>;
 export type AnnotationWithdrawMessage = z.infer<typeof AnnotationWithdrawMessageSchema>;
-export type ConflictResolveSelectionMessage = z.infer<typeof ConflictResolveSelectionMessageSchema>;
-export type ConflictResolveInstructionMessage = z.infer<typeof ConflictResolveInstructionMessageSchema>;
-export type ConflictResolveMessage = z.infer<typeof ConflictResolveMessageSchema>;
 export type ApproveRunMessage = z.infer<typeof ApproveRunMessageSchema>;
 export type RefineRunMessage = z.infer<typeof RefineRunMessageSchema>;
 export type AbortRunMessage = z.infer<typeof AbortRunMessageSchema>;

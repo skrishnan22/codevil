@@ -156,7 +156,6 @@ test("consolidate_annotations emits brief (not brief_items) when agent returns t
         replies: [],
       },
     ],
-    conflicts: [],
     model: "claude-sonnet-4-6",
   });
 
@@ -166,7 +165,6 @@ test("consolidate_annotations emits brief (not brief_items) when agent returns t
   assert.equal(msg.run_id, "run_2");
   assert.equal(msg.round, 1);
   assert.equal(msg.brief, "Use the existing D1 storage; skip the deletion.");
-  assert.equal(msg.brief_items, undefined, "prose path must not include brief_items");
   assert.equal(agents.length, 1);
   assert.equal(agents[0].calls[0][0], "consolidateAnnotations");
   assert.deepEqual(agents[0].disposed, true);

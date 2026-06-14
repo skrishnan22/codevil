@@ -5,7 +5,6 @@ import { spawn } from "node:child_process";
 import type {
   CostInfo,
   DOToSandboxMessage,
-  AnnotationConflict,
   ConsolidationAnnotation,
   PreviewApp,
   PreviewFramework,
@@ -85,7 +84,6 @@ export interface ConsolidationInput {
   llmKey?: string;
   plan: string;
   annotations: ConsolidationAnnotation[];
-  conflicts: AnnotationConflict[];
   askQuestion?: (params: AskQuestionParams) => Promise<AskQuestionOutcome>;
 }
 
@@ -550,7 +548,6 @@ export class SandboxRuntime {
               llmKey: this.llmKey,
               plan: message.plan,
               annotations: message.annotations,
-              conflicts: message.conflicts,
               askQuestion,
             });
           }

@@ -86,7 +86,6 @@ test("consolidationPrompt instructs the agent to output prose (not JSON)", () =>
     annotations: [
       { id: "ann_1", anchoredQuote: "Build", sourceLine: 1, authorName: "Alice", comment: "Use D1", replies: [] },
     ],
-    conflicts: [],
   });
   // Must tell the agent to emit prose, not JSON
   assert.ok(prompt.includes("plain prose") || prompt.includes("message text"), `prompt should mention prose output, got:\n${prompt}`);
@@ -111,7 +110,6 @@ test("consolidationPrompt instructs use of ask_question on contradictions", () =
       { id: "ann_a", anchoredQuote: "storage", sourceLine: 2, authorName: "Bob", comment: "Use Redis", replies: [] },
       { id: "ann_b", anchoredQuote: "storage", sourceLine: 2, authorName: "Carol", comment: "Avoid Redis", replies: [] },
     ],
-    conflicts: [],
   });
   // Must mention ask_question tool
   assert.ok(prompt.includes("ask_question"), "prompt must instruct use of the ask_question tool on contradictions");
@@ -130,7 +128,6 @@ test("consolidationPrompt includes both annotations in the prompt body", () => {
     provider: "anthropic",
     plan: "# My Plan",
     annotations: [ann1, ann2],
-    conflicts: [],
   });
   assert.ok(prompt.includes("ann_x"), "prompt must include ann_x id");
   assert.ok(prompt.includes("ann_y"), "prompt must include ann_y id");

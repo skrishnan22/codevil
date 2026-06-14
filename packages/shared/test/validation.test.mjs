@@ -57,33 +57,6 @@ test("CLI→DO: unknown message type is dropped", () => {
   assert.equal(drops[0].raw_type, "garbage");
 });
 
-test("CLI→DO: conflict_resolve requires exactly one resolution field", () => {
-  const drops = captureDrops(() => {
-    const missing = parseInbound(
-      CLIToDOMessageSchema,
-      { type: "conflict_resolve", conflict_id: "conf_1" },
-      "cli_to_do",
-    );
-    const conflicting = parseInbound(
-      CLIToDOMessageSchema,
-      {
-        type: "conflict_resolve",
-        conflict_id: "conf_1",
-        selected_thread_id: "ann_1",
-        deciding_instruction: "Use the read-only consolidation path.",
-      },
-      "cli_to_do",
-    );
-
-    assert.equal(missing, null);
-    assert.equal(conflicting, null);
-  });
-
-  assert.equal(drops.length, 2);
-  assert.equal(drops[0].raw_type, "conflict_resolve");
-  assert.equal(drops[1].raw_type, "conflict_resolve");
-});
-
 test("Sandbox→DO: clone_progress parses", () => {
   const result = parseInbound(
     SandboxToDOMessageSchema,
@@ -133,7 +106,6 @@ test("DO→Sandbox and Sandbox→DO: consolidation messages parse", () => {
           replies: [],
         },
       ],
-      conflicts: [],
       model: "claude-sonnet-4-6",
     },
     "do_to_sandbox",
@@ -144,9 +116,7 @@ test("DO→Sandbox and Sandbox→DO: consolidation messages parse", () => {
       type: "consolidation_complete",
       run_id: "run_1",
       round: 0,
-      brief_items: [
-        { instruction: "Mention the sandbox contract.", source_thread_ids: ["ann_1"] },
-      ],
+      brief: "Mention the sandbox contract.",
       cost: { input_tokens: 1, output_tokens: 2, total_cost_usd: 0 },
     },
     "sandbox_to_do",
@@ -157,7 +127,7 @@ test("DO→Sandbox and Sandbox→DO: consolidation messages parse", () => {
       type: "consolidation_failed",
       run_id: "run_1",
       round: 0,
-      message: "conflict remains",
+      message: "consolidation failed",
       cost: { input_tokens: 1, output_tokens: 2, total_cost_usd: 0 },
     },
     "sandbox_to_do",

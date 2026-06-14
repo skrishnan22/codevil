@@ -1,10 +1,6 @@
 import { z } from "zod";
 import { CostInfoSchema } from "./cost.js";
 import { PreviewAppSchema } from "./preview.js";
-import {
-  AnnotationConflictSchema,
-  BriefItemSchema,
-} from "./annotations.js";
 import { ParticipantIdentitySchema } from "./room.js";
 import { QuestionOptionSchema, AnswerableBySchema } from "./questions.js";
 
@@ -113,7 +109,6 @@ export const ConsolidateAnnotationsMessageSchema = z.object({
   plan_revision_id: z.string(),
   plan: z.string(),
   annotations: z.array(ConsolidationAnnotationSchema),
-  conflicts: z.array(AnnotationConflictSchema),
   model: z.string(),
   provider: z.string().optional(),
   ...TraceContextFields,
@@ -294,9 +289,7 @@ export const ConsolidationCompleteSchema = z.object({
   type: z.literal("consolidation_complete"),
   run_id: z.string(),
   round: z.number().int().nonnegative(),
-  brief: z.string().optional(),
-  brief_items: z.array(BriefItemSchema).optional(),
-  conflicts: z.array(AnnotationConflictSchema).optional(),
+  brief: z.string(),
   cost: CostInfoSchema,
 });
 

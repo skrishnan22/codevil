@@ -77,6 +77,10 @@ export type {
   ConflictResolvedEvent,
   BriefDispatchedEvent,
   AnnotationsConsumedEvent,
+  QuestionOption,
+  AnswerableBy,
+  QuestionRaisedEvent,
+  QuestionAnsweredEvent,
   DOToCLIEvent,
   ApproveMessage,
   AbortMessage,
@@ -95,6 +99,7 @@ export type {
   ApproveRunMessage,
   RefineRunMessage,
   AbortRunMessage,
+  QuestionAnswerMessage,
   CLIToDOMessage,
 } from "./messages-cli.js";
 export {
@@ -132,6 +137,10 @@ export {
   ConflictResolvedEventSchema,
   BriefDispatchedEventSchema,
   AnnotationsConsumedEventSchema,
+  QuestionOptionSchema,
+  AnswerableBySchema,
+  QuestionRaisedEventSchema,
+  QuestionAnsweredEventSchema,
   DOToCLIEventSchema,
   PersistedDOToCLIEventSchema,
   ApproveMessageSchema,
@@ -151,6 +160,7 @@ export {
   ApproveRunMessageSchema,
   RefineRunMessageSchema,
   AbortRunMessageSchema,
+  QuestionAnswerMessageSchema,
   CLIToDOMessageSchema,
 } from "./messages-cli.js";
 
@@ -167,6 +177,8 @@ export type {
   PreviewStopSandboxMessage,
   ConsolidationAnnotation,
   ConsolidateAnnotationsMessage,
+  AskQuestionResponse,
+  AskQuestionCancelled,
   DOToSandboxMessage,
   SandboxAgentEvent,
   SandboxCloneStarted,
@@ -191,6 +203,7 @@ export type {
   SandboxPreviewApps,
   ConsolidationComplete,
   ConsolidationFailed,
+  AskQuestionRequest,
   SandboxToDOMessage,
 } from "./messages-sandbox.js";
 export {
@@ -206,6 +219,8 @@ export {
   PreviewStopSandboxMessageSchema,
   ConsolidationAnnotationSchema,
   ConsolidateAnnotationsMessageSchema,
+  AskQuestionResponseSchema,
+  AskQuestionCancelledSchema,
   DOToSandboxMessageSchema,
   SandboxAgentEventSchema,
   SandboxCloneStartedSchema,
@@ -230,6 +245,7 @@ export {
   SandboxPreviewAppsSchema,
   ConsolidationCompleteSchema,
   ConsolidationFailedSchema,
+  AskQuestionRequestSchema,
   SandboxToDOMessageSchema,
 } from "./messages-sandbox.js";
 

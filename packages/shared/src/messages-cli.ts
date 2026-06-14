@@ -10,6 +10,16 @@ import {
   BriefItemSchema,
 } from "./annotations.js";
 
+// --- Shared building blocks for ask_question ---
+
+export const QuestionOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().trim().min(1).max(2_000),
+  detail: z.string().max(8_000).optional(),
+});
+
+export const AnswerableBySchema = z.enum(["decider", "anyone"]);
+
 // --- DO → CLI events ---
 
 export const SessionCreatedEventSchema = z.object({
@@ -228,6 +238,28 @@ export const AnnotationsConsumedEventSchema = z.object({
   thread_ids: z.array(z.string()),
 });
 
+export const QuestionRaisedEventSchema = z.object({
+  type: z.literal("question_raised"),
+  request_id: z.string(),
+  run_id: z.string(),
+  question: z.string(),
+  context: z.string().optional(),
+  options: z.array(QuestionOptionSchema).optional(),
+  allow_freeform: z.boolean(),
+  allow_multiple: z.boolean(),
+  answerable_by: AnswerableBySchema,
+  status: z.literal("open"),
+});
+
+export const QuestionAnsweredEventSchema = z.object({
+  type: z.literal("question_answered"),
+  request_id: z.string(),
+  option_ids: z.array(z.string()),
+  freeform: z.string().optional(),
+  answered_by: ParticipantIdentitySchema,
+  answered_at: z.string(),
+});
+
 export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   SessionCreatedEventSchema,
   StatusEventSchema,
@@ -263,6 +295,8 @@ export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   ConflictResolvedEventSchema,
   BriefDispatchedEventSchema,
   AnnotationsConsumedEventSchema,
+  QuestionRaisedEventSchema,
+  QuestionAnsweredEventSchema,
 ]);
 
 // Lenient variant for replaying persisted history from DO SQLite.
@@ -305,6 +339,10 @@ export type ConflictRaisedEvent = z.infer<typeof ConflictRaisedEventSchema>;
 export type ConflictResolvedEvent = z.infer<typeof ConflictResolvedEventSchema>;
 export type BriefDispatchedEvent = z.infer<typeof BriefDispatchedEventSchema>;
 export type AnnotationsConsumedEvent = z.infer<typeof AnnotationsConsumedEventSchema>;
+export type QuestionOption = z.infer<typeof QuestionOptionSchema>;
+export type AnswerableBy = z.infer<typeof AnswerableBySchema>;
+export type QuestionRaisedEvent = z.infer<typeof QuestionRaisedEventSchema>;
+export type QuestionAnsweredEvent = z.infer<typeof QuestionAnsweredEventSchema>;
 export type DOToCLIEvent = z.infer<typeof DOToCLIEventSchema>;
 
 // --- CLI → DO messages ---
@@ -400,6 +438,20 @@ export const AbortRunMessageSchema = z.object({
   run_id: z.string(),
 });
 
+export const QuestionAnswerMessageSchema = z
+  .object({
+    type: z.literal("question_answer"),
+    request_id: z.string(),
+    option_ids: z.array(z.string()).optional(),
+    freeform: z.string().trim().min(1).max(20_000).optional(),
+  })
+  .refine(
+    (val) =>
+      (Array.isArray(val.option_ids) && val.option_ids.length > 0) ||
+      (typeof val.freeform === "string" && val.freeform.length > 0),
+    { message: "question_answer must include non-empty option_ids, non-empty freeform, or both" },
+  );
+
 export const CLIToDOMessageSchema = z.union([
   ApproveMessageSchema,
   AbortMessageSchema,
@@ -416,6 +468,7 @@ export const CLIToDOMessageSchema = z.union([
   ApproveRunMessageSchema,
   RefineRunMessageSchema,
   AbortRunMessageSchema,
+  QuestionAnswerMessageSchema,
 ]);
 
 export type ApproveMessage = z.infer<typeof ApproveMessageSchema>;
@@ -435,4 +488,5 @@ export type ConflictResolveMessage = z.infer<typeof ConflictResolveMessageSchema
 export type ApproveRunMessage = z.infer<typeof ApproveRunMessageSchema>;
 export type RefineRunMessage = z.infer<typeof RefineRunMessageSchema>;
 export type AbortRunMessage = z.infer<typeof AbortRunMessageSchema>;
+export type QuestionAnswerMessage = z.infer<typeof QuestionAnswerMessageSchema>;
 export type CLIToDOMessage = z.infer<typeof CLIToDOMessageSchema>;

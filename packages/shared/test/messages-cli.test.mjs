@@ -33,6 +33,11 @@ import {
   ApproveRunMessageSchema,
   RefineRunMessageSchema,
   AbortRunMessageSchema,
+  QuestionOptionSchema,
+  AnswerableBySchema,
+  QuestionRaisedEventSchema,
+  QuestionAnsweredEventSchema,
+  QuestionAnswerMessageSchema,
   DOToCLIEventSchema,
   CLIToDOMessageSchema,
   PersistedDOToCLIEventSchema,
@@ -325,4 +330,175 @@ test("agent responses carry the final conversational answer", () => {
 
   assert.equal(parsed.text, "The retry logic lives in src/retry.ts.");
   assert.equal(DOToCLIEventSchema.parse(parsed).type, "agent_response");
+});
+
+// --- ask_question building blocks ---
+
+test("QuestionOptionSchema accepts valid option", () => {
+  const parsed = QuestionOptionSchema.parse({ id: "opt-1", label: "Option A", detail: "Some extra detail" });
+  assert.equal(parsed.id, "opt-1");
+  assert.equal(parsed.label, "Option A");
+  assert.equal(parsed.detail, "Some extra detail");
+});
+
+test("QuestionOptionSchema rejects empty id", () => {
+  assert.throws(() => QuestionOptionSchema.parse({ id: "", label: "A" }));
+});
+
+test("QuestionOptionSchema rejects empty label", () => {
+  assert.throws(() => QuestionOptionSchema.parse({ id: "opt-1", label: "" }));
+});
+
+test("AnswerableBySchema accepts decider and anyone", () => {
+  assert.equal(AnswerableBySchema.parse("decider"), "decider");
+  assert.equal(AnswerableBySchema.parse("anyone"), "anyone");
+});
+
+test("AnswerableBySchema rejects unknown values", () => {
+  assert.throws(() => AnswerableBySchema.parse("everyone"));
+});
+
+// --- DO → CLI: question events ---
+
+test("QuestionRaisedEventSchema parses valid question_raised event", () => {
+  const parsed = QuestionRaisedEventSchema.parse({
+    type: "question_raised",
+    request_id: "req_1",
+    run_id: "run_1",
+    question: "Which approach should we use?",
+    options: [{ id: "opt-1", label: "Option A" }, { id: "opt-2", label: "Option B" }],
+    allow_freeform: false,
+    allow_multiple: false,
+    answerable_by: "decider",
+    status: "open",
+  });
+  assert.equal(parsed.type, "question_raised");
+  assert.equal(parsed.request_id, "req_1");
+  assert.equal(parsed.options.length, 2);
+  assert.equal(parsed.status, "open");
+});
+
+test("QuestionRaisedEventSchema parses freeform-only question (no options)", () => {
+  const parsed = QuestionRaisedEventSchema.parse({
+    type: "question_raised",
+    request_id: "req_2",
+    run_id: "run_1",
+    question: "Describe the issue in detail.",
+    context: "Background context here.",
+    allow_freeform: true,
+    allow_multiple: false,
+    answerable_by: "anyone",
+    status: "open",
+  });
+  assert.equal(parsed.context, "Background context here.");
+  assert.equal(parsed.options, undefined);
+});
+
+test("DOToCLIEventSchema accepts question_raised events", () => {
+  const parsed = DOToCLIEventSchema.parse({
+    type: "question_raised",
+    request_id: "req_1",
+    run_id: "run_1",
+    question: "Pick one.",
+    allow_freeform: false,
+    allow_multiple: false,
+    answerable_by: "decider",
+    status: "open",
+  });
+  assert.equal(parsed.type, "question_raised");
+});
+
+test("QuestionAnsweredEventSchema parses valid question_answered event", () => {
+  const parsed = QuestionAnsweredEventSchema.parse({
+    type: "question_answered",
+    request_id: "req_1",
+    option_ids: ["opt-1"],
+    freeform: "Additional note",
+    answered_by: { id: "usr_1", name: "Alice" },
+    answered_at: "2026-06-14T10:00:00.000Z",
+  });
+  assert.equal(parsed.answered_by.name, "Alice");
+  assert.equal(parsed.option_ids[0], "opt-1");
+});
+
+test("DOToCLIEventSchema accepts question_answered events", () => {
+  const parsed = DOToCLIEventSchema.parse({
+    type: "question_answered",
+    request_id: "req_1",
+    option_ids: ["opt-2"],
+    answered_by: { id: "usr_2", name: "Bob" },
+    answered_at: "2026-06-14T11:00:00.000Z",
+  });
+  assert.equal(parsed.type, "question_answered");
+});
+
+// --- CLI → DO: question_answer ---
+
+test("QuestionAnswerMessageSchema accepts answer with only option_ids", () => {
+  const parsed = QuestionAnswerMessageSchema.parse({
+    type: "question_answer",
+    request_id: "req_1",
+    option_ids: ["opt-1"],
+  });
+  assert.equal(parsed.type, "question_answer");
+  assert.deepEqual(parsed.option_ids, ["opt-1"]);
+});
+
+test("QuestionAnswerMessageSchema accepts answer with only freeform", () => {
+  const parsed = QuestionAnswerMessageSchema.parse({
+    type: "question_answer",
+    request_id: "req_1",
+    freeform: "This is my freeform answer.",
+  });
+  assert.equal(parsed.freeform, "This is my freeform answer.");
+});
+
+test("QuestionAnswerMessageSchema accepts answer with both option_ids and freeform", () => {
+  const parsed = QuestionAnswerMessageSchema.parse({
+    type: "question_answer",
+    request_id: "req_1",
+    option_ids: ["opt-1"],
+    freeform: "Also some extra context.",
+  });
+  assert.equal(parsed.option_ids[0], "opt-1");
+  assert.equal(parsed.freeform, "Also some extra context.");
+});
+
+test("QuestionAnswerMessageSchema rejects answer with neither option_ids nor freeform", () => {
+  assert.throws(() =>
+    QuestionAnswerMessageSchema.parse({
+      type: "question_answer",
+      request_id: "req_1",
+    }),
+  );
+});
+
+test("QuestionAnswerMessageSchema rejects answer with empty option_ids and no freeform", () => {
+  assert.throws(() =>
+    QuestionAnswerMessageSchema.parse({
+      type: "question_answer",
+      request_id: "req_1",
+      option_ids: [],
+    }),
+  );
+});
+
+test("QuestionAnswerMessageSchema rejects answer with empty option_ids and empty freeform after trim", () => {
+  assert.throws(() =>
+    QuestionAnswerMessageSchema.parse({
+      type: "question_answer",
+      request_id: "req_1",
+      option_ids: [],
+      freeform: "   ",
+    }),
+  );
+});
+
+test("CLIToDOMessageSchema accepts question_answer messages", () => {
+  const parsed = CLIToDOMessageSchema.parse({
+    type: "question_answer",
+    request_id: "req_1",
+    option_ids: ["opt-1"],
+  });
+  assert.equal(parsed.type, "question_answer");
 });

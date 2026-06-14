@@ -5,6 +5,7 @@ import {
   AnnotationConflictSchema,
   BriefItemSchema,
 } from "./annotations.js";
+import { ParticipantIdentitySchema } from "./room.js";
 
 // Minimal per-thread shape the consolidation sandbox agent receives.
 // Excludes raw anchor internals (startMeta/endMeta/blockId) — only the
@@ -117,6 +118,20 @@ export const ConsolidateAnnotationsMessageSchema = z.object({
   ...TraceContextFields,
 });
 
+export const AskQuestionResponseSchema = z.object({
+  type: z.literal("ask_question_response"),
+  request_id: z.string(),
+  option_ids: z.array(z.string()),
+  freeform: z.string().optional(),
+  answered_by: ParticipantIdentitySchema,
+});
+
+export const AskQuestionCancelledSchema = z.object({
+  type: z.literal("ask_question_cancelled"),
+  request_id: z.string(),
+  reason: z.string(),
+});
+
 export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   InitMessageSchema,
   AgentTurnMessageSchema,
@@ -129,6 +144,8 @@ export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   PreviewStartSandboxMessageSchema,
   PreviewStopSandboxMessageSchema,
   ConsolidateAnnotationsMessageSchema,
+  AskQuestionResponseSchema,
+  AskQuestionCancelledSchema,
 ]);
 
 export type InitMessage = z.infer<typeof InitMessageSchema>;
@@ -289,6 +306,22 @@ export const ConsolidationFailedSchema = z.object({
   cost: CostInfoSchema.optional(),
 });
 
+export const AskQuestionRequestSchema = z.object({
+  type: z.literal("ask_question_request"),
+  request_id: z.string(),
+  run_id: z.string(),
+  question: z.string().trim().min(1).max(8_000),
+  context: z.string().max(20_000).optional(),
+  options: z.array(z.object({
+    id: z.string().min(1),
+    label: z.string().trim().min(1).max(2_000),
+    detail: z.string().max(8_000).optional(),
+  })).optional(),
+  allow_freeform: z.boolean(),
+  allow_multiple: z.boolean(),
+  answerable_by: z.enum(["decider", "anyone"]),
+});
+
 export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [
   SandboxAgentEventSchema,
   SandboxCloneStartedSchema,
@@ -313,6 +346,7 @@ export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [
   SandboxPreviewAppsSchema,
   ConsolidationCompleteSchema,
   ConsolidationFailedSchema,
+  AskQuestionRequestSchema,
 ]);
 
 export type SandboxAgentEvent = z.infer<typeof SandboxAgentEventSchema>;
@@ -338,4 +372,7 @@ export type SandboxPreviewStopped = z.infer<typeof SandboxPreviewStoppedSchema>;
 export type SandboxPreviewApps = z.infer<typeof SandboxPreviewAppsSchema>;
 export type ConsolidationComplete = z.infer<typeof ConsolidationCompleteSchema>;
 export type ConsolidationFailed = z.infer<typeof ConsolidationFailedSchema>;
+export type AskQuestionRequest = z.infer<typeof AskQuestionRequestSchema>;
+export type AskQuestionResponse = z.infer<typeof AskQuestionResponseSchema>;
+export type AskQuestionCancelled = z.infer<typeof AskQuestionCancelledSchema>;
 export type SandboxToDOMessage = z.infer<typeof SandboxToDOMessageSchema>;

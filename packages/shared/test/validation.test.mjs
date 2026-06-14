@@ -11,6 +11,9 @@ import {
   AnnotationAnchorSchema,
   AnnotationCreateMessageSchema,
   AnnotationCreatedEventSchema,
+  AskQuestionRequestSchema,
+  AskQuestionResponseSchema,
+  AskQuestionCancelledSchema,
   parseInbound,
   setValidationDropSink,
 } from "../dist/index.js";
@@ -362,4 +365,101 @@ test("annotation_created event parses with new anchor shape", () => {
   const result = AnnotationCreatedEventSchema.parse({ type: "annotation_created", annotation });
   assert.equal(result.annotation.anchor.text, validAnchor.text);
   assert.equal(result.annotation.anchor.sourceLine, 5);
+});
+
+// --- ask_question sandbox messages ---
+
+test("Sandbox→DO: ask_question_request parses as union member", () => {
+  const result = SandboxToDOMessageSchema.parse({
+    type: "ask_question_request",
+    request_id: "req_1",
+    run_id: "run_1",
+    question: "Which approach is best?",
+    options: [
+      { id: "opt-1", label: "Approach A" },
+      { id: "opt-2", label: "Approach B", detail: "More verbose but safer." },
+    ],
+    allow_freeform: true,
+    allow_multiple: false,
+    answerable_by: "decider",
+  });
+  assert.equal(result.type, "ask_question_request");
+  assert.equal(result.request_id, "req_1");
+  assert.equal(result.options.length, 2);
+  assert.equal(result.answerable_by, "decider");
+});
+
+test("Sandbox→DO: ask_question_request parses via parseInbound", () => {
+  const result = parseInbound(
+    SandboxToDOMessageSchema,
+    {
+      type: "ask_question_request",
+      request_id: "req_2",
+      run_id: "run_1",
+      question: "Freeform only question?",
+      allow_freeform: true,
+      allow_multiple: false,
+      answerable_by: "anyone",
+    },
+    "sandbox_to_do",
+  );
+  assert.equal(result?.type, "ask_question_request");
+  assert.equal(result?.answerable_by, "anyone");
+});
+
+test("AskQuestionRequestSchema accepts valid standalone", () => {
+  const parsed = AskQuestionRequestSchema.parse({
+    type: "ask_question_request",
+    request_id: "req_3",
+    run_id: "run_1",
+    question: "Pick your option.",
+    context: "Here is some context.",
+    allow_freeform: false,
+    allow_multiple: true,
+    answerable_by: "decider",
+  });
+  assert.equal(parsed.context, "Here is some context.");
+  assert.equal(parsed.allow_multiple, true);
+});
+
+test("DO→Sandbox: ask_question_response parses as union member", () => {
+  const result = DOToSandboxMessageSchema.parse({
+    type: "ask_question_response",
+    request_id: "req_1",
+    option_ids: ["opt-1"],
+    freeform: "My extra note.",
+    answered_by: { id: "usr_1", name: "Alice" },
+  });
+  assert.equal(result.type, "ask_question_response");
+  assert.equal(result.answered_by.name, "Alice");
+  assert.deepEqual(result.option_ids, ["opt-1"]);
+});
+
+test("AskQuestionResponseSchema parses via standalone", () => {
+  const result = AskQuestionResponseSchema.parse({
+    type: "ask_question_response",
+    request_id: "req_1",
+    option_ids: [],
+    answered_by: { id: "usr_2", name: "Bob" },
+  });
+  assert.equal(result.answered_by.id, "usr_2");
+});
+
+test("DO→Sandbox: ask_question_cancelled parses as union member", () => {
+  const result = DOToSandboxMessageSchema.parse({
+    type: "ask_question_cancelled",
+    request_id: "req_1",
+    reason: "Session ended before answer was provided.",
+  });
+  assert.equal(result.type, "ask_question_cancelled");
+  assert.equal(result.reason, "Session ended before answer was provided.");
+});
+
+test("AskQuestionCancelledSchema parses via standalone", () => {
+  const result = AskQuestionCancelledSchema.parse({
+    type: "ask_question_cancelled",
+    request_id: "req_99",
+    reason: "Timed out.",
+  });
+  assert.equal(result.request_id, "req_99");
 });

@@ -136,12 +136,18 @@ export class PiAgentDriver implements AgentDriver {
       throw new Error(`Model not found: ${input.provider}/${input.model}`);
     }
 
+    // Build the custom tools list: read-only file tools + ask_question when available.
+    const customTools: ReturnType<typeof defineTool>[] = [];
+    if (input.askQuestion) {
+      customTools.push(askQuestionTool(input.askQuestion));
+    }
+
     const { session } = await createAgentSession({
       cwd: input.cwd,
       model,
       authStorage,
       modelRegistry,
-      customTools: [],
+      customTools,
       sessionManager: SessionManager.inMemory(input.cwd),
       settingsManager: SettingsManager.inMemory({
         compaction: { enabled: false },
@@ -150,11 +156,13 @@ export class PiAgentDriver implements AgentDriver {
     });
 
     try {
-      session.setActiveToolsByName(["read", "grep", "find", "ls"]);
+      const activeTools = ["read", "grep", "find", "ls"];
+      if (input.askQuestion) activeTools.push("ask_question");
+      session.setActiveToolsByName(activeTools);
       await session.prompt(consolidationPrompt(input));
       await waitForQueuedAgentEvents(session);
-      const text = latestAssistantText(session.messages);
-      return parseConsolidationResult(text, input.run_id, input.round);
+      const brief = latestAssistantText(session.messages);
+      return { brief, cost: zeroCost };
     } finally {
       session.dispose();
     }
@@ -236,27 +244,17 @@ function latestAssistantText(messages: readonly unknown[]): string {
   return "";
 }
 
-function consolidationPrompt(input: ConsolidationInput): string {
+export function consolidationPrompt(input: ConsolidationInput): string {
   return [
-    "You are consolidating human feedback on a frozen markdown plan.",
-    "Merge compatible feedback into concise, actionable instructions.",
-    "If two annotations contradict each other, do not choose — emit a conflict with options.",
-    "Each annotation has: id, anchoredQuote (the highlighted text), sourceLine (1-based line), authorName, comment, and replies.",
+    "You are consolidating human annotations on a frozen markdown plan into a single, clear instruction set for the coding agent.",
     "",
-    "Return ONLY valid JSON — no prose, no markdown fences — with exactly this shape:",
-    "{",
-    '  "brief_items": [',
-    '    { "instruction": "<concise actionable instruction>", "source_thread_ids": ["<annotation id this came from>", "..."] }',
-    "  ],",
-    '  "conflicts": [',
-    '    { "summary": "<what the disagreement is>", "options": [ { "thread_id": "<annotation id>", "gist": "<short label>" }, { "thread_id": "...", "gist": "..." } ] }',
-    "  ]",
-    "}",
+    "Your job:",
+    "1. Read all annotations. Merge compatible feedback into concise, deduped, actionable prose instructions.",
+    "2. If two annotations genuinely contradict each other (e.g. one says 'use Redis', another says 'avoid Redis'), you MUST call the `ask_question` tool to let a human resolve it. Set one option per conflicting side, using the annotation id as the option `id`. Wait for the human's decision before finalising that part of the brief.",
+    "3. Do NOT pick a side yourself on genuine contradictions — always call `ask_question` first.",
+    "4. Once all contradictions are resolved (or there are none), output the final brief as plain prose in your message text. Do not use JSON. Do not use bullet-point headers unless they aid clarity.",
     "",
-    "Rules:",
-    "- Each brief_items entry MUST be an object with keys 'instruction' (string) and 'source_thread_ids' (array of annotation id strings). NEVER a plain string.",
-    "- Each conflicts entry provides ONLY 'summary' (string) and 'options' (array of at least two {thread_id, gist} objects). Do NOT include id, run_id, round, or status — the system fills those.",
-    "- If there are no conflicts, emit an empty array for conflicts.",
+    "Each annotation has: id, anchoredQuote (the highlighted plan text), sourceLine (1-based line in the plan), authorName, comment, and replies.",
     "",
     "Plan markdown:",
     input.plan,
@@ -264,7 +262,7 @@ function consolidationPrompt(input: ConsolidationInput): string {
     "Open annotations JSON:",
     JSON.stringify(input.annotations),
     "",
-    "Existing conflicts JSON:",
+    "Existing conflicts JSON (already resolved by prior rounds — incorporate their resolutions if present):",
     JSON.stringify(input.conflicts),
   ].join("\n");
 }

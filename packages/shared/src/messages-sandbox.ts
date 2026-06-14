@@ -294,7 +294,8 @@ export const ConsolidationCompleteSchema = z.object({
   type: z.literal("consolidation_complete"),
   run_id: z.string(),
   round: z.number().int().nonnegative(),
-  brief_items: z.array(BriefItemSchema),
+  brief: z.string().optional(),
+  brief_items: z.array(BriefItemSchema).optional(),
   conflicts: z.array(AnnotationConflictSchema).optional(),
   cost: CostInfoSchema,
 });

@@ -1459,7 +1459,7 @@ export class Orchestrator extends DurableObject<Env> {
         this.handleSandboxExecutionComplete(parsed.cost);
         return;
       case "consolidation_complete":
-        this.handleConsolidationComplete(parsed.run_id, parsed.round, parsed.brief_items, parsed.conflicts ?? [], parsed.cost);
+        this.handleConsolidationComplete(parsed.run_id, parsed.round, parsed.brief_items, parsed.conflicts ?? [], parsed.cost, parsed.brief);
         return;
       case "consolidation_failed":
         this.handleConsolidationFailed(parsed.run_id, parsed.round, parsed.message);
@@ -1585,16 +1585,25 @@ export class Orchestrator extends DurableObject<Env> {
   private handleConsolidationComplete(
     runId: string,
     round: number,
-    briefItems: BriefItem[],
+    briefItems: BriefItem[] | undefined,
     conflicts: AnnotationConflict[],
     cost: CostInfo,
+    brief?: string,
   ): void {
     if (!this.meta?.active_run || this.meta.state !== "refining") return;
     if (this.meta.active_run.id !== runId || this.meta.refinement_round !== round) return;
     if (!this.recordCost(cost)) return;
 
+    // New prose path: the consolidation agent resolved contradictions inline via ask_question.
+    if (brief !== undefined) {
+      this.dispatchProseBrief(brief);
+      return;
+    }
+
+    // Legacy structured path (unchanged; removed in Task 6).
+    const items = briefItems ?? [];
     if (conflicts.length > 0) {
-      this.meta.pending_brief_items = briefItems;
+      this.meta.pending_brief_items = items;
       this.saveMeta();
       for (const conflict of conflicts) {
         this.sql.exec(
@@ -1618,7 +1627,28 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
-    this.dispatchRefinementBrief(briefItems);
+    this.dispatchRefinementBrief(items);
+  }
+
+  private dispatchProseBrief(brief: string): void {
+    if (!this.meta?.active_run) return;
+    const fromRound = this.meta.refinement_round;
+    const toRound = fromRound + 1;
+
+    this.meta.pending_brief_items = undefined;
+    this.meta.refinement_round = toRound;
+    this.saveMeta();
+    this.appendAndBroadcast({
+      type: "brief_dispatched",
+      run_id: this.meta.active_run.id,
+      from_round: fromRound,
+      to_round: toRound,
+      brief,
+    });
+    this.sendToSandbox({
+      type: "refine_plan",
+      feedback: brief.trim().length > 0 ? brief : "Refine the plan.",
+    });
   }
 
   private handleConsolidationFailed(runId: string, round: number, message: string): void {

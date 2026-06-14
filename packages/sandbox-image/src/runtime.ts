@@ -87,11 +87,15 @@ export interface ConsolidationInput {
   plan: string;
   annotations: ConsolidationAnnotation[];
   conflicts: AnnotationConflict[];
+  askQuestion?: (params: AskQuestionParams) => Promise<AskQuestionOutcome>;
 }
 
 export interface ConsolidationResult {
-  brief_items: BriefItem[];
-  conflicts: AnnotationConflict[];
+  /** Prose brief emitted by the new ask_question-aware consolidation path. */
+  brief?: string;
+  /** Legacy structured path (Task 6 removes these). */
+  brief_items?: BriefItem[];
+  conflicts?: AnnotationConflict[];
   cost: CostInfo;
 }
 
@@ -533,6 +537,7 @@ export class SandboxRuntime {
   ): Promise<void> {
     const repoDir = this.requireRepo().dir;
     const agent = this.agentFactory();
+    const askQuestion = this.makeAskQuestion(message.run_id);
 
     try {
       const result = await this.maybeSpan(
@@ -550,19 +555,33 @@ export class SandboxRuntime {
               plan: message.plan,
               annotations: message.annotations,
               conflicts: message.conflicts,
+              askQuestion,
             });
           }
           return Promise.resolve(fallbackConsolidation(message.annotations));
         },
       );
-      this.send({
-        type: "consolidation_complete",
-        run_id: message.run_id,
-        round: message.round,
-        brief_items: result.brief_items,
-        conflicts: result.conflicts,
-        cost: result.cost ?? zeroCost(),
-      });
+
+      if (result.brief !== undefined) {
+        // New prose path: emit brief only (Task 6 removes the old fields entirely).
+        this.send({
+          type: "consolidation_complete",
+          run_id: message.run_id,
+          round: message.round,
+          brief: result.brief,
+          cost: result.cost ?? zeroCost(),
+        });
+      } else {
+        // Legacy structured path: brief_items + conflicts (unchanged; removed in Task 6).
+        this.send({
+          type: "consolidation_complete",
+          run_id: message.run_id,
+          round: message.round,
+          brief_items: result.brief_items ?? [],
+          conflicts: result.conflicts,
+          cost: result.cost ?? zeroCost(),
+        });
+      }
     } catch (error) {
       this.send({
         type: "consolidation_failed",
@@ -994,7 +1013,7 @@ function fallbackConsolidation(annotations: ConsolidationAnnotation[]): Consolid
       instruction: annotation.comment,
       source_thread_ids: [annotation.id],
     })),
-    conflicts: [],
+    conflicts: [] as AnnotationConflict[],
     cost: zeroCost(),
   };
 }

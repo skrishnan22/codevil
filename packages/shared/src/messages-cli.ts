@@ -221,7 +221,8 @@ export const BriefDispatchedEventSchema = z.object({
   run_id: z.string(),
   from_round: z.number().int().nonnegative(),
   to_round: z.number().int().nonnegative(),
-  brief_items: z.array(BriefItemSchema),
+  brief: z.string().optional(),
+  brief_items: z.array(BriefItemSchema).optional(),
 });
 
 export const AnnotationsConsumedEventSchema = z.object({

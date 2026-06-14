@@ -12,6 +12,7 @@ import type {
   AnnotationThread,
   AnnotationConflict,
   BriefItem,
+  AnswerableBy,
 } from "@codevil/shared";
 import {
   DEFAULT_CONFIG,
@@ -43,6 +44,7 @@ import {
   describeDecisionRejection,
   type LastDecision,
 } from "./multiplayer.js";
+import { canAnswerQuestion } from "./question-policy.js";
 import {
   createAgentRun,
   enqueueAgentRun,
@@ -187,6 +189,24 @@ export class Orchestrator extends DurableObject<Env> {
         deciding_instruction TEXT,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS questions (
+        request_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        round INTEGER,
+        question TEXT NOT NULL,
+        context TEXT,
+        options_json TEXT,
+        answerable_by TEXT NOT NULL,
+        allow_freeform INTEGER NOT NULL,
+        allow_multiple INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        answer_json TEXT,
+        answered_by_id TEXT,
+        answered_by_name TEXT,
+        answered_at TEXT,
+        cancelled_reason TEXT,
+        created_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -228,7 +248,11 @@ export class Orchestrator extends DurableObject<Env> {
     const createdAt = Date.parse(this.meta.created_at);
     const maxTimeMs = parseMaxTimeMs(this.meta.max_time);
     if (maxTimeMs !== null && now >= createdAt + maxTimeMs) {
+      const activeRunId = this.meta.active_run?.id;
       this.transition("timed_out");
+      if (activeRunId) {
+        this.cancelOpenQuestions(activeRunId, "session timed out");
+      }
       this.appendAndBroadcast({
         type: "error",
         message: `Session timed out after ${this.meta.max_time}.`,
@@ -243,7 +267,11 @@ export class Orchestrator extends DurableObject<Env> {
         stdout: logs?.stdout ?? "(none)",
         stderr: logs?.stderr ?? "(none)",
       });
+      const activeRunId = this.meta.active_run?.id;
       this.transition("timed_out");
+      if (activeRunId) {
+        this.cancelOpenQuestions(activeRunId, "session timed out");
+      }
 
       const output = [logs?.stdout, logs?.stderr].filter(Boolean).join("\n").trim();
       this.appendAndBroadcast({
@@ -354,6 +382,9 @@ export class Orchestrator extends DurableObject<Env> {
       case "conflict_resolve":
         this.handleConflictResolve(msg, participant, socketAuth?.userId ?? null, authz.role ?? null);
         break;
+      case "question_answer":
+        this.handleQuestionAnswer(msg, participant, socketAuth?.userId ?? null, authz.role ?? null);
+        break;
       case "approve":
         this.handleApprove(actor, undefined, socketAuth?.userId ?? null, authz.role ?? null);
         break;
@@ -404,7 +435,11 @@ export class Orchestrator extends DurableObject<Env> {
         && this.meta.state !== "awaiting_approval"
         && this.meta.state !== "awaiting_resolution"
       ) {
+        const activeRunId = this.meta.active_run?.id;
         this.transition("failed");
+        if (activeRunId) {
+          this.cancelOpenQuestions(activeRunId, "sandbox disconnected");
+        }
         this.appendAndBroadcast({
           type: "error",
           message: `Sandbox disconnected unexpectedly (code: ${code}, reason: ${reason || "none"}).`,
@@ -618,6 +653,138 @@ export class Orchestrator extends DurableObject<Env> {
     }
   }
 
+  private handleAskQuestionRequest(
+    msg: Extract<SandboxToDOMessage, { type: "ask_question_request" }>,
+  ): void {
+    if (!this.meta) return;
+    const now = new Date().toISOString();
+    const round = this.meta.refinement_round ?? null;
+
+    this.sql.exec(
+      `INSERT OR REPLACE INTO questions (
+        request_id, run_id, round, question, context, options_json,
+        answerable_by, allow_freeform, allow_multiple, status,
+        answer_json, answered_by_id, answered_by_name, answered_at,
+        cancelled_reason, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, NULL, NULL, ?)`,
+      msg.request_id,
+      msg.run_id,
+      round,
+      msg.question,
+      msg.context ?? null,
+      msg.options ? JSON.stringify(msg.options) : null,
+      msg.answerable_by,
+      msg.allow_freeform ? 1 : 0,
+      msg.allow_multiple ? 1 : 0,
+      now,
+    );
+
+    this.appendAndBroadcast({
+      type: "question_raised",
+      request_id: msg.request_id,
+      run_id: msg.run_id,
+      question: msg.question,
+      ...(msg.context !== undefined ? { context: msg.context } : {}),
+      ...(msg.options !== undefined ? { options: msg.options } : {}),
+      allow_freeform: msg.allow_freeform,
+      allow_multiple: msg.allow_multiple,
+      answerable_by: msg.answerable_by,
+      status: "open",
+    });
+  }
+
+  private handleQuestionAnswer(
+    msg: Extract<CLIToDOMessage, { type: "question_answer" }>,
+    actor: ParticipantIdentity,
+    userId: string | null,
+    role: MembershipRow["role"] | null,
+  ): void {
+    if (!this.meta) return;
+
+    const question = this.loadQuestion(msg.request_id);
+    if (!question || question.status !== "open") {
+      this.appendAndBroadcast({ type: "error", message: "Question not found or already answered." });
+      return;
+    }
+
+    if (!canAnswerQuestion(question.answerable_by, userId, this.meta.created_by?.id, role)) {
+      this.appendAndBroadcast({ type: "error", message: "Only the session creator can answer this question." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const optionIds = msg.option_ids ?? [];
+    const answerJson = JSON.stringify({ option_ids: optionIds, freeform: msg.freeform });
+
+    this.sql.exec(
+      `UPDATE questions
+       SET status = 'answered', answer_json = ?, answered_by_id = ?, answered_by_name = ?, answered_at = ?
+       WHERE request_id = ?`,
+      answerJson,
+      actor.id,
+      actor.name,
+      now,
+      msg.request_id,
+    );
+
+    this.appendAndBroadcast({
+      type: "question_answered",
+      request_id: msg.request_id,
+      option_ids: optionIds,
+      ...(msg.freeform !== undefined ? { freeform: msg.freeform } : {}),
+      answered_by: actor,
+      answered_at: now,
+    });
+
+    this.sendToSandbox({
+      type: "ask_question_response",
+      request_id: msg.request_id,
+      option_ids: optionIds,
+      ...(msg.freeform !== undefined ? { freeform: msg.freeform } : {}),
+      answered_by: actor,
+    });
+  }
+
+  private cancelOpenQuestions(runId: string, reason: string): void {
+    const openQuestions: { request_id: string }[] = [];
+    for (const row of this.sql.exec(
+      `SELECT request_id FROM questions WHERE run_id = ? AND status = 'open'`,
+      runId,
+    )) {
+      openQuestions.push({ request_id: row["request_id"] as string });
+    }
+
+    if (openQuestions.length === 0) return;
+
+    this.sql.exec(
+      `UPDATE questions SET status = 'cancelled', cancelled_reason = ? WHERE run_id = ? AND status = 'open'`,
+      reason,
+      runId,
+    );
+
+    for (const { request_id } of openQuestions) {
+      this.sendToSandbox({ type: "ask_question_cancelled", request_id, reason });
+    }
+  }
+
+  private loadQuestion(requestId: string): {
+    run_id: string;
+    status: string;
+    answerable_by: AnswerableBy;
+  } | null {
+    for (const row of this.sql.exec(
+      `SELECT run_id, status, answerable_by FROM questions WHERE request_id = ?`,
+      requestId,
+    )) {
+      return {
+        run_id: row["run_id"] as string,
+        status: row["status"] as string,
+        answerable_by: row["answerable_by"] as AnswerableBy,
+      };
+    }
+    return null;
+  }
+
   private handleHumanMessage(text: string, actor: ParticipantIdentity): void {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -817,6 +984,7 @@ export class Orchestrator extends DurableObject<Env> {
         actor,
       });
       if (activeRunId) {
+        this.cancelOpenQuestions(activeRunId, "run cancelled");
         this.appendAndBroadcast({
           type: "agent_run_failed",
           run_id: activeRunId,
@@ -833,6 +1001,10 @@ export class Orchestrator extends DurableObject<Env> {
     if (!this.meta) return;
     if (!isTerminalState(this.meta.state)) {
       this.transition("failed");
+    }
+    const activeRunId = this.meta.active_run?.id;
+    if (activeRunId) {
+      this.cancelOpenQuestions(activeRunId, "session stopped");
     }
     this.appendAndBroadcast({
       type: "status",
@@ -1295,6 +1467,9 @@ export class Orchestrator extends DurableObject<Env> {
       case "verification_failed":
         this.handleSandboxVerificationFailed(parsed.attempts, parsed.last_error);
         return;
+      case "ask_question_request":
+        this.handleAskQuestionRequest(parsed);
+        return;
       case "credential_request":
         this.handleCredentialRequest(ws, parsed);
         return;
@@ -1323,9 +1498,14 @@ export class Orchestrator extends DurableObject<Env> {
         return;
       case "error":
         if (this.meta.active_run && this.meta.state === "executing") {
+          this.cancelOpenQuestions(this.meta.active_run.id, "run failed");
           this.failActiveRunAndReturnReady(parsed.message);
         } else {
+          const activeRunId = this.meta.active_run?.id;
           this.transition("failed");
+          if (activeRunId) {
+            this.cancelOpenQuestions(activeRunId, "session failed");
+          }
           this.appendAndBroadcast({ type: "error", message: parsed.message });
         }
         return;

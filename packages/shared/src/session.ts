@@ -36,11 +36,11 @@ const transitions: Record<SessionState, readonly SessionState[]> = {
 };
 
 export function isValidTransition(from: SessionState, to: SessionState): boolean {
-  return transitions[from].includes(to);
+  return (transitions[from] ?? []).includes(to);
 }
 
 export function isTerminalState(state: SessionState): state is TerminalState {
-  return transitions[state].length === 0;
+  return (transitions[state] ?? []).length === 0;
 }
 
 export const MAX_REFINEMENT_ROUNDS = 5;

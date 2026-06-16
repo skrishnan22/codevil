@@ -4,3 +4,5 @@ packages:
 # Delay new package versions for 7 days before pnpm can resolve them.
 # This applies to direct and transitive dependencies.
 minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  - "@cloudflare/sandbox"

@@ -1,6 +1,15 @@
 import { Orchestrator } from "./orchestrator.js";
 import { Sandbox as BaseSandbox } from "@cloudflare/sandbox";
 import {
+  getCodevilSandbox,
+  recordSandboxLifecycleEvent,
+  SANDBOX_KEEPALIVE_STATE_KEY,
+  SANDBOX_LIFECYCLE_EVENT_KEY,
+  shouldDeferSandboxActivityExpiry,
+  type SandboxKeepAliveState,
+  type SandboxLifecycleEvent,
+} from "./sandbox.js";
+import {
   buildSessionSummary,
   normalizeCreateSessionBody,
   recentSessionsSelect,
@@ -43,10 +52,83 @@ import { createEmailProvider } from "./email.js";
 import { isOriginGuardedPath, requireTrustedOrigin } from "./http-guards.js";
 import { can, type AuthAction } from "@codevil/shared";
 
-// Subclass the Cloudflare Sandbox so we can shorten the idle timeout. The base
-// class auto-suspends the container after `sleepAfter` of no traffic.
+// Subclass the Cloudflare Sandbox so Codevil can keep active agent sessions
+// alive and persist stop diagnostics across abnormal socket closures.
 export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
   override sleepAfter = "10m";
+
+  async setCodevilKeepAlive(active: boolean, reason = "unspecified"): Promise<void> {
+    const state: SandboxKeepAliveState = {
+      active,
+      reason,
+      updated_at: new Date().toISOString(),
+    };
+    await this.ctx.storage.put(SANDBOX_KEEPALIVE_STATE_KEY, state);
+    if (active) this.renewActivityTimeout();
+    console.log("codevil.sandbox.keepalive", state);
+  }
+
+  async getCodevilLifecycleSnapshot(): Promise<{
+    keepAlive?: SandboxKeepAliveState;
+    lastEvent?: SandboxLifecycleEvent;
+  }> {
+    const [keepAlive, lastEvent] = await Promise.all([
+      this.ctx.storage.get<SandboxKeepAliveState>(SANDBOX_KEEPALIVE_STATE_KEY),
+      this.ctx.storage.get<SandboxLifecycleEvent>(SANDBOX_LIFECYCLE_EVENT_KEY),
+    ]);
+    return {
+      ...(keepAlive ? { keepAlive } : {}),
+      ...(lastEvent ? { lastEvent } : {}),
+    };
+  }
+
+  override async onStart(): Promise<void> {
+    await this.recordLifecycle({ type: "start", at: new Date().toISOString() });
+    await Promise.resolve(super.onStart());
+  }
+
+  override async onStop(params?: unknown): Promise<void> {
+    await this.recordLifecycle({
+      type: "stop",
+      at: new Date().toISOString(),
+      ...stopDiagnostics(params),
+    });
+    await Promise.resolve(super.onStop());
+  }
+
+  override async onError(error: unknown): Promise<void> {
+    await this.recordLifecycle({
+      type: "error",
+      at: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await Promise.resolve(super.onError(error));
+  }
+
+  override async onActivityExpired(): Promise<void> {
+    const keepAlive = await this.ctx.storage.get<SandboxKeepAliveState>(SANDBOX_KEEPALIVE_STATE_KEY);
+    if (keepAlive && shouldDeferSandboxActivityExpiry(keepAlive)) {
+      await this.recordLifecycle({
+        type: "activity_expired_deferred",
+        at: new Date().toISOString(),
+        reason: keepAlive.reason,
+      });
+      this.renewActivityTimeout();
+      console.log("codevil.sandbox.activity_expired_deferred", keepAlive);
+      return;
+    }
+
+    await this.recordLifecycle({
+      type: "activity_expired",
+      at: new Date().toISOString(),
+    });
+    await super.onActivityExpired();
+  }
+
+  private async recordLifecycle(event: SandboxLifecycleEvent): Promise<void> {
+    console.log("codevil.sandbox.lifecycle", event);
+    await recordSandboxLifecycleEvent(this.ctx.storage, event);
+  }
 
   override async fetch(request: Request): Promise<Response> {
     // The base Sandbox.fetch() routes by URL path/port and ignores the
@@ -63,6 +145,19 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
     }
     return super.fetch(request);
   }
+}
+
+function stopDiagnostics(params: unknown): Pick<SandboxLifecycleEvent, "exit_code" | "reason"> {
+  if (!params || typeof params !== "object") return {};
+
+  const record = params as Record<string, unknown>;
+  const exitCode = record.exitCode;
+  const reason = record.reason;
+
+  return {
+    ...(typeof exitCode === "number" ? { exit_code: exitCode } : {}),
+    ...(typeof reason === "string" ? { reason } : {}),
+  };
 }
 
 interface Env {
@@ -828,7 +923,11 @@ async function handleSessionPreview(
 async function handleLogs(env: Env, sessionId: string): Promise<Response> {
   try {
     const { getSandbox } = await import("@cloudflare/sandbox");
-    const sandbox = getSandbox(env.Sandbox, sessionId);
+    const sandbox = getCodevilSandbox(
+      getSandbox,
+      env.Sandbox as unknown as Parameters<typeof getSandbox>[0],
+      sessionId,
+    );
     const logs = await sandbox.getProcessLogs("codevil-agent");
     return json(logs, 200);
   } catch (error) {

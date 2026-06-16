@@ -11,7 +11,7 @@
     "test": "pnpm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@cloudflare/sandbox": "^0.3.3",
+    "@cloudflare/sandbox": "^0.12.1",
     "@codevil/shared": "workspace:*",
     "better-auth": "^1.6.14"
   },

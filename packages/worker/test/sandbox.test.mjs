@@ -3,9 +3,15 @@ import test from "node:test";
 
 import {
   buildSandboxWebSocketUrl,
+  CODEVIL_SANDBOX_OPTIONS,
+  getCodevilSandbox,
   mapSandboxMessageToCLIEvents,
+  recordSandboxLifecycleEvent,
   retrySandboxOperation,
+  SANDBOX_LIFECYCLE_EVENT_KEY,
   sandboxProcessEnv,
+  setCodevilSandboxKeepAlive,
+  shouldDeferSandboxActivityExpiry,
 } from "../dist/sandbox.js";
 
 test("builds sandbox WebSocket URL from worker origin", () => {
@@ -27,6 +33,76 @@ test("builds sandbox process env without exposing llm key", () => {
     CODEVIL_PROVIDER: "anthropic",
     CODEVIL_LLM_KEY_FILE: "/run/secrets/llm_key",
   });
+});
+
+test("gets codevil sandbox with keepAlive enabled", () => {
+  const binding = {};
+  const sandbox = {};
+  const calls = [];
+
+  const result = getCodevilSandbox((actualBinding, sessionId, options) => {
+    calls.push({ binding: actualBinding, sessionId, options });
+    return sandbox;
+  }, binding, "ses_123");
+
+  assert.equal(result, sandbox);
+  assert.deepEqual(calls, [{
+    binding,
+    sessionId: "ses_123",
+    options: CODEVIL_SANDBOX_OPTIONS,
+  }]);
+  assert.equal(CODEVIL_SANDBOX_OPTIONS.keepAlive, true);
+});
+
+test("records sandbox lifecycle events for stop diagnostics", async () => {
+  const writes = [];
+  const storage = {
+    put: async (key, value) => {
+      writes.push({ key, value });
+    },
+  };
+
+  await recordSandboxLifecycleEvent(storage, {
+    type: "stop",
+    at: "2026-06-16T00:00:00.000Z",
+    exit_code: 137,
+    reason: "out of memory",
+  });
+
+  assert.deepEqual(writes, [{
+    key: SANDBOX_LIFECYCLE_EVENT_KEY,
+    value: {
+      type: "stop",
+      at: "2026-06-16T00:00:00.000Z",
+      exit_code: 137,
+      reason: "out of memory",
+    },
+  }]);
+});
+
+test("defers activity expiry while codevil keepalive is active", () => {
+  assert.equal(shouldDeferSandboxActivityExpiry({ active: true }), true);
+  assert.equal(shouldDeferSandboxActivityExpiry({ active: false }), false);
+  assert.equal(shouldDeferSandboxActivityExpiry(undefined), false);
+});
+
+test("sets both cloudflare and codevil sandbox keepalive flags when available", async () => {
+  const calls = [];
+  const sandbox = {
+    setKeepAlive: async (active) => {
+      calls.push(["cloudflare", active]);
+    },
+    setCodevilKeepAlive: async (active, reason) => {
+      calls.push(["codevil", active, reason]);
+    },
+  };
+
+  await setCodevilSandboxKeepAlive(sandbox, false, "timed out");
+
+  assert.deepEqual(calls, [
+    ["cloudflare", false],
+    ["codevil", false, "timed out"],
+  ]);
 });
 
 test("retries transient sandbox 503 failures", async () => {

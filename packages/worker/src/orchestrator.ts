@@ -33,6 +33,7 @@ import {
   mapSandboxMessageToCLIEvents,
   provisionSandbox,
   readProcessLogs,
+  setCodevilSandboxKeepAlive,
 } from "./sandbox.js";
 import { createDraftPullRequest, credentialRequestAllowed } from "./github.js";
 import { redactEvent } from "./redaction.js";
@@ -935,6 +936,7 @@ export class Orchestrator extends DurableObject<Env> {
     try {
       const { getSandbox } = await import("@cloudflare/sandbox");
       const sandbox = getSandbox(this.workerEnv.Sandbox, this.meta.session_id);
+      await setCodevilSandboxKeepAlive(sandbox, false, reason);
       await sandbox.stop();
     } catch (error) {
       this.getTracer()?.log("ERROR", "sandbox.stop.failed", {

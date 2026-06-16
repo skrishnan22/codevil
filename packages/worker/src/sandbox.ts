@@ -23,6 +23,43 @@ export interface SandboxRetryOptions {
   sleep?: (delayMs: number) => Promise<void>;
 }
 
+export const CODEVIL_SANDBOX_OPTIONS = {
+  keepAlive: true,
+} as const;
+
+export const SANDBOX_KEEPALIVE_STATE_KEY = "codevil:sandbox_keepalive";
+export const SANDBOX_LIFECYCLE_EVENT_KEY = "codevil:sandbox_last_lifecycle_event";
+
+export interface SandboxKeepAliveState {
+  active: boolean;
+  reason?: string;
+  updated_at?: string;
+}
+
+export type SandboxLifecycleEventType =
+  | "start"
+  | "stop"
+  | "error"
+  | "activity_expired"
+  | "activity_expired_deferred";
+
+export interface SandboxLifecycleEvent {
+  type: SandboxLifecycleEventType;
+  at: string;
+  exit_code?: number;
+  reason?: string;
+  error?: string;
+}
+
+export interface SandboxLifecycleStorage {
+  put(key: string, value: unknown): Promise<void>;
+}
+
+export interface CodevilKeepAliveSandbox {
+  setKeepAlive?: (active: boolean) => Promise<void>;
+  setCodevilKeepAlive?: (active: boolean, reason?: string) => Promise<void>;
+}
+
 const DEFAULT_SANDBOX_RETRY_ATTEMPTS = 12;
 const DEFAULT_SANDBOX_RETRY_DELAY_MS = 2_000;
 const MAX_SANDBOX_RETRY_DELAY_MS = 15_000;
@@ -44,9 +81,49 @@ export function sandboxProcessEnv(options: SandboxProcessEnvOptions): Record<str
   };
 }
 
+export function getCodevilSandbox<Binding, T>(
+  getSandbox: (
+    binding: Binding,
+    sessionId: string,
+    options?: typeof CODEVIL_SANDBOX_OPTIONS,
+  ) => T,
+  binding: Binding,
+  sessionId: string,
+): T {
+  return getSandbox(binding, sessionId, CODEVIL_SANDBOX_OPTIONS);
+}
+
+export async function setCodevilSandboxKeepAlive(
+  sandbox: unknown,
+  active: boolean,
+  reason: string,
+): Promise<void> {
+  const keepAliveSandbox = sandbox as CodevilKeepAliveSandbox;
+  if (typeof keepAliveSandbox.setKeepAlive === "function") {
+    await keepAliveSandbox.setKeepAlive(active);
+  }
+  if (typeof keepAliveSandbox.setCodevilKeepAlive === "function") {
+    await keepAliveSandbox.setCodevilKeepAlive(active, reason);
+  }
+}
+
+export async function recordSandboxLifecycleEvent(
+  storage: SandboxLifecycleStorage,
+  event: SandboxLifecycleEvent,
+): Promise<void> {
+  await storage.put(SANDBOX_LIFECYCLE_EVENT_KEY, event);
+}
+
+export function shouldDeferSandboxActivityExpiry(state: SandboxKeepAliveState | undefined): boolean {
+  return state?.active === true;
+}
+
 export async function provisionSandbox(options: ProvisionSandboxOptions): Promise<void> {
   const { getSandbox } = await import("@cloudflare/sandbox");
-  const sandbox = getSandbox(options.binding, options.sessionId);
+  const sandbox = getCodevilSandbox(getSandbox, options.binding, options.sessionId);
+  await retrySandboxOperation(() =>
+    setCodevilSandboxKeepAlive(sandbox as CodevilKeepAliveSandbox, true, "session provisioning"),
+  );
 
   await retrySandboxOperation(() => sandbox.mkdir("/run/secrets", { recursive: true }));
 
@@ -125,7 +202,7 @@ export async function readProcessLogs(
 ): Promise<{ stdout: string; stderr: string } | null> {
   try {
     const { getSandbox } = await import("@cloudflare/sandbox");
-    const sandbox = getSandbox(binding, sessionId);
+    const sandbox = getCodevilSandbox(getSandbox, binding, sessionId);
     return await sandbox.getProcessLogs(processId);
   } catch {
     return null;

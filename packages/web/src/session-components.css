@@ -3480,6 +3480,7 @@ button.current-activity:hover { background: var(--surface-3); }
 .activity-tab-grouped {
   grid-template-columns: minmax(420px, 1fr) minmax(300px, 0.42fr);
   background: var(--surface);
+  position: relative;
 }
 
 .activity-stream {
@@ -3488,6 +3489,26 @@ button.current-activity:hover { background: var(--surface-3); }
   padding: 22px 24px 40px 48px;
   border-right: 1px solid var(--line);
   background: var(--surface);
+}
+
+.activity-jump-latest {
+  position: absolute;
+  right: 22px;
+  bottom: 18px;
+  z-index: 3;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);
+}
+
+.activity-jump-latest:hover {
+  border-color: var(--fg-4);
 }
 
 .activity-lifecycle,

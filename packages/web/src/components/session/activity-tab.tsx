@@ -1,6 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActivityEntry } from "@/types";
 import { useSessionStore } from "@/stores/session-store";
+import {
+  getActivityFollowStateAfterJump,
+  getActivityFollowStateAfterScroll,
+} from "./activity-scroll";
 
 interface ActivityTabProps {
   selectedActivityId: string | null;
@@ -28,12 +32,58 @@ type ActivityView = {
 export function ActivityTab({ selectedActivityId, onSelectActivity }: ActivityTabProps) {
   const { activityLog } = useSessionStore();
   const view = useMemo(() => deriveActivityView(activityLog), [activityLog]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isFollowingLatestRef = useRef(true);
+  const previousContentKeyRef = useRef("");
+  const [isNearBottom, setIsNearBottom] = useState(true);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  const contentKey = useMemo(() => {
+    return activityLog
+      .map((entry) => [
+        entry.id,
+        entry.status,
+        entry.tool?.result?.length ?? 0,
+        entry.tool?.error?.length ?? 0,
+        entry.thinking?.text?.length ?? 0,
+        entry.event?.detail?.length ?? 0,
+      ].join(":"))
+      .join("|");
+  }, [activityLog]);
 
   useEffect(() => {
     if (view.selectable.length === 0) return;
     if (selectedActivityId && view.selectable.some((entry) => entry.id === selectedActivityId)) return;
     onSelectActivity(view.selectable.at(-1)!.id);
   }, [onSelectActivity, selectedActivityId, view.selectable]);
+
+  useEffect(() => {
+    if (isFollowingLatestRef.current && contentKey !== previousContentKeyRef.current) {
+      requestAnimationFrame(scrollToBottom);
+    }
+    previousContentKeyRef.current = contentKey;
+  }, [contentKey, scrollToBottom]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const next = getActivityFollowStateAfterScroll({ distanceFromBottom });
+    isFollowingLatestRef.current = next.isFollowingLatest;
+    setIsNearBottom(next.isNearBottom);
+  }, []);
+
+  function handleJumpToLatest() {
+    const next = getActivityFollowStateAfterJump();
+    isFollowingLatestRef.current = next.isFollowingLatest;
+    setIsNearBottom(next.isNearBottom);
+    scrollToBottom();
+  }
 
   if (view.lifecycle.length === 0 && view.turns.length === 0) {
     return (
@@ -49,7 +99,7 @@ export function ActivityTab({ selectedActivityId, onSelectActivity }: ActivityTa
 
   return (
     <div className="activity-tab activity-tab-grouped">
-      <div className="activity-stream scroll">
+      <div className="activity-stream scroll" ref={scrollRef} onScroll={handleScroll}>
         {view.lifecycle.length > 0 && (
           <div className="activity-lifecycle">
             {view.lifecycle.map((entry) => (
@@ -120,6 +170,11 @@ export function ActivityTab({ selectedActivityId, onSelectActivity }: ActivityTa
           ))}
         </div>
       </div>
+      {!isNearBottom && (
+        <button className="activity-jump-latest" type="button" onClick={handleJumpToLatest}>
+          Jump to latest
+        </button>
+      )}
     </div>
   );
 }

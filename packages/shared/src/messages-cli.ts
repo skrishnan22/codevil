@@ -226,8 +226,17 @@ export const QuestionRaisedEventSchema = z.object({
   allow_freeform: z.boolean(),
   allow_multiple: z.boolean(),
   answerable_by: AnswerableBySchema,
+  assigned_to: ParticipantIdentitySchema.optional(),
   status: z.literal("open"),
   raised_at: z.string(),
+});
+
+export const QuestionAssignedEventSchema = z.object({
+  type: z.literal("question_assigned"),
+  request_id: z.string(),
+  assigned_to: ParticipantIdentitySchema,
+  assigned_by: ParticipantIdentitySchema,
+  assigned_at: z.string(),
 });
 
 export const QuestionAnsweredEventSchema = z.object({
@@ -273,6 +282,7 @@ export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   BriefDispatchedEventSchema,
   AnnotationsConsumedEventSchema,
   QuestionRaisedEventSchema,
+  QuestionAssignedEventSchema,
   QuestionAnsweredEventSchema,
 ]);
 
@@ -317,6 +327,7 @@ export type AnnotationsConsumedEvent = z.infer<typeof AnnotationsConsumedEventSc
 export type QuestionOption = z.infer<typeof QuestionOptionSchema>;
 export type AnswerableBy = z.infer<typeof AnswerableBySchema>;
 export type QuestionRaisedEvent = z.infer<typeof QuestionRaisedEventSchema>;
+export type QuestionAssignedEvent = z.infer<typeof QuestionAssignedEventSchema>;
 export type QuestionAnsweredEvent = z.infer<typeof QuestionAnsweredEventSchema>;
 export type DOToCLIEvent = z.infer<typeof DOToCLIEventSchema>;
 
@@ -408,6 +419,12 @@ export const QuestionAnswerMessageSchema = z
     { message: "question_answer must include non-empty option_ids, non-empty freeform, or both" },
   );
 
+export const QuestionAssignMessageSchema = z.object({
+  type: z.literal("question_assign"),
+  request_id: z.string(),
+  assigned_to: ParticipantIdentitySchema,
+});
+
 export const CLIToDOMessageSchema = z.union([
   ApproveMessageSchema,
   AbortMessageSchema,
@@ -423,6 +440,7 @@ export const CLIToDOMessageSchema = z.union([
   ApproveRunMessageSchema,
   RefineRunMessageSchema,
   AbortRunMessageSchema,
+  QuestionAssignMessageSchema,
   QuestionAnswerMessageSchema,
 ]);
 
@@ -440,5 +458,6 @@ export type AnnotationWithdrawMessage = z.infer<typeof AnnotationWithdrawMessage
 export type ApproveRunMessage = z.infer<typeof ApproveRunMessageSchema>;
 export type RefineRunMessage = z.infer<typeof RefineRunMessageSchema>;
 export type AbortRunMessage = z.infer<typeof AbortRunMessageSchema>;
+export type QuestionAssignMessage = z.infer<typeof QuestionAssignMessageSchema>;
 export type QuestionAnswerMessage = z.infer<typeof QuestionAnswerMessageSchema>;
 export type CLIToDOMessage = z.infer<typeof CLIToDOMessageSchema>;

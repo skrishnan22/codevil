@@ -47,6 +47,11 @@ import {
   type InvitationStatus,
 } from "./invitations.js";
 import { buildAuthMeResponse, verifySetupToken, type AuthSession } from "./auth-service.js";
+import {
+  buildGoogleSocialSignInRequest,
+  GOOGLE_SOCIAL_SIGN_IN_PATH,
+  googleSocialSignInRedirectResponse,
+} from "./auth-redirect.js";
 import { configuredWebOrigins, missingAuthConfigKeys } from "./auth-config.js";
 import { createEmailProvider } from "./email.js";
 import { isOriginGuardedPath, requireTrustedOrigin } from "./http-guards.js";
@@ -230,6 +235,10 @@ export default {
       if (originGuard) return withCors(request, env, originGuard);
     }
 
+    if (path === GOOGLE_SOCIAL_SIGN_IN_PATH && request.method === "GET") {
+      return handleGoogleSocialSignInRedirect(request, env);
+    }
+
     if (path.startsWith("/api/auth/")) {
       return withCors(request, env, await handleBetterAuth(request, env));
     }
@@ -382,6 +391,12 @@ async function handleBetterAuth(request: Request, env: Env): Promise<Response> {
 
   const auth = createCodevilAuth(env);
   return auth.handler(request);
+}
+
+async function handleGoogleSocialSignInRedirect(request: Request, env: Env): Promise<Response> {
+  const signInRequest = buildGoogleSocialSignInRequest(request);
+  const signInResponse = await handleBetterAuth(signInRequest, env);
+  return googleSocialSignInRedirectResponse(signInResponse);
 }
 
 async function handleAuthMe(request: Request, env: Env): Promise<Response> {

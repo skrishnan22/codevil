@@ -47,6 +47,7 @@ export function authActionForClientMessage(message: CLIToDOMessage): AuthAction 
     case "refine_plan":
     case "refine_run":
     case "preview_stop":
+    case "question_assign":
     case "question_answer":
       return "sessions:control";
     default: {

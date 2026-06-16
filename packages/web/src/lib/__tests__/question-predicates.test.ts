@@ -41,4 +41,18 @@ describe("canAnswerQuestion", () => {
       expect(canAnswerQuestion("decider", null, null)).toBe(false);
     });
   });
+
+  describe('answerableBy = "assigned"', () => {
+    it("returns true when currentUserId matches assignedToId", () => {
+      expect(canAnswerQuestion("assigned", "usr_2", "creator_1", "usr_2")).toBe(true);
+    });
+
+    it("returns false for non-assigned users even if they are the creator", () => {
+      expect(canAnswerQuestion("assigned", "creator_1", "creator_1", "usr_2")).toBe(false);
+    });
+
+    it("returns false when assignment is missing", () => {
+      expect(canAnswerQuestion("assigned", "usr_2", "creator_1", null)).toBe(false);
+    });
+  });
 });

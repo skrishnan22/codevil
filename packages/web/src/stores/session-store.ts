@@ -27,6 +27,7 @@ export interface QuestionViewModel {
   allowFreeform: boolean;
   allowMultiple: boolean;
   answerableBy: AnswerableBy;
+  assignedTo?: ParticipantIdentity;
   status: "open" | "answered";
   /**
    * Client-local epoch ms at which the question is anchored in the timeline.
@@ -120,6 +121,7 @@ interface SessionStoreActions {
     requestId: string,
     answer: { optionIds: string[]; freeform?: string },
   ) => void;
+  assignQuestion: (requestId: string, participant: ParticipantIdentity) => void;
   openPlanPanel: () => void;
   closePlanPanel: () => void;
   reset: () => void;
@@ -476,6 +478,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     });
   },
 
+  assignQuestion(requestId, participant) {
+    wsHandle?.send({
+      type: "question_assign",
+      request_id: requestId,
+      assigned_to: participant,
+    });
+  },
+
   openPlanPanel() {
     set({ planPanelOpen: true });
   },
@@ -729,12 +739,26 @@ export function reduceQuestions(
         allowFreeform: event.allow_freeform,
         allowMultiple: event.allow_multiple,
         answerableBy: event.answerable_by,
+        assignedTo: event.assigned_to,
         status: "open",
         // Legacy persisted events (pre-schema-update) lack raised_at; their
         // relative ordering is best-effort using local clock at reduction time.
         raisedAt: parseRaisedAt(event.raised_at),
       };
       return [...current, viewModel];
+    }
+    case "question_assigned": {
+      const index = current.findIndex((q) => q.requestId === event.request_id);
+      if (index === -1) return current;
+      return current.map((q, i) =>
+        i === index
+          ? {
+              ...q,
+              answerableBy: "assigned" as const,
+              assignedTo: event.assigned_to,
+            }
+          : q,
+      );
     }
     case "question_answered": {
       const index = current.findIndex((q) => q.requestId === event.request_id);

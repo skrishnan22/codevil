@@ -60,6 +60,7 @@ export interface AskQuestionParams {
   allow_freeform: boolean;
   allow_multiple: boolean;
   answerable_by: AnswerableBy;
+  assigned_to?: ParticipantIdentity;
 }
 
 export type AskQuestionOutcome =
@@ -492,6 +493,7 @@ export class SandboxRuntime {
       allow_freeform: params.allow_freeform,
       allow_multiple: params.allow_multiple,
       answerable_by: params.answerable_by,
+      assigned_to: params.assigned_to,
     });
     return new Promise((resolve) => {
       this.askQuestionRequests.set(requestId, { resolve });

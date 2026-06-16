@@ -83,13 +83,18 @@ export function sendToAgentLabel(openCount: number): string {
  * Returns true when the current user may answer a question:
  *  - "anyone"  → any signed-in user (currentUserId is non-null)
  *  - "decider" → the session creator only
+ *  - "assigned" → the explicitly assigned participant only
  */
 export function canAnswerQuestion(
-  answerableBy: "decider" | "anyone",
+  answerableBy: "decider" | "anyone" | "assigned",
   currentUserId: string | null,
   sessionCreatorId: string | null,
+  assignedToId?: string | null,
 ): boolean {
   if (answerableBy === "anyone") return Boolean(currentUserId);
+  if (answerableBy === "assigned") {
+    return Boolean(currentUserId && assignedToId && currentUserId === assignedToId);
+  }
   // "decider"
   return Boolean(currentUserId && sessionCreatorId && currentUserId === sessionCreatorId);
 }

@@ -312,6 +312,7 @@ export const AskQuestionRequestSchema = z.object({
   allow_freeform: z.boolean(),
   allow_multiple: z.boolean(),
   answerable_by: AnswerableBySchema,
+  assigned_to: ParticipantIdentitySchema.optional(),
 });
 
 export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [

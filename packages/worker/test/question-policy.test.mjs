@@ -85,3 +85,10 @@ test('canAnswerQuestion with "decider" falls back to owner role when no creator'
 test('canAnswerQuestion with "decider" + no creator + null role → false', () => {
   assert.equal(canAnswerQuestion("decider", "any_user", null, null), false);
 });
+
+test('canAnswerQuestion with "assigned" returns true only for assigned user', () => {
+  assert.equal(canAnswerQuestion("assigned", "usr_2", "creator_123", "member", "usr_2"), true);
+  assert.equal(canAnswerQuestion("assigned", "usr_3", "creator_123", "owner", "usr_2"), false);
+  assert.equal(canAnswerQuestion("assigned", null, "creator_123", "owner", "usr_2"), false);
+  assert.equal(canAnswerQuestion("assigned", "usr_2", "creator_123", "owner", null), false);
+});

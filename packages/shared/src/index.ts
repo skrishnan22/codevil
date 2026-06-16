@@ -77,6 +77,7 @@ export type {
   BriefDispatchedEvent,
   AnnotationsConsumedEvent,
   QuestionRaisedEvent,
+  QuestionAssignedEvent,
   QuestionAnsweredEvent,
   DOToCLIEvent,
   ApproveMessage,
@@ -93,6 +94,7 @@ export type {
   ApproveRunMessage,
   RefineRunMessage,
   AbortRunMessage,
+  QuestionAssignMessage,
   QuestionAnswerMessage,
   CLIToDOMessage,
 } from "./messages-cli.js";
@@ -130,6 +132,7 @@ export {
   BriefDispatchedEventSchema,
   AnnotationsConsumedEventSchema,
   QuestionRaisedEventSchema,
+  QuestionAssignedEventSchema,
   QuestionAnsweredEventSchema,
   DOToCLIEventSchema,
   PersistedDOToCLIEventSchema,
@@ -147,6 +150,7 @@ export {
   ApproveRunMessageSchema,
   RefineRunMessageSchema,
   AbortRunMessageSchema,
+  QuestionAssignMessageSchema,
   QuestionAnswerMessageSchema,
   CLIToDOMessageSchema,
 } from "./messages-cli.js";

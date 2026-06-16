@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -77,6 +77,52 @@ test("starts with coding tools, create_pull_request, and ask_question active", a
   } finally {
     driver.dispose();
     await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("starts with Codevil sandbox skills loaded from the agent directory", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "codevil-pi-driver-cwd-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "codevil-pi-agent-"));
+  const skillDir = join(agentDir, "skills", "codevil-test-skill");
+  const previousAgentDir = process.env.CODEVIL_PI_AGENT_DIR;
+  const driver = new PiAgentDriver();
+
+  try {
+    process.env.CODEVIL_PI_AGENT_DIR = agentDir;
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: codevil-test-skill",
+        "description: Loaded by the Codevil sandbox driver test.",
+        "---",
+        "",
+        "Use this test skill only to prove sandbox skill discovery is wired.",
+      ].join("\n"),
+    );
+
+    await driver.start({
+      cwd,
+      mode: "coding",
+      provider: "anthropic",
+      model: "claude-3-5-haiku-20241022",
+      llmKey: "test-key",
+      onEvent: () => {},
+      createPullRequest: async () => ({ url: "https://github.com/example/app/pull/1" }),
+    });
+
+    const names = driver.session.resourceLoader.getSkills().skills.map((skill) => skill.name);
+    assert.ok(names.includes("codevil-test-skill"), `loaded skills: ${names.join(", ")}`);
+  } finally {
+    if (previousAgentDir === undefined) {
+      delete process.env.CODEVIL_PI_AGENT_DIR;
+    } else {
+      process.env.CODEVIL_PI_AGENT_DIR = previousAgentDir;
+    }
+    driver.dispose();
+    await rm(cwd, { recursive: true, force: true });
+    await rm(agentDir, { recursive: true, force: true });
   }
 });
 

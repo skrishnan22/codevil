@@ -10,7 +10,8 @@ function makeRaisedEvent(
   overrides: Partial<{
     allow_freeform: boolean;
     allow_multiple: boolean;
-    answerable_by: "decider" | "anyone";
+    answerable_by: "decider" | "anyone" | "assigned";
+    assigned_to: { id: string; name: string };
     options: { id: string; label: string }[];
     context: string;
     raised_at: string;
@@ -28,6 +29,7 @@ function makeRaisedEvent(
     raised_at: overrides.raised_at ?? "2024-01-01T00:00:00.000Z",
     ...(overrides.options ? { options: overrides.options } : {}),
     ...(overrides.context ? { context: overrides.context } : {}),
+    ...(overrides.assigned_to ? { assigned_to: overrides.assigned_to } : {}),
   };
 }
 
@@ -117,6 +119,41 @@ describe("reduceQuestions", () => {
     expect(vm.options).toEqual([{ id: "opt_a", label: "Option A" }]);
     expect(vm.context).toBe("some context");
     expect(vm.runId).toBe("run_abc");
+  });
+
+  it("maps assigned participant from question_raised", () => {
+    const event = makeRaisedEvent("req_assigned", {
+      answerable_by: "assigned",
+      assigned_to: { id: "usr_2", name: "Bob" },
+    });
+    const [vm] = reduceQuestions([], event);
+    expect(vm.answerableBy).toBe("assigned");
+    expect(vm.assignedTo).toEqual({ id: "usr_2", name: "Bob" });
+  });
+
+  it("updates an open question on question_assigned", () => {
+    const state = reduceQuestions([], makeRaisedEvent("req_1"));
+    const result = reduceQuestions(state, {
+      type: "question_assigned",
+      request_id: "req_1",
+      assigned_to: { id: "usr_2", name: "Bob" },
+      assigned_by: { id: "usr_1", name: "Alice" },
+      assigned_at: "2024-01-01T00:00:01.000Z",
+    });
+    expect(result[0].answerableBy).toBe("assigned");
+    expect(result[0].assignedTo).toEqual({ id: "usr_2", name: "Bob" });
+  });
+
+  it("returns current by identity for unknown request_id on assigned event", () => {
+    const state: QuestionViewModel[] = [];
+    const result = reduceQuestions(state, {
+      type: "question_assigned",
+      request_id: "missing",
+      assigned_to: { id: "usr_2", name: "Bob" },
+      assigned_by: { id: "usr_1", name: "Alice" },
+      assigned_at: "2024-01-01T00:00:01.000Z",
+    });
+    expect(result).toBe(state);
   });
 
   it("derives raisedAt from raised_at on the event", () => {

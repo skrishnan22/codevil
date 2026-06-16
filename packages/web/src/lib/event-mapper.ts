@@ -294,6 +294,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
       return [];
 
     case "question_raised":
+    case "question_assigned":
     case "question_answered":
       return [];
   }

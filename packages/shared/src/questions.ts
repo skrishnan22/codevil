@@ -6,7 +6,7 @@ export const QuestionOptionSchema = z.object({
   detail: z.string().max(8_000).optional(),
 });
 
-export const AnswerableBySchema = z.enum(["decider", "anyone"]);
+export const AnswerableBySchema = z.enum(["decider", "anyone", "assigned"]);
 
 export type QuestionOption = z.infer<typeof QuestionOptionSchema>;
 export type AnswerableBy = z.infer<typeof AnswerableBySchema>;

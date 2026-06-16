@@ -1,12 +1,15 @@
+import { join } from "node:path";
 import { getModels, type KnownProvider, type Model } from "@mariozechner/pi-ai";
 import {
   AuthStorage,
   createAgentSession,
   defineTool,
+  DefaultResourceLoader,
   ModelRegistry,
   SessionManager,
   SettingsManager,
   type AgentSession,
+  type ResourceLoader,
   type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -32,6 +35,8 @@ const zeroCost: CostInfo = {
   output_tokens: 0,
   total_cost_usd: 0,
 };
+
+const DEFAULT_CODEVIL_PI_AGENT_DIR = "/opt/codevil/pi-agent";
 
 export class PiAgentDriver implements AgentDriver {
   private session: AgentSession | undefined;
@@ -62,17 +67,22 @@ export class PiAgentDriver implements AgentDriver {
       customTools.push(askQuestionTool(options.askQuestion));
     }
 
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: { enabled: true, maxRetries: 5 },
+    });
+    const { agentDir, resourceLoader } = await createCodevilResourceLoader(options.cwd, settingsManager);
+
     const { session } = await createAgentSession({
       cwd: options.cwd,
+      agentDir,
       model,
       authStorage,
       modelRegistry,
       customTools,
+      resourceLoader,
       sessionManager: SessionManager.inMemory(options.cwd),
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: true, maxRetries: 5 },
-      }),
+      settingsManager,
     });
     const activeTools = [
       "read",
@@ -151,17 +161,22 @@ export class PiAgentDriver implements AgentDriver {
       customTools.push(askQuestionTool(input.askQuestion));
     }
 
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false },
+      retry: { enabled: true, maxRetries: 2 },
+    });
+    const { agentDir, resourceLoader } = await createCodevilResourceLoader(input.cwd, settingsManager);
+
     const { session } = await createAgentSession({
       cwd: input.cwd,
+      agentDir,
       model,
       authStorage,
       modelRegistry,
       customTools,
+      resourceLoader,
       sessionManager: SessionManager.inMemory(input.cwd),
-      settingsManager: SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: true, maxRetries: 2 },
-      }),
+      settingsManager,
     });
 
     try {
@@ -204,6 +219,21 @@ export class PiAgentDriver implements AgentDriver {
     if (!this.session) throw new Error("Pi session has not been started");
     return this.session;
   }
+}
+
+async function createCodevilResourceLoader(
+  cwd: string,
+  settingsManager: SettingsManager,
+): Promise<{ agentDir: string; resourceLoader: ResourceLoader }> {
+  const agentDir = process.env.CODEVIL_PI_AGENT_DIR || DEFAULT_CODEVIL_PI_AGENT_DIR;
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    additionalSkillPaths: [join(agentDir, "skills")],
+  });
+  await resourceLoader.reload();
+  return { agentDir, resourceLoader };
 }
 
 export function extractAssistantTextFromEvent(event: unknown): string {
@@ -342,7 +372,7 @@ export function askQuestionTool(
       "Keep the question concise. Use 'options' to give participants clear choices whenever possible.",
       "Option ids must be stable strings you will recognise in the answer (e.g. 'option_redis', 'option_d1').",
       "Set allow_freeform: true if a predefined list may not cover all valid answers.",
-      "Set answerable_by: 'decider' when only the session initiator should answer; otherwise use 'anyone'.",
+      "Set answerable_by: 'decider' when the session creator should coordinate the answer; use 'assigned' only when you also provide assigned_to.",
       "If the question is cancelled, wrap up gracefully — the human may have moved on.",
     ],
     parameters: Type.Object({
@@ -362,9 +392,15 @@ export function askQuestionTool(
       allow_multiple: Type.Optional(Type.Boolean({ description: "Allow participants to select more than one option. Defaults to false." })),
       answerable_by: Type.Optional(
         Type.Union(
-          [Type.Literal("decider"), Type.Literal("anyone")],
-          { description: "Who may answer: 'decider' (session initiator only) or 'anyone' (any participant). Defaults to 'decider'." },
+          [Type.Literal("decider"), Type.Literal("anyone"), Type.Literal("assigned")],
+          { description: "Who may answer: 'decider' (session creator), 'anyone' (any participant), or 'assigned' (assigned_to only). Defaults to 'decider'." },
         ),
+      ),
+      assigned_to: Type.Optional(
+        Type.Object({
+          id: Type.String({ description: "Participant id assigned to answer." }),
+          name: Type.String({ description: "Participant display name assigned to answer." }),
+        }),
       ),
     }),
     async execute(_toolCallId, params) {
@@ -375,6 +411,7 @@ export function askQuestionTool(
         allow_freeform: params.allow_freeform ?? false,
         allow_multiple: params.allow_multiple ?? false,
         answerable_by: (params.answerable_by ?? "decider") as AskQuestionParams["answerable_by"],
+        assigned_to: params.assigned_to as AskQuestionParams["assigned_to"],
       };
 
       const outcome = await askQuestion(normalizedParams);

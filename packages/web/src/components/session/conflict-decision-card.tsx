@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import type { QuestionViewModel } from "@/stores/session-store";
+import type { ParticipantIdentity } from "@codevil/shared";
 import { canAnswerQuestion } from "@/lib/annotation-predicates";
 import {
   type ConflictSide,
@@ -17,7 +18,9 @@ export function ConflictDecisionCard({ question }: ConflictDecisionCardProps) {
   const questions = useSessionStore((s) => s.questions);
   const currentUserId = useSessionStore((s) => s.currentUserId);
   const sessionCreatorId = useSessionStore((s) => s.sessionCreatorId);
+  const participants = useSessionStore((s) => s.participants);
   const answerQuestion = useSessionStore((s) => s.answerQuestion);
+  const assignQuestion = useSessionStore((s) => s.assignQuestion);
   const openPlanPanel = useSessionStore((s) => s.openPlanPanel);
 
   const sides = useMemo(() => deriveSides(question, annotations), [question, annotations]);
@@ -27,7 +30,14 @@ export function ConflictDecisionCard({ question }: ConflictDecisionCardProps) {
   );
   const queueIndex = openQueue.findIndex((q) => q.requestId === question.requestId);
   const queueTotal = openQueue.length;
-  const canAnswer = canAnswerQuestion(question.answerableBy, currentUserId, sessionCreatorId);
+  const canAnswer = canAnswerQuestion(
+    question.answerableBy,
+    currentUserId,
+    sessionCreatorId,
+    question.assignedTo?.id,
+  );
+  const canAssign = Boolean(currentUserId && sessionCreatorId && currentUserId === sessionCreatorId);
+  const assignableParticipants = participants.filter((participant) => participant.id !== sessionCreatorId);
 
   if (question.status === "answered") {
     return <ResolvedSummary question={question} sides={sides} />;
@@ -41,6 +51,9 @@ export function ConflictDecisionCard({ question }: ConflictDecisionCardProps) {
       queueIndex={queueIndex}
       queueTotal={queueTotal}
       onAnswer={answerQuestion}
+      canAssign={canAssign}
+      assignableParticipants={assignableParticipants}
+      onAssign={assignQuestion}
       onOpenPlan={openPlanPanel}
     />
   );
@@ -55,6 +68,9 @@ interface OpenConflictCardProps {
   queueIndex: number;
   queueTotal: number;
   onAnswer: (requestId: string, answer: { optionIds: string[]; freeform?: string }) => void;
+  canAssign: boolean;
+  assignableParticipants: ParticipantIdentity[];
+  onAssign: (requestId: string, participant: ParticipantIdentity) => void;
   onOpenPlan: () => void;
 }
 
@@ -65,6 +81,9 @@ function OpenConflictCard({
   queueIndex,
   queueTotal,
   onAnswer,
+  canAssign,
+  assignableParticipants,
+  onAssign,
   onOpenPlan,
 }: OpenConflictCardProps) {
   const [selectedSideId, setSelectedSideId] = useState<string | null>(null);
@@ -94,6 +113,11 @@ function OpenConflictCard({
     // Submitting stays true until the answered event arrives and this card
     // is replaced by <ResolvedSummary>. If the round is dropped/retried,
     // this component unmounts.
+  }
+
+  function handleAssign(e: React.ChangeEvent<HTMLSelectElement>) {
+    const participant = assignableParticipants.find((item) => item.id === e.target.value);
+    if (participant) onAssign(question.requestId, participant);
   }
 
   return (
@@ -132,8 +156,25 @@ function OpenConflictCard({
       <div className="conflict-card-actions">
         {!canAnswer && (
           <span className="conflict-card-waiting">
-            Waiting for the session creator to answer.
+            {waitingHintForQuestion(question)}
           </span>
+        )}
+        {canAssign && assignableParticipants.length > 0 && (
+          <label className="question-assignee-label">
+            <span>Assign to</span>
+            <select
+              className="question-assignee-select"
+              value={question.assignedTo?.id ?? ""}
+              onChange={handleAssign}
+            >
+              <option value="" disabled>Choose teammate</option>
+              {assignableParticipants.map((participant) => (
+                <option key={participant.id} value={participant.id}>
+                  {participantLabel(participant)}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
         <button
           type="button"
@@ -161,6 +202,20 @@ function OpenConflictCard({
       </div>
     </form>
   );
+}
+
+function participantLabel(participant: ParticipantIdentity): string {
+  return participant.name ?? participant.id;
+}
+
+function waitingHintForQuestion(question: QuestionViewModel): string {
+  if (question.answerableBy === "assigned") {
+    return question.assignedTo
+      ? `Waiting for ${participantLabel(question.assignedTo)} to answer.`
+      : "Waiting for the assigned participant to answer.";
+  }
+  if (question.answerableBy === "anyone") return "Waiting for a participant to answer.";
+  return "Waiting for the session creator to answer.";
 }
 
 interface SideButtonProps {

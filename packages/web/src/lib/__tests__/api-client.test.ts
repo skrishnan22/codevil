@@ -226,14 +226,8 @@ describe("claimSetup", () => {
 });
 
 describe("signInWithGoogle", () => {
-  it("starts Better Auth social sign-in and returns redirect URL", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        redirect: true,
-        url: "https://accounts.google.com/oauth",
-      }),
-    });
+  it("builds a top-level Worker sign-in URL without cross-origin fetch", async () => {
+    const mockFetch = vi.fn();
 
     const result = await signInWithGoogle(
       { endpoint: "https://example.com" },
@@ -241,17 +235,11 @@ describe("signInWithGoogle", () => {
       mockFetch,
     );
 
-    expect(result.url).toBe("https://accounts.google.com/oauth");
-    expect(mockFetch).toHaveBeenCalledWith("https://example.com/api/auth/sign-in/social", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        provider: "google",
-        callbackURL: "https://app.example.com/setup",
-        errorCallbackURL: "https://app.example.com/setup",
-      }),
+    expect(result).toEqual({
+      redirect: true,
+      url: "https://example.com/api/auth/sign-in/google?callbackURL=https%3A%2F%2Fapp.example.com%2Fsetup&errorCallbackURL=https%3A%2F%2Fapp.example.com%2Fsetup",
     });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

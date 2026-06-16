@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import type { QuestionViewModel } from "@/stores/session-store";
+import type { ParticipantIdentity } from "@codevil/shared";
 import { canAnswerQuestion } from "@/lib/annotation-predicates";
 import { isConflictQuestion } from "@/lib/conflict-question";
 import { ConflictDecisionCard } from "./conflict-decision-card";
@@ -15,7 +16,9 @@ export function QuestionItem({ question }: { question: QuestionViewModel }) {
   const annotations = useSessionStore((s) => s.annotations);
   const currentUserId = useSessionStore((s) => s.currentUserId);
   const sessionCreatorId = useSessionStore((s) => s.sessionCreatorId);
+  const participants = useSessionStore((s) => s.participants);
   const answerQuestion = useSessionStore((s) => s.answerQuestion);
+  const assignQuestion = useSessionStore((s) => s.assignQuestion);
 
   if (isConflictQuestion(question, annotations)) {
     return <ConflictDecisionCard question={question} />;
@@ -25,19 +28,25 @@ export function QuestionItem({ question }: { question: QuestionViewModel }) {
     return <GenericAnsweredQuestionItem question={question} />;
   }
 
-  const canAnswer = canAnswerQuestion(question.answerableBy, currentUserId, sessionCreatorId);
-  const waitingHint = canAnswer
-    ? null
-    : question.answerableBy === "decider"
-      ? "Waiting for the session creator to answer."
-      : "Waiting for a participant to answer.";
+  const canAnswer = canAnswerQuestion(
+    question.answerableBy,
+    currentUserId,
+    sessionCreatorId,
+    question.assignedTo?.id,
+  );
+  const waitingHint = waitingHintForQuestion(question, canAnswer);
+  const assignableParticipants = participants.filter((participant) => participant.id !== sessionCreatorId);
+  const canAssign = Boolean(currentUserId && sessionCreatorId && currentUserId === sessionCreatorId);
 
   return (
     <GenericOpenQuestionItem
       question={question}
       canAnswer={canAnswer}
+      canAssign={canAssign}
+      assignableParticipants={assignableParticipants}
       waitingHint={waitingHint}
       onAnswer={answerQuestion}
+      onAssign={assignQuestion}
     />
   );
 }
@@ -47,15 +56,21 @@ export function QuestionItem({ question }: { question: QuestionViewModel }) {
 interface GenericOpenQuestionItemProps {
   question: QuestionViewModel;
   canAnswer: boolean;
+  canAssign: boolean;
+  assignableParticipants: ParticipantIdentity[];
   waitingHint: string | null;
   onAnswer: (requestId: string, answer: { optionIds: string[]; freeform?: string }) => void;
+  onAssign: (requestId: string, participant: ParticipantIdentity) => void;
 }
 
 function GenericOpenQuestionItem({
   question,
   canAnswer,
+  canAssign,
+  assignableParticipants,
   waitingHint,
   onAnswer,
+  onAssign,
 }: GenericOpenQuestionItemProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [freeform, setFreeform] = useState("");
@@ -82,11 +97,21 @@ function GenericOpenQuestionItem({
     });
   }
 
+  function handleAssign(e: React.ChangeEvent<HTMLSelectElement>) {
+    const participant = assignableParticipants.find((item) => item.id === e.target.value);
+    if (participant) onAssign(question.requestId, participant);
+  }
+
   return (
     <article className="question-card">
       <p className="question-card-text">{question.question}</p>
       {question.context && (
         <p className="question-card-context">{question.context}</p>
+      )}
+      {question.assignedTo && (
+        <p className="question-panel-note">
+          Assigned to {participantLabel(question.assignedTo)}
+        </p>
       )}
       {waitingHint && (
         <p className="question-panel-note">{waitingHint}</p>
@@ -125,6 +150,23 @@ function GenericOpenQuestionItem({
           />
         )}
         <div className="question-card-actions">
+          {canAssign && assignableParticipants.length > 0 && (
+            <label className="question-assignee-label">
+              <span>Assign to</span>
+              <select
+                className="question-assignee-select"
+                value={question.assignedTo?.id ?? ""}
+                onChange={handleAssign}
+              >
+                <option value="" disabled>Choose teammate</option>
+                {assignableParticipants.map((participant) => (
+                  <option key={participant.id} value={participant.id}>
+                    {participantLabel(participant)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button
             type="submit"
             className="btn btn-primary"
@@ -136,6 +178,21 @@ function GenericOpenQuestionItem({
       </form>
     </article>
   );
+}
+
+function participantLabel(participant: ParticipantIdentity): string {
+  return participant.name ?? participant.id;
+}
+
+function waitingHintForQuestion(question: QuestionViewModel, canAnswer: boolean): string | null {
+  if (canAnswer) return null;
+  if (question.answerableBy === "assigned") {
+    return question.assignedTo
+      ? `Waiting for ${participantLabel(question.assignedTo)} to answer.`
+      : "Waiting for the assigned participant to answer.";
+  }
+  if (question.answerableBy === "decider") return "Waiting for the session creator to answer.";
+  return "Waiting for a participant to answer.";
 }
 
 // ─── Generic answered question ─────────────────────────────────────────────

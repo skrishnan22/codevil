@@ -30,13 +30,18 @@ export function isDecider(
  *   (membership is already enforced upstream by ws-authorization).
  * - `"decider"` → only the session decider (creator / owner / admin)
  *   may answer.
+ * - `"assigned"` → only the explicitly assigned participant may answer.
  */
 export function canAnswerQuestion(
   answerableBy: AnswerableBy,
   userId: string | null,
   creatorId: string | null | undefined,
   role: string | null | undefined,
+  assignedToId?: string | null,
 ): boolean {
   if (answerableBy === "anyone") return true;
+  if (answerableBy === "assigned") {
+    return Boolean(userId && assignedToId && userId === assignedToId);
+  }
   return isDecider(userId, creatorId, role);
 }

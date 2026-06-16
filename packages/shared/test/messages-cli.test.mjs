@@ -33,7 +33,9 @@ import {
   QuestionOptionSchema,
   AnswerableBySchema,
   QuestionRaisedEventSchema,
+  QuestionAssignedEventSchema,
   QuestionAnsweredEventSchema,
+  QuestionAssignMessageSchema,
   QuestionAnswerMessageSchema,
   DOToCLIEventSchema,
   CLIToDOMessageSchema,
@@ -321,6 +323,10 @@ test("AnswerableBySchema rejects unknown values", () => {
   assert.throws(() => AnswerableBySchema.parse("everyone"));
 });
 
+test("AnswerableBySchema accepts assigned question policy", () => {
+  assert.equal(AnswerableBySchema.parse("assigned"), "assigned");
+});
+
 // --- DO → CLI: question events ---
 
 test("QuestionRaisedEventSchema parses valid question_raised event", () => {
@@ -341,6 +347,22 @@ test("QuestionRaisedEventSchema parses valid question_raised event", () => {
   assert.equal(parsed.options.length, 2);
   assert.equal(parsed.status, "open");
   assert.equal(parsed.raised_at, "2024-01-01T00:00:00.000Z");
+});
+
+test("QuestionRaisedEventSchema preserves assigned participant", () => {
+  const parsed = QuestionRaisedEventSchema.parse({
+    type: "question_raised",
+    request_id: "req_assigned",
+    run_id: "run_1",
+    question: "Who should decide?",
+    allow_freeform: true,
+    allow_multiple: false,
+    answerable_by: "assigned",
+    assigned_to: { id: "usr_2", name: "Bob" },
+    status: "open",
+    raised_at: "2024-01-01T00:00:00.000Z",
+  });
+  assert.equal(parsed.assigned_to.id, "usr_2");
 });
 
 test("QuestionRaisedEventSchema parses freeform-only question (no options)", () => {
@@ -388,6 +410,28 @@ test("DOToCLIEventSchema accepts question_raised events", () => {
     raised_at: "2024-01-01T00:00:00.000Z",
   });
   assert.equal(parsed.type, "question_raised");
+});
+
+test("QuestionAssignedEventSchema parses assignment updates", () => {
+  const parsed = QuestionAssignedEventSchema.parse({
+    type: "question_assigned",
+    request_id: "req_1",
+    assigned_to: { id: "usr_2", name: "Bob" },
+    assigned_by: { id: "usr_1", name: "Alice" },
+    assigned_at: "2026-06-14T11:00:00.000Z",
+  });
+  assert.equal(parsed.assigned_to.name, "Bob");
+});
+
+test("DOToCLIEventSchema accepts question_assigned events", () => {
+  const parsed = DOToCLIEventSchema.parse({
+    type: "question_assigned",
+    request_id: "req_1",
+    assigned_to: { id: "usr_2", name: "Bob" },
+    assigned_by: { id: "usr_1", name: "Alice" },
+    assigned_at: "2026-06-14T11:00:00.000Z",
+  });
+  assert.equal(parsed.type, "question_assigned");
 });
 
 test("QuestionAnsweredEventSchema parses valid question_answered event", () => {
@@ -483,4 +527,22 @@ test("CLIToDOMessageSchema accepts question_answer messages", () => {
     option_ids: ["opt-1"],
   });
   assert.equal(parsed.type, "question_answer");
+});
+
+test("QuestionAssignMessageSchema accepts assignment messages", () => {
+  const parsed = QuestionAssignMessageSchema.parse({
+    type: "question_assign",
+    request_id: "req_1",
+    assigned_to: { id: "usr_2", name: "Bob" },
+  });
+  assert.equal(parsed.assigned_to.id, "usr_2");
+});
+
+test("CLIToDOMessageSchema accepts question_assign messages", () => {
+  const parsed = CLIToDOMessageSchema.parse({
+    type: "question_assign",
+    request_id: "req_1",
+    assigned_to: { id: "usr_2", name: "Bob" },
+  });
+  assert.equal(parsed.type, "question_assign");
 });

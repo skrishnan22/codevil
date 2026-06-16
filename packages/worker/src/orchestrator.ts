@@ -119,6 +119,21 @@ const PHASE_SPAN_NAMES: Partial<Record<SessionState, string>> = {
   creating_pr: "phase.create_pr",
 };
 
+function questionAnswerDeniedMessage(question: {
+  answerable_by: AnswerableBy;
+  assigned_to_name: string | null;
+}): string {
+  if (question.answerable_by === "assigned") {
+    return question.assigned_to_name
+      ? `Only ${question.assigned_to_name} can answer this question.`
+      : "Only the assigned participant can answer this question.";
+  }
+  if (question.answerable_by === "anyone") {
+    return "Only session participants can answer this question.";
+  }
+  return "Only the session creator can answer this question.";
+}
+
 export class Orchestrator extends DurableObject<Env> {
   private sql: SqlStorage;
   private meta: SessionMeta | null = null;
@@ -185,10 +200,27 @@ export class Orchestrator extends DurableObject<Env> {
         answered_by_id TEXT,
         answered_by_name TEXT,
         answered_at TEXT,
+        assigned_to_id TEXT,
+        assigned_to_name TEXT,
         cancelled_reason TEXT,
         created_at TEXT NOT NULL
       );
     `);
+    this.ensureQuestionAssignmentColumns();
+  }
+
+  private ensureQuestionAssignmentColumns(): void {
+    for (const statement of [
+      "ALTER TABLE questions ADD COLUMN assigned_to_id TEXT",
+      "ALTER TABLE questions ADD COLUMN assigned_to_name TEXT",
+    ]) {
+      try {
+        this.sql.exec(statement);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.toLowerCase().includes("duplicate column")) throw error;
+      }
+    }
   }
 
   async init(sessionId: string, prompt: string, repo: string, options: InitOptions): Promise<void> {
@@ -359,6 +391,9 @@ export class Orchestrator extends DurableObject<Env> {
         break;
       case "annotation_withdraw":
         this.handleAnnotationWithdraw(msg.thread_id, participant);
+        break;
+      case "question_assign":
+        this.handleQuestionAssign(msg, participant, socketAuth?.userId ?? null, authz.role ?? null);
         break;
       case "question_answer":
         this.handleQuestionAnswer(msg, participant, socketAuth?.userId ?? null, authz.role ?? null);
@@ -580,8 +615,8 @@ export class Orchestrator extends DurableObject<Env> {
         request_id, run_id, round, question, context, options_json,
         answerable_by, allow_freeform, allow_multiple, status,
         answer_json, answered_by_id, answered_by_name, answered_at,
-        cancelled_reason, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, NULL, NULL, ?)`,
+        assigned_to_id, assigned_to_name, cancelled_reason, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL, NULL, ?, ?, NULL, ?)`,
       msg.request_id,
       msg.run_id,
       round,
@@ -591,6 +626,8 @@ export class Orchestrator extends DurableObject<Env> {
       msg.answerable_by,
       msg.allow_freeform ? 1 : 0,
       msg.allow_multiple ? 1 : 0,
+      msg.assigned_to?.id ?? null,
+      msg.assigned_to?.name ?? null,
       now,
     );
 
@@ -604,8 +641,47 @@ export class Orchestrator extends DurableObject<Env> {
       allow_freeform: msg.allow_freeform,
       allow_multiple: msg.allow_multiple,
       answerable_by: msg.answerable_by,
+      ...(msg.assigned_to !== undefined ? { assigned_to: msg.assigned_to } : {}),
       status: "open",
       raised_at: now,
+    });
+  }
+
+  private handleQuestionAssign(
+    msg: Extract<CLIToDOMessage, { type: "question_assign" }>,
+    actor: ParticipantIdentity,
+    userId: string | null,
+    role: MembershipRow["role"] | null,
+  ): void {
+    if (!this.meta) return;
+
+    const question = this.loadQuestion(msg.request_id);
+    if (!question || question.status !== "open") {
+      this.appendAndBroadcast({ type: "error", message: "Question not found or already answered." });
+      return;
+    }
+
+    if (!canAnswerQuestion("decider", userId, this.meta.created_by?.id, role)) {
+      this.appendAndBroadcast({ type: "error", message: "Only the session creator can assign this question." });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    this.sql.exec(
+      `UPDATE questions
+       SET answerable_by = 'assigned', assigned_to_id = ?, assigned_to_name = ?
+       WHERE request_id = ?`,
+      msg.assigned_to.id,
+      msg.assigned_to.name,
+      msg.request_id,
+    );
+
+    this.appendAndBroadcast({
+      type: "question_assigned",
+      request_id: msg.request_id,
+      assigned_to: msg.assigned_to,
+      assigned_by: actor,
+      assigned_at: now,
     });
   }
 
@@ -623,8 +699,8 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
-    if (!canAnswerQuestion(question.answerable_by, userId, this.meta.created_by?.id, role)) {
-      this.appendAndBroadcast({ type: "error", message: "Only the session creator can answer this question." });
+    if (!canAnswerQuestion(question.answerable_by, userId, this.meta.created_by?.id, role, question.assigned_to_id)) {
+      this.appendAndBroadcast({ type: "error", message: questionAnswerDeniedMessage(question) });
       return;
     }
 
@@ -687,15 +763,21 @@ export class Orchestrator extends DurableObject<Env> {
     run_id: string;
     status: string;
     answerable_by: AnswerableBy;
+    assigned_to_id: string | null;
+    assigned_to_name: string | null;
   } | null {
     for (const row of this.sql.exec(
-      `SELECT run_id, status, answerable_by FROM questions WHERE request_id = ?`,
+      `SELECT run_id, status, answerable_by, assigned_to_id, assigned_to_name
+       FROM questions
+       WHERE request_id = ?`,
       requestId,
     )) {
       return {
         run_id: row["run_id"] as string,
         status: row["status"] as string,
         answerable_by: row["answerable_by"] as AnswerableBy,
+        assigned_to_id: (row["assigned_to_id"] as string | null) ?? null,
+        assigned_to_name: (row["assigned_to_name"] as string | null) ?? null,
       };
     }
     return null;

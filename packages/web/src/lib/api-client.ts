@@ -200,22 +200,16 @@ export async function signInWithGoogle(
   fetcher: FetchFn = globalThis.fetch,
 ): Promise<SignInWithGoogleResponse> {
   const endpoint = config.endpoint.replace(/\/$/, "");
-  const response = await fetcher(`${endpoint}/api/auth/sign-in/social`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      provider: "google",
-      callbackURL,
-      errorCallbackURL: callbackURL,
-    }),
-  });
+  void fetcher;
 
-  if (!response.ok) {
-    throw new Error(`Failed to start Google sign-in: ${response.status}`);
-  }
+  const url = new URL(`${endpoint}/api/auth/sign-in/google`);
+  url.searchParams.set("callbackURL", callbackURL);
+  url.searchParams.set("errorCallbackURL", callbackURL);
 
-  return (await response.json()) as SignInWithGoogleResponse;
+  return {
+    redirect: true,
+    url: url.toString(),
+  };
 }
 
 export async function signOut(

@@ -42,6 +42,7 @@ export interface AgentStartOptions {
   llmKey?: string;
   onEvent(event: unknown): void;
   createPullRequest(options: CreatePullRequestToolOptions): Promise<{ url: string }>;
+  askQuestion?: (params: AskQuestionParams) => Promise<AskQuestionOutcome>;
 }
 
 export interface CreatePullRequestToolOptions {
@@ -234,7 +235,7 @@ export class SandboxRuntime {
           await this.handleAgentTurn(message.run_id, message.prompt, message.model, message.provider, parent);
           return;
         case "plan":
-          await this.handlePlan(message.prompt, message.model, message.provider, parent);
+          await this.handlePlan(message.run_id, message.prompt, message.model, message.provider, parent);
           return;
         case "refine_plan":
           await this.handleRefine(message.feedback, parent);
@@ -347,6 +348,7 @@ export class SandboxRuntime {
   }
 
   private async handlePlan(
+    runId: string,
     prompt: string,
     model: string,
     provider: string | undefined,
@@ -371,15 +373,21 @@ export class SandboxRuntime {
         this.send({ type: "agent_event", event: validated });
       },
       createPullRequest: (options) => this.createPullRequest(options),
+      askQuestion: (params) => this.askQuestionForActiveRun(runId, params),
     });
 
-    const result = await this.maybeSpan(
-      "llm.plan",
-      { parent, attributes: { model, provider: provider ?? this.provider } },
-      () => agent.plan(planPrompt(prompt)),
-    );
-    this.capturePreviewCommand(result.plan);
-    this.send({ type: "plan_ready", ...result });
+    this.activeRunId = runId;
+    try {
+      const result = await this.maybeSpan(
+        "llm.plan",
+        { parent, attributes: { run_id: runId, model, provider: provider ?? this.provider } },
+        () => agent.plan(planPrompt(prompt)),
+      );
+      this.capturePreviewCommand(result.plan);
+      this.send({ type: "plan_ready", ...result });
+    } finally {
+      this.activeRunId = undefined;
+    }
   }
 
   private async handleAgentTurn(
@@ -403,6 +411,7 @@ export class SandboxRuntime {
           if (validated) this.send({ type: "agent_event", event: validated });
         },
         createPullRequest: (options) => this.createPullRequest(options),
+        askQuestion: (params) => this.askQuestionForActiveRun(runId, params),
       });
       this.agent = agent;
     }
@@ -496,6 +505,13 @@ export class SandboxRuntime {
    */
   makeAskQuestion(runId: string): (params: AskQuestionParams) => Promise<AskQuestionOutcome> {
     return (params) => this.askQuestion(runId, params);
+  }
+
+  private askQuestionForActiveRun(
+    fallbackRunId: string,
+    params: AskQuestionParams,
+  ): Promise<AskQuestionOutcome> {
+    return this.askQuestion(this.activeRunId ?? fallbackRunId, params);
   }
 
   private handleAskQuestionResponse(message: Extract<DOToSandboxMessage, { type: "ask_question_response" }>): void {

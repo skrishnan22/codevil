@@ -55,19 +55,26 @@ export class PiAgentDriver implements AgentDriver {
       throw new Error(`Model not found: ${options.provider}/${options.model}`);
     }
 
+    const customTools: ReturnType<typeof defineTool>[] = [
+      createPullRequestTool(options.createPullRequest),
+    ];
+    if (options.askQuestion) {
+      customTools.push(askQuestionTool(options.askQuestion));
+    }
+
     const { session } = await createAgentSession({
       cwd: options.cwd,
       model,
       authStorage,
       modelRegistry,
-      customTools: [createPullRequestTool(options.createPullRequest)],
+      customTools,
       sessionManager: SessionManager.inMemory(options.cwd),
       settingsManager: SettingsManager.inMemory({
         compaction: { enabled: false },
         retry: { enabled: true, maxRetries: 5 },
       }),
     });
-    session.setActiveToolsByName([
+    const activeTools = [
       "read",
       "grep",
       "find",
@@ -76,7 +83,11 @@ export class PiAgentDriver implements AgentDriver {
       "edit",
       "write",
       "create_pull_request",
-    ]);
+    ];
+    if (options.askQuestion) {
+      activeTools.push("ask_question");
+    }
+    session.setActiveToolsByName(activeTools);
 
     session.subscribe((event) => {
       const delta = extractAssistantDeltaFromEvent(event);

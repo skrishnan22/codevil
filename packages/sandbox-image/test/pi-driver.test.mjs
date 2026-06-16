@@ -36,7 +36,7 @@ test("extracts streamed assistant text from Pi message_update deltas", () => {
   assert.equal(text, "## Plan\n");
 });
 
-test("starts with coding tools and the create_pull_request tool active", async () => {
+test("starts with coding tools, create_pull_request, and ask_question active", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "codevil-pi-driver-"));
   const driver = new PiAgentDriver();
   const createPullRequestCalls = [];
@@ -53,10 +53,16 @@ test("starts with coding tools and the create_pull_request tool active", async (
         createPullRequestCalls.push(options);
         return { url: "https://github.com/example/app/pull/1" };
       },
+      askQuestion: async () => ({
+        cancelled: false,
+        option_ids: ["opt_1"],
+        answered_by: { id: "usr_1", name: "Alice" },
+      }),
     });
 
     const session = driver.session;
     assert.deepEqual(session.getActiveToolNames().sort(), [
+      "ask_question",
       "bash",
       "create_pull_request",
       "edit",
@@ -67,6 +73,7 @@ test("starts with coding tools and the create_pull_request tool active", async (
       "write",
     ]);
     assert.ok(session.getAllTools().some((tool) => tool.name === "create_pull_request"));
+    assert.ok(session.getAllTools().some((tool) => tool.name === "ask_question"));
   } finally {
     driver.dispose();
     await rm(cwd, { recursive: true, force: true });

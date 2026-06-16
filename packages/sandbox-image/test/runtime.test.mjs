@@ -554,6 +554,7 @@ test("agent_turn starts a coding Pi session, forwards events, and sends the fina
   assert.equal(startCall[1].llmKey, undefined);
   assert.equal(typeof startCall[1].onEvent, "function");
   assert.equal(typeof startCall[1].createPullRequest, "function");
+  assert.equal(typeof startCall[1].askQuestion, "function");
   assert.deepEqual(turnCall, ["turn", "where are rate limits configured?"]);
   assert.deepEqual(sent.slice(5), [
     { type: "agent_event", event: { type: "agent_start" } },
@@ -564,6 +565,51 @@ test("agent_turn starts a coding Pi session, forwards events, and sends the fina
       cost: { input_tokens: 10, output_tokens: 20, total_cost_usd: 0.03 },
     },
   ]);
+});
+
+test("plan starts a coding Pi session with a run-bound question callback", async () => {
+  const sent = [];
+  const agent = new FakeAgentDriver({
+    plan: { plan: "## Plan", cost: zeroCost },
+  });
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => agent,
+    git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  await runtime.handleMessage({ type: "plan", run_id: "run_plan", prompt: "plan this", model: "planner" });
+
+  const startCall = agent.calls.find(([name]) => name === "start");
+  assert.equal(typeof startCall[1].askQuestion, "function");
+
+  const question = startCall[1].askQuestion({
+    question: "Which storage?",
+    options: [{ id: "redis", label: "Redis" }],
+    allow_freeform: false,
+    allow_multiple: false,
+    answerable_by: "decider",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const request = sent.find((message) => message.type === "ask_question_request");
+  assert.equal(request.run_id, "run_plan");
+  assert.equal(request.question, "Which storage?");
+
+  await runtime.handleMessage({
+    type: "ask_question_response",
+    request_id: request.request_id,
+    option_ids: ["redis"],
+    answered_by: { id: "usr_1", name: "Alice" },
+  });
+
+  const answer = await question;
+  assert.equal(answer.cancelled, false);
+  assert.deepEqual(answer.option_ids, ["redis"]);
+  assert.deepEqual(answer.answered_by, { id: "usr_1", name: "Alice" });
 });
 
 test("agent_turn reuses the active Pi session for follow-up questions", async () => {

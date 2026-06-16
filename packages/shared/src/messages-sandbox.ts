@@ -36,6 +36,7 @@ const TraceContextFields = {
 
 export const PlanMessageSchema = z.object({
   type: z.literal("plan"),
+  run_id: z.string(),
   prompt: z.string(),
   model: z.string(),
   provider: z.string().optional(),

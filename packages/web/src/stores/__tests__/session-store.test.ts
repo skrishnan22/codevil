@@ -227,6 +227,42 @@ describe("session event state inference", () => {
     }
   });
 
+  it("stores the fetched session creator when connecting to a session", () => {
+    const originalWebSocket = globalThis.WebSocket;
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      constructor(url: string) {
+        this.url = url;
+      }
+
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_new",
+        "https://example.com/sessions/ses_new/ws",
+        { sessionCreatorId: "usr_creator" },
+      );
+
+      expect(useSessionStore.getState().sessionCreatorId).toBe("usr_creator");
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
   it("sends human chat messages over the websocket", () => {
     const originalWebSocket = globalThis.WebSocket;
     const sockets: FakeWebSocket[] = [];

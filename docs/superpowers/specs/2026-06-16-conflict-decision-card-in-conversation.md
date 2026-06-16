@@ -2,7 +2,7 @@
 
 > **Date:** 2026-06-16
 > **Status:** Design draft — for review before implementation
-> **Scope:** `@codevil/web` only — UX/UI refinement of how plan-mode conflict questions surface to the user. No changes to the sandbox `ask_question` tool, the DO question broker, or the shared message contracts.
+> **Scope:** Primarily `@codevil/web`. A small deliberate expansion: `question_raised` events get a new `raised_at: string` field on the wire, set by the DO from the existing `questions.created_at` SQLite column. Sandbox tool, DO question broker behavior, and answer flow are unchanged.
 > **Builds on:** [2026-06-14 `ask_question` tool + prose consolidation](2026-06-14-ask-question-tool-and-prose-consolidation.md) (defines the tool that produces these questions) and [2026-06-12 collaborative plan annotation](2026-06-12-collaborative-plan-annotation-design.md) (defines the plan review panel).
 
 ## Goal
@@ -17,7 +17,7 @@ Redesign goals:
 
 ## Out of scope
 
-- Sandbox-side question contract, tool params, or broker delivery — already defined in the 2026-06-14 spec and unchanged.
+- Sandbox-side question contract, tool params, or broker delivery behavior — already defined in the 2026-06-14 spec and unchanged. (The wire schema gains one new field, `raised_at`, sourced from the existing SQLite `created_at` column — see "Schema change: `raised_at` on `question_raised`" below.)
 - Non-conflict `ask_question` calls (e.g. future "which library should I use" questions). They continue to render via the generic `QuestionCard` path. This spec adds a richer specialization that the renderer picks when the question is conflict-shaped (see "Detecting a conflict question" below).
 - Editing or withdrawing annotations from inside the conflict card — that already lives in the plan panel.
 
@@ -116,6 +116,50 @@ Chat input gating reads `questions` from the store and toggles disabled state wh
 - Side-by-side diff view of how each option would change the plan.
 - A history pane of resolved conflicts (the collapsed inline summaries serve this — scrolling up shows them in order).
 
+## Schema change: `raised_at` on `question_raised`
+
+To order the card correctly in the timeline across refreshes and late-joining participants, the `question_raised` wire event gains a single field:
+
+```
+raised_at: z.string()   // ISO timestamp; sourced from questions.created_at in DO SQLite
+```
+
+- The DO already records `created_at` per question (`orchestrator.ts` insert path). Adding `raised_at` to the broadcast is one line at the live-emit site and one line at the SQLite-replay site.
+- The strict `QuestionRaisedEventSchema` requires `raised_at`. The lenient `PersistedDOToCLIEventSchema` variant makes it **optional** so already-persisted sessions whose history predates this change still replay cleanly.
+- The web reducer reads `raised_at` if present; if absent (legacy persisted event), it falls back to `Date.now()` at reduction time. This only affects pre-existing sessions and only their relative ordering of pre-existing questions, which is acceptable.
+- Test updates: the two `QuestionRaisedEventSchema.parse(...)` cases in `packages/shared/test/messages-cli.test.mjs` add `raised_at`.
+
+## Integration with the Timeline
+
+The card mounts as a **real Timeline item**, not a sibling of the timeline. Concrete changes:
+
+- `TimelineItemData` (in `TimelineItem.tsx`) gains a `"question"` variant carrying a `QuestionViewModel`.
+- `deriveTimeline` in `Timeline.tsx` reads `questions` from the store and weaves each into the timeline by `raisedAt`. Open conflict-shaped questions render the rich `ConflictDecisionCard`; resolved ones render the collapsed one-line summary at the moment they were raised. Non-conflict open questions continue to render the existing `QuestionCard`.
+- The sibling `<QuestionCard />` slot in `session.$id.tsx:132` is removed (its work moves into the timeline).
+
+## Plan panel state lifts into the store
+
+`panelOpen` currently lives as local React state in `session.$id.tsx`. We add to the store:
+
+```
+planPanelOpen: boolean
+openPlanPanel(): void
+closePlanPanel(): void
+```
+
+Reasons:
+- The card needs to trigger "Open in plan ↗" from inside the timeline.
+- `ChatInput` and `PlanReviewPanel` already need to read/write it.
+- The autoclose-on-send behavior (Section 1 above) becomes a single `closePlanPanel()` call in `PlanReviewPanel.handleSendToAgent` after the existing dispatch.
+
+## Display name + avatar
+
+The conflict card's "author" identity matches the existing Timeline convention: name `Codevil`, monogram avatar `C`. We do **not** introduce a new Pi-specific avatar. This keeps the timeline visually coherent.
+
+## Section reference label
+
+The header chip shows the relative annotation reference: `Round <N> · annotation #<short-id>` and a truncated preview of `anchor.text` (~40 chars, ellipsized). We do **not** derive a semantic `§3.2 · caching` label in v1 — that requires plan-markdown heading traversal and is out of scope. The mockup's polished label is aspirational and can land as a follow-up once heading extraction exists.
+
 ## Open questions
 
-None — the questions raised during brainstorming (placement, weight, multi-conflict handling, chat-input gating, resolved-state treatment) all have answers above.
+None — all questions raised during brainstorming and the pre-implementation gap review have explicit answers above.

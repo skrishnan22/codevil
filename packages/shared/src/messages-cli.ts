@@ -227,6 +227,7 @@ export const QuestionRaisedEventSchema = z.object({
   allow_multiple: z.boolean(),
   answerable_by: AnswerableBySchema,
   status: z.literal("open"),
+  raised_at: z.string(),
 });
 
 export const QuestionAnsweredEventSchema = z.object({

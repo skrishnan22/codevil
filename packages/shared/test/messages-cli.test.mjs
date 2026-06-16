@@ -334,11 +334,13 @@ test("QuestionRaisedEventSchema parses valid question_raised event", () => {
     allow_multiple: false,
     answerable_by: "decider",
     status: "open",
+    raised_at: "2024-01-01T00:00:00.000Z",
   });
   assert.equal(parsed.type, "question_raised");
   assert.equal(parsed.request_id, "req_1");
   assert.equal(parsed.options.length, 2);
   assert.equal(parsed.status, "open");
+  assert.equal(parsed.raised_at, "2024-01-01T00:00:00.000Z");
 });
 
 test("QuestionRaisedEventSchema parses freeform-only question (no options)", () => {
@@ -352,9 +354,25 @@ test("QuestionRaisedEventSchema parses freeform-only question (no options)", () 
     allow_multiple: false,
     answerable_by: "anyone",
     status: "open",
+    raised_at: "2024-01-01T00:00:00.000Z",
   });
   assert.equal(parsed.context, "Background context here.");
   assert.equal(parsed.options, undefined);
+});
+
+test("QuestionRaisedEventSchema rejects event without raised_at", () => {
+  assert.throws(() =>
+    QuestionRaisedEventSchema.parse({
+      type: "question_raised",
+      request_id: "req_3",
+      run_id: "run_1",
+      question: "Anything?",
+      allow_freeform: true,
+      allow_multiple: false,
+      answerable_by: "anyone",
+      status: "open",
+    }),
+  );
 });
 
 test("DOToCLIEventSchema accepts question_raised events", () => {
@@ -367,6 +385,7 @@ test("DOToCLIEventSchema accepts question_raised events", () => {
     allow_multiple: false,
     answerable_by: "decider",
     status: "open",
+    raised_at: "2024-01-01T00:00:00.000Z",
   });
   assert.equal(parsed.type, "question_raised");
 });

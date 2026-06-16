@@ -2,62 +2,61 @@ import { useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import type { QuestionViewModel } from "@/stores/session-store";
 import { canAnswerQuestion } from "@/lib/annotation-predicates";
+import { isConflictQuestion } from "@/lib/conflict-question";
+import { ConflictDecisionCard } from "./conflict-decision-card";
 
-export function QuestionCard() {
-  const questions = useSessionStore((state) => state.questions);
-  const currentUserId = useSessionStore((state) => state.currentUserId);
-  const sessionCreatorId = useSessionStore((state) => state.sessionCreatorId);
-  const answerQuestion = useSessionStore((state) => state.answerQuestion);
+/**
+ * Per-question router used when a question is rendered in-stream (Timeline).
+ * Picks the rich conflict card for binary annotation conflicts; otherwise
+ * delegates to the generic open/answered renderers used for all other
+ * `ask_question` calls.
+ */
+export function QuestionItem({ question }: { question: QuestionViewModel }) {
+  const annotations = useSessionStore((s) => s.annotations);
+  const currentUserId = useSessionStore((s) => s.currentUserId);
+  const sessionCreatorId = useSessionStore((s) => s.sessionCreatorId);
+  const answerQuestion = useSessionStore((s) => s.answerQuestion);
 
-  const openQuestions = questions.filter((q) => q.status === "open");
-  const answeredQuestions = questions.filter((q) => q.status === "answered");
+  if (isConflictQuestion(question, annotations)) {
+    return <ConflictDecisionCard question={question} />;
+  }
 
-  if (questions.length === 0) return null;
+  if (question.status === "answered") {
+    return <GenericAnsweredQuestionItem question={question} />;
+  }
+
+  const canAnswer = canAnswerQuestion(question.answerableBy, currentUserId, sessionCreatorId);
+  const waitingHint = canAnswer
+    ? null
+    : question.answerableBy === "decider"
+      ? "Waiting for the session creator to answer."
+      : "Waiting for a participant to answer.";
 
   return (
-    <section className="question-panel" aria-label="Questions from the agent">
-      <div className="question-panel-header">
-        <div>
-          <p className="question-panel-eyebrow">Input needed</p>
-          <h3 className="question-panel-title">Agent question</h3>
-        </div>
-        {openQuestions.length > 0 && (
-          <span className="question-panel-count">{openQuestions.length}</span>
-        )}
-      </div>
-      <div className="question-panel-list">
-        {openQuestions.map((q) => {
-          const canAnswer = canAnswerQuestion(q.answerableBy, currentUserId, sessionCreatorId);
-          const waitingHint =
-            q.answerableBy === "decider"
-              ? "Waiting for the session creator to answer."
-              : "Waiting for a participant to answer.";
-          return (
-            <OpenQuestionItem
-              key={q.requestId}
-              question={q}
-              canAnswer={canAnswer}
-              waitingHint={canAnswer ? null : waitingHint}
-              onAnswer={answerQuestion}
-            />
-          );
-        })}
-        {answeredQuestions.map((q) => (
-          <AnsweredQuestionItem key={q.requestId} question={q} />
-        ))}
-      </div>
-    </section>
+    <GenericOpenQuestionItem
+      question={question}
+      canAnswer={canAnswer}
+      waitingHint={waitingHint}
+      onAnswer={answerQuestion}
+    />
   );
 }
 
-interface OpenQuestionItemProps {
+// ─── Generic open question ─────────────────────────────────────────────────
+
+interface GenericOpenQuestionItemProps {
   question: QuestionViewModel;
   canAnswer: boolean;
   waitingHint: string | null;
   onAnswer: (requestId: string, answer: { optionIds: string[]; freeform?: string }) => void;
 }
 
-function OpenQuestionItem({ question, canAnswer, waitingHint, onAnswer }: OpenQuestionItemProps) {
+function GenericOpenQuestionItem({
+  question,
+  canAnswer,
+  waitingHint,
+  onAnswer,
+}: GenericOpenQuestionItemProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [freeform, setFreeform] = useState("");
 
@@ -139,15 +138,12 @@ function OpenQuestionItem({ question, canAnswer, waitingHint, onAnswer }: OpenQu
   );
 }
 
-interface AnsweredQuestionItemProps {
-  question: QuestionViewModel;
-}
+// ─── Generic answered question ─────────────────────────────────────────────
 
-function AnsweredQuestionItem({ question }: AnsweredQuestionItemProps) {
+function GenericAnsweredQuestionItem({ question }: { question: QuestionViewModel }) {
   const { answer, options } = question;
   if (!answer) return null;
 
-  // Resolve option labels from their ids
   const chosenLabels =
     options && answer.optionIds.length > 0
       ? answer.optionIds

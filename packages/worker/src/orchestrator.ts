@@ -605,6 +605,7 @@ export class Orchestrator extends DurableObject<Env> {
       allow_multiple: msg.allow_multiple,
       answerable_by: msg.answerable_by,
       status: "open",
+      raised_at: now,
     });
   }
 
@@ -1082,6 +1083,7 @@ export class Orchestrator extends DurableObject<Env> {
       });
       this.sendToSandbox({
         type: "plan",
+        run_id: run.id,
         prompt: run.text,
         model: this.meta.plan_model,
         provider: this.meta.provider,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import type { ChatMessage } from "@/types";
 import type { SessionState } from "@codevil/shared";
+import type { QuestionViewModel } from "@/stores/session-store";
 import {
   assignParticipantAvatarColors,
   getParticipantColorKey,
@@ -17,11 +18,38 @@ import {
 
 // ─── Timeline derivation ────────────────────────────────────────────────────
 
-function deriveTimeline(messages: ChatMessage[]): TimelineItemData[] {
-  const items: TimelineItemData[] = [];
-  const messagesSorted = [...messages].sort((a, b) => a.timestamp - b.timestamp);
+/**
+ * Sortable wrapper so messages and questions can interleave by timestamp
+ * without losing their type when we hand them to TimelineItem.
+ */
+type TimelineSource =
+  | { kind: "message"; ts: number; msg: ChatMessage }
+  | { kind: "question"; ts: number; q: QuestionViewModel };
 
-  for (const msg of messagesSorted) {
+export function deriveTimeline(
+  messages: ChatMessage[],
+  questions: QuestionViewModel[] = [],
+): TimelineItemData[] {
+  const items: TimelineItemData[] = [];
+  // Unify messages + questions on a single timeline ordered by timestamp.
+  // Questions tie-break after messages at the same instant so an answered
+  // question never appears above the user message that triggered it.
+  const sources: TimelineSource[] = [
+    ...messages.map<TimelineSource>((msg) => ({ kind: "message", ts: msg.timestamp, msg })),
+    ...questions.map<TimelineSource>((q) => ({ kind: "question", ts: q.raisedAt, q })),
+  ].sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts - b.ts;
+    if (a.kind === b.kind) return 0;
+    return a.kind === "message" ? -1 : 1;
+  });
+
+  for (const src of sources) {
+    if (src.kind === "question") {
+      items.push({ id: `q-${src.q.requestId}`, type: "question", data: src.q });
+      continue;
+    }
+    const msg = src.msg;
+
     if (msg.variant === "plan") {
       items.push({ id: `msg-${msg.id}`, type: "message", data: msg });
       continue;
@@ -125,7 +153,7 @@ interface TimelineProps {
 }
 
 export function Timeline({ onOpenActivity }: TimelineProps) {
-  const { messages, participants, sessionPhase } = useSessionStore();
+  const { messages, participants, sessionPhase, questions } = useSessionStore();
   const workingLabel = getWorkingLabel(sessionPhase);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -140,7 +168,7 @@ export function Timeline({ onOpenActivity }: TimelineProps) {
     el.scrollTop = el.scrollHeight;
   }, []);
 
-  const items = useMemo(() => deriveTimeline(messages), [messages]);
+  const items = useMemo(() => deriveTimeline(messages, questions), [messages, questions]);
   const groupedIds = useMemo(() => {
     const set = new Set<string>();
     let prevKey: string | null = null;
@@ -162,13 +190,16 @@ export function Timeline({ onOpenActivity }: TimelineProps) {
 
   const contentKey = useMemo(() => {
     const lastMessage = messages[messages.length - 1];
+    const lastQuestion = questions[questions.length - 1];
     return [
       items.length,
       lastMessage?.id,
       lastMessage?.content,
+      lastQuestion?.requestId,
+      lastQuestion?.status,
       workingLabel ?? "",
     ].join("|");
-  }, [items.length, messages, workingLabel]);
+  }, [items.length, messages, questions, workingLabel]);
 
   useEffect(() => {
     const latestAttention = [...items].reverse().find((i) => i.type === "attention");

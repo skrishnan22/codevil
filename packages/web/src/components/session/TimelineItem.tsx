@@ -1,14 +1,34 @@
 import type { ChatMessage } from "@/types";
 import type { CSSProperties } from "react";
+import type { QuestionViewModel } from "@/stores/session-store";
 import { MilestoneCard, type MilestoneData } from "./MilestoneCard";
 import { AttentionCard, type AttentionData } from "./AttentionCard";
 import { TraceGroup, type TraceGroupData } from "./TraceGroup";
 import { PlanCard } from "./plan-card";
+import { QuestionItem } from "./question-card";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function QuestionTimelineItem({ question }: { question: QuestionViewModel }) {
+  return (
+    <div className="timeline-msg agent" id={`question-${question.requestId}`}>
+      <div className="timeline-msg-avatar agent" aria-hidden="true">C</div>
+      <div className="timeline-msg-body">
+        <div className="timeline-msg-meta">
+          <span className="timeline-msg-sender">Codevil</span>
+          <span>·</span>
+          <span>{formatTime(question.raisedAt)}</span>
+        </div>
+        <div className="timeline-msg-bubble timeline-msg-bubble--question">
+          <QuestionItem question={question} />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function getTimelineMessagePresentation(msg: ChatMessage): {
@@ -63,7 +83,8 @@ export type TimelineItemData =
   | { id: string; type: "milestone"; data: MilestoneData }
   | { id: string; type: "trace-group"; data: TraceGroupData }
   | { id: string; type: "message"; data: ChatMessage }
-  | { id: string; type: "attention"; data: AttentionData };
+  | { id: string; type: "attention"; data: AttentionData }
+  | { id: string; type: "question"; data: QuestionViewModel };
 
 interface TimelineItemProps {
   item: TimelineItemData;
@@ -85,6 +106,10 @@ export function TimelineItem({ item, highlight, onOpenActivity, avatarColors, gr
 
   if (item.type === "attention") {
     return <AttentionCard item={item.data} highlight={highlight} />;
+  }
+
+  if (item.type === "question") {
+    return <QuestionTimelineItem question={item.data} />;
   }
 
   // message

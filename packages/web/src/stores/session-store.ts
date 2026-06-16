@@ -28,6 +28,13 @@ export interface QuestionViewModel {
   allowMultiple: boolean;
   answerableBy: AnswerableBy;
   status: "open" | "answered";
+  /**
+   * Client-local epoch ms at which the question is anchored in the timeline.
+   * Sourced from `question_raised.raised_at` (ISO) when present; falls back to
+   * `Date.now()` only for legacy persisted events emitted before the field
+   * existed. See spec § "Schema change: raised_at on question_raised".
+   */
+  raisedAt: number;
   answer?: QuestionAnswer;
 }
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
@@ -77,11 +84,21 @@ interface SessionStoreState {
   selectedAnnotationId: string | null;
   currentUserId: string | null;
   sessionCreatorId: string | null;
+  planPanelOpen: boolean;
+}
+
+interface ConnectSessionOptions {
+  sessionCreatorId?: string | null;
 }
 
 interface SessionStoreActions {
   startSession: (config: SessionConfig, params: NewSessionParams) => Promise<void>;
-  connectToSession: (config: SessionConfig, sessionId: string, wsUrl: string) => void;
+  connectToSession: (
+    config: SessionConfig,
+    sessionId: string,
+    wsUrl: string,
+    options?: ConnectSessionOptions,
+  ) => void;
   approve: () => void;
   abort: () => void;
   refine: (feedback: string) => void;
@@ -103,6 +120,8 @@ interface SessionStoreActions {
     requestId: string,
     answer: { optionIds: string[]; freeform?: string },
   ) => void;
+  openPlanPanel: () => void;
+  closePlanPanel: () => void;
   reset: () => void;
 }
 
@@ -136,6 +155,7 @@ const initialState: SessionStoreState = {
   selectedAnnotationId: null,
   currentUserId: null,
   sessionCreatorId: null,
+  planPanelOpen: false,
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
@@ -169,13 +189,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     try {
       const session = await createSession(config, params);
       set({ sessionId: session.session_id, wsUrl: session.ws_url });
-      get().connectToSession(config, session.session_id, session.ws_url);
+      get().connectToSession(config, session.session_id, session.ws_url, {
+        sessionCreatorId: session.summary.created_by?.id ?? null,
+      });
     } catch (err) {
       set({ connectionStatus: "error", error: err instanceof Error ? err.message : String(err) });
     }
   },
 
-  connectToSession(config, sessionId, wsUrl) {
+  connectToSession(config, sessionId, wsUrl, options) {
     const generation = ++connectionGeneration;
     wsHandle?.close();
     clearPendingEvents();
@@ -183,6 +205,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const current = get();
     const isSameSession = current.sessionId === sessionId;
     const initialCursor = isSameSession ? current.cursor : 0;
+    const hasCreatorIdOption = options !== undefined && "sessionCreatorId" in options;
 
     set({
       ...(isSameSession ? {} : {
@@ -198,8 +221,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         annotations: [],
         questions: [],
         selectedAnnotationId: null,
-        sessionCreatorId: null,
+        sessionCreatorId: hasCreatorIdOption ? options.sessionCreatorId ?? null : null,
+        planPanelOpen: false,
       }),
+      ...(isSameSession && hasCreatorIdOption
+        ? { sessionCreatorId: options.sessionCreatorId ?? null }
+        : {}),
       sessionId,
       wsUrl,
       connectionStatus: "connecting",
@@ -449,6 +476,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     });
   },
 
+  openPlanPanel() {
+    set({ planPanelOpen: true });
+  },
+
+  closePlanPanel() {
+    set({ planPanelOpen: false });
+  },
+
   reset() {
     connectionGeneration++;
     wsHandle?.close();
@@ -667,6 +702,16 @@ export function reduceAnnotations(
   }
 }
 
+/**
+ * Parse an ISO `raised_at` to epoch ms, falling back to local `now` if the
+ * field is missing (legacy persisted events) or unparseable.
+ */
+export function parseRaisedAt(raisedAt: string | undefined): number {
+  if (!raisedAt) return Date.now();
+  const t = Date.parse(raisedAt);
+  return Number.isFinite(t) ? t : Date.now();
+}
+
 export function reduceQuestions(
   current: QuestionViewModel[],
   event: DOToCLIEvent,
@@ -685,6 +730,9 @@ export function reduceQuestions(
         allowMultiple: event.allow_multiple,
         answerableBy: event.answerable_by,
         status: "open",
+        // Legacy persisted events (pre-schema-update) lack raised_at; their
+        // relative ordering is best-effort using local clock at reduction time.
+        raisedAt: parseRaisedAt(event.raised_at),
       };
       return [...current, viewModel];
     }

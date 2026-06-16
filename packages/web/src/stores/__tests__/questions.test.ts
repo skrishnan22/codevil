@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reduceQuestions } from "../session-store";
+import { parseRaisedAt, reduceQuestions } from "../session-store";
 import type { QuestionViewModel } from "../session-store";
 import type { DOToCLIEvent } from "@codevil/shared";
 
@@ -13,6 +13,7 @@ function makeRaisedEvent(
     answerable_by: "decider" | "anyone";
     options: { id: string; label: string }[];
     context: string;
+    raised_at: string;
   }> = {},
 ): DOToCLIEvent {
   return {
@@ -24,6 +25,7 @@ function makeRaisedEvent(
     allow_multiple: overrides.allow_multiple ?? false,
     answerable_by: overrides.answerable_by ?? "decider",
     status: "open",
+    raised_at: overrides.raised_at ?? "2024-01-01T00:00:00.000Z",
     ...(overrides.options ? { options: overrides.options } : {}),
     ...(overrides.context ? { context: overrides.context } : {}),
   };
@@ -115,5 +117,46 @@ describe("reduceQuestions", () => {
     expect(vm.options).toEqual([{ id: "opt_a", label: "Option A" }]);
     expect(vm.context).toBe("some context");
     expect(vm.runId).toBe("run_abc");
+  });
+
+  it("derives raisedAt from raised_at on the event", () => {
+    const event = makeRaisedEvent("req_t", { raised_at: "2024-06-01T12:34:56.000Z" });
+    const [vm] = reduceQuestions([], event);
+    expect(vm.raisedAt).toBe(Date.parse("2024-06-01T12:34:56.000Z"));
+  });
+
+  it("falls back to local time when raised_at is missing (legacy persisted event)", () => {
+    // Simulate a legacy event by stripping raised_at after construction.
+    const event = makeRaisedEvent("req_legacy");
+    delete (event as { raised_at?: string }).raised_at;
+    const before = Date.now();
+    const [vm] = reduceQuestions([], event);
+    const after = Date.now();
+    expect(vm.raisedAt).toBeGreaterThanOrEqual(before);
+    expect(vm.raisedAt).toBeLessThanOrEqual(after);
+  });
+});
+
+describe("parseRaisedAt", () => {
+  it("parses an ISO timestamp", () => {
+    expect(parseRaisedAt("2024-01-01T00:00:00.000Z")).toBe(
+      Date.parse("2024-01-01T00:00:00.000Z"),
+    );
+  });
+
+  it("falls back to Date.now() when undefined", () => {
+    const before = Date.now();
+    const out = parseRaisedAt(undefined);
+    const after = Date.now();
+    expect(out).toBeGreaterThanOrEqual(before);
+    expect(out).toBeLessThanOrEqual(after);
+  });
+
+  it("falls back to Date.now() when input is unparseable", () => {
+    const before = Date.now();
+    const out = parseRaisedAt("not-a-date");
+    const after = Date.now();
+    expect(out).toBeGreaterThanOrEqual(before);
+    expect(out).toBeLessThanOrEqual(after);
   });
 });

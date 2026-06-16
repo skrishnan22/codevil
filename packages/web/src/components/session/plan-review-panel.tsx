@@ -78,6 +78,9 @@ export function PlanReviewPanel({ onClose }: PlanReviewPanelProps) {
     if (!sendEnabled) return;
     refine(agentNote.trim());
     setAgentNote("");
+    // Dismissing the panel returns focus to the conversation where the agent's
+    // response (and any conflict question) will appear next.
+    onClose();
   }
 
   return (

@@ -1,17 +1,24 @@
 import { useRef, useState } from "react";
 import { useSessionStore } from "@/stores/session-store";
 import { parseAgentMention } from "@/stores/session-store";
+import { shouldDisableChatInput } from "@/lib/conflict-question";
+
+const CHAT_INPUT_GATE_HINT_ID = "chat-input-gate-hint";
 
 export function ChatInput() {
-  const { connectionStatus, sendRoomMessage } = useSessionStore();
+  const { connectionStatus, sendRoomMessage, questions, annotations } = useSessionStore();
   const [input, setInput] = useState("");
   const [planFirst, setPlanFirst] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const canSend = connectionStatus === "connected" || connectionStatus === "connecting";
+  const conflictGate = shouldDisableChatInput(questions, annotations);
+  const canSend =
+    !conflictGate.disabled &&
+    (connectionStatus === "connected" || connectionStatus === "connecting");
   const isAgentRequest = parseAgentMention(input) !== null;
-  const connectionLabel =
-    connectionStatus === "connecting"
+  const connectionLabel = conflictGate.disabled
+    ? conflictGate.hint!
+    : connectionStatus === "connecting"
       ? "Reconnecting. Messages will send when connected."
       : connectionStatus;
 
@@ -39,7 +46,11 @@ export function ChatInput() {
         <textarea
           id="session-chat-input"
           ref={textareaRef}
-          placeholder="Message the room — tag @codevil to direct the agent"
+          placeholder={
+            conflictGate.disabled
+              ? "Resolve the decision above to continue."
+              : "Message the room — tag @codevil to direct the agent"
+          }
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -49,6 +60,7 @@ export function ChatInput() {
             }
           }}
           disabled={!canSend}
+          aria-describedby={conflictGate.disabled ? CHAT_INPUT_GATE_HINT_ID : undefined}
           autoComplete="off"
         />
         <div className="chat-input-tools">
@@ -84,7 +96,10 @@ export function ChatInput() {
           ↑
         </button>
       </div>
-      <div className={`chat-connection-status ${connectionStatus}`}>
+      <div
+        className={`chat-connection-status ${conflictGate.disabled ? "blocked" : connectionStatus}`}
+        id={conflictGate.disabled ? CHAT_INPUT_GATE_HINT_ID : undefined}
+      >
         <span aria-hidden="true" />
         {connectionLabel}
       </div>

@@ -15,7 +15,6 @@ import { ChatInput } from "@/components/session/ChatInput";
 import { WorkspacePane } from "@/components/session/workspace-pane";
 import { RoomHeader } from "@/components/session/room-header";
 import { PlanReviewPanel } from "@/components/session/plan-review-panel";
-import { QuestionCard } from "@/components/session/question-card";
 import { openThreadsSorted } from "@/lib/annotation-predicates";
 import { revisionKey, shouldAutoOpen } from "@/lib/plan-review";
 
@@ -29,10 +28,12 @@ function SessionPage() {
     connectToSession,
     disconnect,
     setCurrentUserId,
-    setSessionCreatorId,
     preview,
     planRevision,
     annotations,
+    planPanelOpen,
+    openPlanPanel,
+    closePlanPanel,
   } = useSessionStore();
   const previewOn = preview.status === "starting" || preview.status === "ready";
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
@@ -40,9 +41,6 @@ function SessionPage() {
     getInitialWorkspaceTab(previewOn),
   );
   const [previousPreviewOn, setPreviousPreviewOn] = useState(previewOn);
-
-  // Panel open/close state.
-  const [panelOpen, setPanelOpen] = useState(false);
 
   // Track the last revision key for which we auto-opened the panel. Stored in
   // a ref so it doesn't cause extra renders.
@@ -53,13 +51,13 @@ function SessionPage() {
     if (config) {
       void getSession(config, id)
         .then((session) => {
-          setSessionCreatorId(session.session.created_by?.id ?? null);
-          connectToSession(config, id, session.ws_url);
+          connectToSession(config, id, session.ws_url, {
+            sessionCreatorId: session.session.created_by?.id ?? null,
+          });
         })
         .catch(() => {
-          setSessionCreatorId(null);
           const wsUrl = `${config.endpoint}/sessions/${id}/ws`;
-          connectToSession(config, id, wsUrl);
+          connectToSession(config, id, wsUrl, { sessionCreatorId: null });
         });
       void getAuthMe(config).then((auth) => {
         setCurrentUserId(auth.user?.id ?? null);
@@ -83,7 +81,7 @@ function SessionPage() {
     const key = revisionKey(planRevision.runId, planRevision.round);
     if (shouldAutoOpen(lastAutoOpenedKey.current, key)) {
       lastAutoOpenedKey.current = key;
-      setPanelOpen(true);
+      openPlanPanel();
     }
   }, [planRevision?.runId, planRevision?.round]);
 
@@ -123,13 +121,12 @@ function SessionPage() {
               <button
                 type="button"
                 className="btn btn-primary plan-trigger-card-btn"
-                onClick={() => setPanelOpen(true)}
+                onClick={openPlanPanel}
               >
                 Review &amp; annotate
               </button>
             </div>
           )}
-          <QuestionCard />
           <Timeline
             onOpenActivity={handleOpenActivity}
           />
@@ -144,8 +141,8 @@ function SessionPage() {
       </div>
 
       {/* Full-screen slide-out panel — PlanRevisionView lives here ONLY */}
-      {planRevision && panelOpen && (
-        <PlanReviewPanel onClose={() => setPanelOpen(false)} />
+      {planRevision && planPanelOpen && (
+        <PlanReviewPanel onClose={closePlanPanel} />
       )}
     </div>
   );

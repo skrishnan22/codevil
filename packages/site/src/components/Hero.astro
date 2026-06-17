@@ -1,0 +1,41 @@
+---
+import RoomMock from "./RoomMock.astro";
+import { SITE } from "../data/site";
+---
+<section class="relative overflow-hidden">
+  <div class="pointer-events-none absolute inset-0 bg-gradient-to-b from-accent-soft/60 to-transparent" aria-hidden="true"></div>
+  <div class="relative mx-auto w-full max-w-5xl px-6 pb-24 pt-20 sm:pt-28">
+    <div class="flex flex-col items-start gap-6">
+      <span class="inline-flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 font-mono text-xs text-fg-3">
+        <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+        Self-hosted · runs on your Cloudflare account
+      </span>
+      <h1 class="max-w-2xl text-4xl font-semibold leading-[1.08] tracking-tight text-fg sm:text-6xl">
+        AI coding agents that run in <span class="text-accent">your cloud</span>, not someone else's.
+      </h1>
+      <p class="max-w-xl text-lg leading-relaxed text-fg-3">
+        Describe a task. Codevil plans, gets your approval, executes in a sandboxed environment,
+        verifies the result, and opens a pull request — all on your own Cloudflare account.
+        Your code, your keys, your rules.
+      </p>
+      <div class="flex flex-wrap items-center gap-3">
+        <a
+          href="/#quickstart"
+          class="rounded-md bg-accent px-5 py-2.5 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90"
+        >
+          Deploy on Cloudflare
+          <span class="ml-1.5" aria-hidden="true">→</span>
+        </a>
+        <a
+          href={SITE.repoUrl}
+          class="rounded-md border border-line bg-surface px-5 py-2.5 text-sm font-semibold text-fg transition-colors hover:border-fg-4"
+        >
+          View on GitHub
+        </a>
+      </div>
+    </div>
+    <div class="mt-16">
+      <RoomMock />
+    </div>
+  </div>
+</section>

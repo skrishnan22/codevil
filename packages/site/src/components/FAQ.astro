@@ -1,0 +1,43 @@
+---
+import Section from "./Section.astro";
+
+const faqs = [
+  {
+    q: "How much does self-hosting cost?",
+    a: "You pay Cloudflare directly for what you use. Sandbox billing is active-CPU only — idle sandboxes are free, so you only pay while an agent is actively working. LLM costs go through your own provider key with your own spend limits. Codevil itself adds no markup.",
+  },
+  {
+    q: "Which models are supported?",
+    a: "Pi is model-agnostic and supports 15+ LLM providers out of the box, including Anthropic, OpenAI, Google, and local providers via Ollama. You set the provider and model per run, and can even use a cheaper model for planning and a stronger one for execution.",
+  },
+  {
+    q: "Is it safe to run on my repositories?",
+    a: "Each task runs in an ephemeral sandbox that is destroyed when the session ends. The GitHub PAT is brokered over WebSocket on demand and never sits in the sandbox's environment. The LLM key is written to tmpfs, read once, and unlinked. Every event is redacted before it's persisted to the Durable Object's event log.",
+  },
+  {
+    q: "Where does my data live?",
+    a: "Everything stays in your Cloudflare account. The Durable Object's built-in SQLite holds the per-session event log, retained for 7 days after completion. No data is sent to any third party other than your chosen LLM provider.",
+  },
+  {
+    q: "Can my team use it?",
+    a: "Yes. v1 is built around an implicit single-team boundary — one self-hosted deployment is one team. Owner/admin/viewer roles and invite-only membership are already implemented. For broader team auth, Cloudflare Access (Zero Trust) can sit in front of the Worker.",
+  },
+  {
+    q: "Does it work with my existing repo setup?",
+    a: "Pi reads CLAUDE.md, agents.md, and similar root files from your repo. Verification uses whatever your repo already has — test suites, linters, type checkers discovered from package.json scripts, Makefile targets, and CI config. No custom verification config required.",
+  },
+];
+---
+<Section id="faq" eyebrow="FAQ" title="Questions">
+  <div class="flex flex-col divide-y divide-line border-y border-line">
+    {faqs.map((item) => (
+      <details class="group py-5">
+        <summary class="flex cursor-pointer items-center justify-between gap-4 list-none">
+          <span class="text-base font-semibold text-fg">{item.q}</span>
+          <span class="font-mono text-sm text-fg-4 transition-transform group-open:rotate-45" aria-hidden="true">+</span>
+        </summary>
+        <p class="mt-3 max-w-2xl text-sm leading-relaxed text-fg-3">{item.a}</p>
+      </details>
+    ))}
+  </div>
+</Section>

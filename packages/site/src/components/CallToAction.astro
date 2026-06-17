@@ -1,0 +1,28 @@
+---
+import { SITE } from "../data/site";
+---
+<section class="mx-auto w-full max-w-5xl px-6 py-24">
+  <div class="flex flex-col items-center gap-6 rounded-2xl border border-line bg-surface px-8 py-16 text-center">
+    <h2 class="max-w-xl text-3xl font-semibold tracking-tight text-fg sm:text-4xl">
+      Run coding agents in your own cloud.
+    </h2>
+    <p class="max-w-md text-fg-3">
+      Deploy in four steps. No platform fees, no proxy billing, no data leaving your account.
+    </p>
+    <div class="flex flex-wrap items-center justify-center gap-3">
+      <a
+        href="/#quickstart"
+        class="rounded-md bg-accent px-5 py-2.5 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90"
+      >
+        Deploy on Cloudflare
+        <span class="ml-1.5" aria-hidden="true">→</span>
+      </a>
+      <a
+        href={SITE.appUrl}
+        class="rounded-md border border-line bg-bg px-5 py-2.5 text-sm font-semibold text-fg transition-colors hover:border-fg-4"
+      >
+        Open the app
+      </a>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,11 @@
+---
+interface Props {
+  wordmark?: boolean;
+  class?: string;
+}
+const { wordmark = true, class: className } = Astro.props;
+---
+<span class={`cv-logo${className ? ` ${className}` : ""}`}>
+  <span class="cv-logo-mark" aria-hidden="true"></span>
+  {wordmark && <span class="cv-logo-word">Codevil</span>}
+</span>

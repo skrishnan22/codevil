@@ -1,0 +1,32 @@
+---
+import Logo from "./Logo.astro";
+import { NAV_LINKS, SITE } from "../data/site";
+---
+<header class="sticky top-0 z-50 border-b border-line/60 bg-bg/80 backdrop-blur">
+  <div class="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-6">
+    <a href="/" class="brand-lockup" aria-label="Codevil home">
+      <Logo />
+    </a>
+    <nav class="hidden items-center gap-7 md:flex" aria-label="Primary">
+      {NAV_LINKS.map((link) => (
+        <a href={link.href} class="text-sm text-fg-3 transition-colors hover:text-fg">
+          {link.label}
+        </a>
+      ))}
+    </nav>
+    <div class="flex items-center gap-3">
+      <a
+        href={SITE.repoUrl}
+        class="hidden text-sm text-fg-3 transition-colors hover:text-fg sm:inline"
+      >
+        GitHub
+      </a>
+      <a
+        href="/#quickstart"
+        class="rounded-md bg-accent px-4 py-2 text-sm font-semibold text-accent-fg transition-opacity hover:opacity-90"
+      >
+        Deploy
+      </a>
+    </div>
+  </div>
+</header>

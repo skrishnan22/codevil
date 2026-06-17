@@ -1,0 +1,50 @@
+---
+import Section from "./Section.astro";
+
+const layers = [
+  {
+    name: "CLI",
+    kind: "Thin TypeScript client",
+    detail: "npx codevil · WebSocket streaming · renders plan & progress",
+  },
+  {
+    name: "Worker",
+    kind: "Cloudflare Worker",
+    detail: "Stateless router · API-key auth · routes to Durable Object",
+  },
+  {
+    name: "Durable Object",
+    kind: "One per session",
+    detail: "State machine · event log (SQLite) · WebSocket hub · redaction",
+  },
+  {
+    name: "Sandbox",
+    kind: "Cloudflare Sandbox",
+    detail: "Ephemeral Linux container · Pi SDK as library · cloned repo",
+  },
+];
+---
+<Section id="architecture" eyebrow="Architecture" title="Four layers, one Cloudflare account">
+  <div class="flex flex-col gap-3">
+    {layers.map((layer, i) => (
+      <div class="flex flex-col gap-3">
+        <div class="grid gap-3 rounded-lg border border-line bg-surface p-5 sm:grid-cols-[180px_1fr] sm:items-center">
+          <div>
+            <div class="font-mono text-sm font-semibold text-fg">{layer.name}</div>
+            <div class="text-xs text-fg-4">{layer.kind}</div>
+          </div>
+          <div class="text-sm text-fg-3">{layer.detail}</div>
+        </div>
+        {i < layers.length - 1 && (
+          <div class="flex justify-center" aria-hidden="true">
+            <span class="font-mono text-xs text-fg-4">↓ WebSocket</span>
+          </div>
+        )}
+      </div>
+    ))}
+  </div>
+  <p class="mt-6 font-mono text-xs text-fg-4">
+    Pi SDK runs inside the sandbox as a library — not a CLI subprocess. The agent's events
+    stream sandbox → Durable Object → CLI in real time.
+  </p>
+</Section>

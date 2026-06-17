@@ -1,0 +1,40 @@
+---
+import Section from "./Section.astro";
+
+const features = [
+  {
+    title: "Plan → Approve → Execute",
+    body: "Read-only tools during planning make the plan phase safe by construction. Write tools are unlocked only after you approve — not via a system prompt asking the model to behave.",
+  },
+  {
+    title: "Secret isolation",
+    body: "GitHub PAT is brokered over WebSocket on demand, never in env vars. LLM key lives in tmpfs, read once and unlinked. Event redaction scrubs secrets from the persisted log.",
+  },
+  {
+    title: "Ephemeral sandboxes",
+    body: "Each task runs in a fresh Linux container on Cloudflare Sandboxes. Destroyed the moment the session ends. Blast radius is one session — no persistent compromise.",
+  },
+  {
+    title: "Cost controls",
+    body: "max_cost, max_time, and max_steps guardrails — all configurable per run. Fail open with state preserved, never a hard kill that loses work.",
+  },
+  {
+    title: "Bring your own keys",
+    body: "No proxy billing. Your LLM provider key, your spend. Pi supports 15+ providers out of the box, including Anthropic and OpenAI.",
+  },
+  {
+    title: "Cloudflare-native",
+    body: "Workers for routing, Durable Objects for per-session state, Sandboxes for execution, D1 for auth. One ecosystem, one bill, active-CPU pricing — idle is free.",
+  },
+];
+---
+<Section id="features" eyebrow="Features" title="Built for self-hosted coding agents">
+  <div class="grid gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
+    {features.map((f) => (
+      <div class="flex flex-col gap-2 bg-surface p-6">
+        <h3 class="text-base font-semibold tracking-tight text-fg">{f.title}</h3>
+        <p class="text-sm leading-relaxed text-fg-3">{f.body}</p>
+      </div>
+    ))}
+  </div>
+</Section>

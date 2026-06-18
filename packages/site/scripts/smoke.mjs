@@ -15,16 +15,19 @@ if (!existsSync(htmlPath)) {
 const html = await readFile(htmlPath, "utf8");
 
 const expectations = [
-  "AI coding agents that run in",
+  "Bring your team into the room",
   "Deploy on Cloudflare",
-  "View on GitHub",
-  "Plan → Approve → Execute",
-  "Secret isolation",
-  "Ephemeral sandboxes",
+  "Open the app",
+  "Multiplayer rooms",
+  "Collaborative plan annotation",
+  "Ask the room",
+  "Live preview",
+  "Projected conversation",
   "wrangler deploy",
   "wrangler secret put CODEVIL_API_KEY",
-  "npx codevil init",
-  "How much does self-hosting cost?",
+  "wrangler secret put BETTER_AUTH_SECRET",
+  "Is Codevil a CLI or a web app?",
+  "Does the agent always plan before executing?",
 ];
 
 for (const needle of expectations) {

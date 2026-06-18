@@ -4,33 +4,38 @@ import Section from "./Section.astro";
 const steps = [
   {
     n: "01",
-    title: "Describe the task",
-    body: "codevil run \"add rate limiting to the API\" --repo github.com/you/repo",
-    code: true,
+    title: "Start a room",
+    body: "Point Codevil at a repo, pick your model, and open a room. Your team joins the same session — everyone watches and directs together.",
   },
   {
     n: "02",
-    title: "Pi plans (read-only)",
-    body: "Pi explores the repo with read, grep, find, ls — no bash, edit, or write tools are available during planning. The model cannot modify the repo.",
+    title: "Send an Agent Request",
+    body: "Message the room. Tag @codevil to direct the agent, or flip on plan first to get a plan before it touches code. The request queues an Agent Run.",
+    code: "@codevil add a rate limiter to the public API, plan first",
   },
   {
     n: "03",
-    title: "You approve",
-    body: "Review the plan. Approve, abort, or refine conversationally — up to 5 rounds. Write tools are unlocked only after explicit approval.",
+    title: "Watch and direct in real time",
+    body: "The agent explores, thinks, and calls tools — streamed live to everyone. The Conversation shows finalized replies and milestones; the Activity pane shows every tool call. Jump in with feedback any time.",
   },
   {
     n: "04",
-    title: "Pi executes & verifies",
-    body: "Pi makes the changes, then runs the repo's own tests and linters. Retries up to 5 times on failure, escalating with full error context.",
+    title: "Annotate plans together (optional)",
+    body: "When plan first is on, the plan opens for review. Highlight any section, leave threaded comments, discuss with your team. A consolidation pass merges feedback into a revised plan — and if two comments conflict, the agent asks the room which way to go.",
   },
   {
     n: "05",
-    title: "PR opened",
-    body: "A branch is pushed and a draft PR is opened via gh, with the approved plan as the PR body. Code review happens on GitHub.",
+    title: "Preview UI changes live",
+    body: "For UI work, toggle on Live Preview. Codevil starts a dev server in the sandbox and proxies it through a Codevil-owned URL — see changes as the agent makes them, never exposed to the browser.",
+  },
+  {
+    n: "06",
+    title: "Ship a pull request",
+    body: "The agent verifies against your repo's own tests and linters, retries on failure, then pushes a branch and opens a draft PR. Code review happens on GitHub.",
   },
 ];
 ---
-<Section id="how-it-works" eyebrow="Lifecycle" title="From prompt to pull request">
+<Section id="how-it-works" eyebrow="How it works" title="From a message to a pull request">
   <ol class="flex flex-col gap-0 divide-y divide-line border-y border-line">
     {steps.map((step) => (
       <li class="grid gap-4 py-6 sm:grid-cols-[auto_1fr] sm:gap-8">
@@ -38,7 +43,7 @@ const steps = [
         <div>
           <h3 class="text-lg font-semibold tracking-tight text-fg">{step.title}</h3>
           {step.code ? (
-            <pre class="mt-3 overflow-x-auto rounded-md border border-line bg-surface px-4 py-3 font-mono text-[13px] text-fg-2"><code>{step.body}</code></pre>
+            <pre class="mt-3 overflow-x-auto rounded-md border border-line bg-surface px-4 py-3 font-mono text-[13px] text-fg-2"><code>{step.code}</code></pre>
           ) : (
             <p class="mt-2 text-fg-3">{step.body}</p>
           )}

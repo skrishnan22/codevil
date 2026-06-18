@@ -3,24 +3,24 @@ import Section from "./Section.astro";
 
 const layers = [
   {
-    name: "CLI",
-    kind: "Thin TypeScript client",
-    detail: "npx codevil · WebSocket streaming · renders plan & progress",
+    name: "Web app",
+    kind: "React + TanStack Router",
+    detail: "Shared rooms · conversation, activity, plan annotation, live preview · team auth",
   },
   {
     name: "Worker",
     kind: "Cloudflare Worker",
-    detail: "Stateless router · API-key auth · routes to Durable Object",
+    detail: "Stateless router · Better Auth + Google OAuth · routes to Durable Object",
   },
   {
     name: "Durable Object",
     kind: "One per session",
-    detail: "State machine · event log (SQLite) · WebSocket hub · redaction",
+    detail: "State machine · event log (SQLite) · WebSocket hub · multiplayer attribution · redaction",
   },
   {
     name: "Sandbox",
     kind: "Cloudflare Sandbox",
-    detail: "Ephemeral Linux container · Pi SDK as library · cloned repo",
+    detail: "Ephemeral Linux container · Pi SDK as library · cloned repo · live preview server",
   },
 ];
 ---
@@ -44,7 +44,8 @@ const layers = [
     ))}
   </div>
   <p class="mt-6 font-mono text-xs text-fg-4">
-    Pi SDK runs inside the sandbox as a library — not a CLI subprocess. The agent's events
-    stream sandbox → Durable Object → CLI in real time.
+    Pi SDK runs inside the sandbox as a library — not a CLI subprocess. Events stream
+    sandbox → Durable Object → every connected web client in real time. A thin CLI client
+    also exists for terminal-driven runs.
   </p>
 </Section>

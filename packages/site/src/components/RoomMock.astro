@@ -1,17 +1,39 @@
 ---
-const lifecycle = [
-  { label: "Cloning repo", state: "done" },
-  { label: "Planning — read-only tools", state: "done" },
-  { label: "Plan ready: add rate limiting to /api", state: "done" },
-  { label: "Approved by you", state: "done" },
-  { label: "Executing — bash, edit, write unlocked", state: "active" },
-  { label: "Verifying — pnpm test", state: "pending" },
+const phases = ["Plan", "Execute", "Verify", "PR", "Done"];
+const activePhase = 1;
+
+const conversation = [
+  {
+    from: "Amika",
+    role: "user",
+    text: "@codevil add a rate limiter to the public API, plan first",
+  },
+  {
+    from: "Codevil",
+    role: "agent",
+    text: "Plan ready. Token-bucket limiter in src/middleware.ts, wired before the router, reads RATE_LIMIT from env. 3 files touched.",
+    variant: "plan",
+  },
+  {
+    from: "Suren",
+    role: "user",
+    text: "Use redis, not in-memory.",
+    annotation: true,
+  },
+  {
+    from: "Codevil",
+    role: "agent",
+    text: "Two comments conflict on storage: redis vs in-memory. Which way?",
+    variant: "question",
+  },
 ];
-const toolTrace = [
-  { tool: "read", target: "src/server.ts", detail: "62 lines" },
-  { tool: "grep", target: "rate", detail: "3 matches" },
-  { tool: "edit", target: "src/server.ts", detail: "+14 −2" },
-  { tool: "bash", target: "pnpm test", detail: "running…" },
+
+const activity = [
+  { label: "read src/server.ts", state: "done" },
+  { label: "grep \"router\" — 6 matches", state: "done" },
+  { label: "edit src/middleware.ts  +18 −3", state: "done" },
+  { label: "bash pnpm test", state: "active" },
+  { label: "bash pnpm lint", state: "pending" },
 ];
 ---
 <div class="overflow-hidden rounded-xl border border-line bg-surface shadow-2xl shadow-fg/5">
@@ -19,49 +41,68 @@ const toolTrace = [
     <span class="h-2.5 w-2.5 rounded-full bg-line"></span>
     <span class="h-2.5 w-2.5 rounded-full bg-line"></span>
     <span class="h-2.5 w-2.5 rounded-full bg-accent/60"></span>
-    <span class="ml-3 font-mono text-xs text-fg-4">codevil · session ses_abc123</span>
+    <span class="ml-3 font-mono text-xs text-fg-4">codevil · add rate limiter to the public API</span>
   </div>
-  <div class="grid grid-cols-3 divide-x divide-line text-left">
+  <div class="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+    <div class="flex items-center gap-2">
+      <span class="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-fg-4">ROOM · {phases[activePhase]}</span>
+      <span class="flex gap-1" aria-label={`Phase ${activePhase + 1} of ${phases.length}`}>
+        {phases.map((_, i) => (
+          <span class={"h-1.5 w-5 rounded-full " + (i <= activePhase ? "bg-accent" : "bg-line")} />
+        ))}
+      </span>
+    </div>
+    <div class="flex items-center gap-2">
+      <div class="flex -space-x-1.5">
+        <span class="flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface bg-accent/80 text-[10px] font-semibold text-accent-fg">A</span>
+        <span class="flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface bg-fg-3/60 text-[10px] font-semibold text-surface">S</span>
+        <span class="flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface bg-accent text-[10px] font-semibold text-accent-fg" title="Codevil">◆</span>
+      </div>
+      <span class="font-mono text-[10px] text-fg-4">3 in room</span>
+    </div>
+  </div>
+  <div class="grid grid-cols-2 divide-x divide-line text-left">
     <div class="flex flex-col gap-3 p-4">
       <span class="font-mono text-[10px] uppercase tracking-wider text-fg-4">Conversation</span>
-      <div class="rounded-md bg-surface-3 p-3 text-xs text-fg-2">
-        Add rate limiting to the public API.
-      </div>
-      <div class="rounded-md border border-accent/30 bg-accent-soft p-3 text-xs text-fg-2">
-        <span class="font-semibold text-accent">Plan</span> — Add a token-bucket limiter in
-        <code class="font-mono text-fg-3">src/middleware.ts</code>, wire it before the router,
-        add a <code class="font-mono text-fg-3">RATE_LIMIT</code> env read.
-      </div>
-      <div class="self-end rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg">
-        Approved
+      {conversation.map((msg) => (
+        <div class="flex flex-col gap-1">
+          <span class="font-mono text-[10px] text-fg-4">{msg.from}{msg.annotation ? " · annotated plan §2" : ""}</span>
+          {msg.variant === "plan" ? (
+            <div class="rounded-md border border-accent/30 bg-accent-soft p-3 text-xs text-fg-2">{msg.text}</div>
+          ) : msg.variant === "question" ? (
+            <div class="rounded-md border border-amber-400/40 bg-amber-50 p-3 text-xs text-fg-2">
+              <div class="mb-2 font-semibold text-amber-800">{msg.text}</div>
+              <div class="flex gap-2">
+                <span class="rounded border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-fg-3">redis</span>
+                <span class="rounded border border-line bg-surface px-2 py-0.5 font-mono text-[10px] text-fg-3">in-memory</span>
+              </div>
+            </div>
+          ) : (
+            <div class={"rounded-md p-3 text-xs " + (msg.role === "user" ? "bg-surface-3 text-fg-2" : "bg-surface-2 text-fg-2")}>{msg.text}</div>
+          )}
+        </div>
+      ))}
+      <div class="mt-1 flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5">
+        <span class="rounded-full bg-accent/15 px-2 py-0.5 font-mono text-[10px] font-medium text-accent">@codevil</span>
+        <span class="rounded-full bg-accent/15 px-2 py-0.5 font-mono text-[10px] font-medium text-accent">plan first</span>
+        <span class="text-[11px] text-fg-4">Message the room…</span>
       </div>
     </div>
     <div class="flex flex-col gap-2 p-4">
-      <span class="font-mono text-[10px] uppercase tracking-wider text-fg-4">Activity</span>
-      {lifecycle.map((item) => (
-        <div class="flex items-center gap-2 text-xs">
+      <div class="flex items-center justify-between">
+        <span class="font-mono text-[10px] uppercase tracking-wider text-fg-4">Activity</span>
+        <div class="flex gap-2">
+          <span class="font-mono text-[10px] text-fg-3 border-b border-accent pb-0.5">Activity</span>
+          <span class="font-mono text-[10px] text-fg-4">Preview</span>
+        </div>
+      </div>
+      {activity.map((item) => (
+        <div class="flex items-center gap-2 rounded-md bg-surface-2 px-2.5 py-1.5 font-mono text-[11px]">
           <span
-            class={
-              "h-2 w-2 flex-shrink-0 rounded-full " +
-              (item.state === "done"
-                ? "bg-accent"
-                : item.state === "active"
-                  ? "bg-accent ring-4 ring-accent/20"
-                  : "bg-line")
-              }
+            class={"h-2 w-2 flex-shrink-0 rounded-full " + (item.state === "done" ? "bg-accent" : item.state === "active" ? "bg-accent ring-4 ring-accent/20" : "bg-line")}
             aria-hidden="true"
           />
           <span class={item.state === "pending" ? "text-fg-4" : "text-fg-2"}>{item.label}</span>
-        </div>
-      ))}
-    </div>
-    <div class="flex flex-col gap-2 p-4">
-      <span class="font-mono text-[10px] uppercase tracking-wider text-fg-4">Tool Trace</span>
-      {toolTrace.map((t) => (
-        <div class="flex items-center justify-between rounded-md bg-surface-2 px-2.5 py-1.5 font-mono text-[11px]">
-          <span class="text-accent">{t.tool}</span>
-          <span class="text-fg-2">{t.target}</span>
-          <span class="text-fg-4">{t.detail}</span>
         </div>
       ))}
     </div>

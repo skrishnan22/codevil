@@ -121,12 +121,28 @@ function OpenConflictCard({
   }
 
   return (
-    <form className="conflict-card" onSubmit={handleSubmit}>
-      <ConflictHeader queueIndex={queueIndex} queueTotal={queueTotal} />
-      <p className="conflict-card-question">{question.question}</p>
-      {question.context && (
-        <p className="conflict-card-context">{question.context}</p>
-      )}
+    <article className="ask-msg ask-msg--conflict">
+      <div className="ask-msg-avatar" aria-hidden="true">C</div>
+      <div className="ask-msg-body">
+        <div className="ask-msg-meta">
+          <span className="ask-msg-name">Codevil</span>
+          <span className="ask-msg-pill ask-msg-pill--decision">
+            <span aria-hidden="true">✦</span> decision needed
+          </span>
+          {queueTotal > 1 && queueIndex >= 0 && (
+            <span
+              className="ask-msg-pager"
+              aria-label={`Decision ${queueIndex + 1} of ${queueTotal}`}
+            >
+              {queueIndex + 1} of {queueTotal}
+            </span>
+          )}
+        </div>
+        <h3 className="ask-msg-question">{question.question}</h3>
+        {question.context && (
+          <p className="ask-msg-context">{question.context}</p>
+        )}
+        <form className="conflict-card" onSubmit={handleSubmit}>
       <div className="conflict-card-sides">
         {sides.map((side, i) => (
           <SideButton
@@ -200,7 +216,9 @@ function OpenConflictCard({
           {submitting ? "Committing…" : commitLabel}
         </button>
       </div>
-    </form>
+        </form>
+      </div>
+    </article>
   );
 }
 
@@ -267,25 +285,6 @@ function SideButton({ side, selected, disabled, onClick, children }: SideButtonP
   );
 }
 
-function ConflictHeader({ queueIndex, queueTotal }: { queueIndex: number; queueTotal: number }) {
-  return (
-    <div className="conflict-card-header">
-      <span className="conflict-card-tag" aria-label="Decision needed">
-        <span className="conflict-card-dot" aria-hidden="true" />
-        Decision needed
-      </span>
-      {queueTotal > 1 && queueIndex >= 0 && (
-        <span
-          className="conflict-card-pager"
-          aria-label={`Decision ${queueIndex + 1} of ${queueTotal}`}
-        >
-          {queueIndex + 1} of {queueTotal}
-        </span>
-      )}
-    </div>
-  );
-}
-
 // ─── resolved state ────────────────────────────────────────────────────────
 
 interface ResolvedSummaryProps {
@@ -301,48 +300,59 @@ function ResolvedSummary({ question, sides }: ResolvedSummaryProps) {
   const chosenLabel = chosen ? displayChoice(chosen) : "—";
 
   return (
-    <div className={`conflict-resolved${expanded ? " is-expanded" : ""}`}>
-      <div className="conflict-resolved-row">
-        <span className="conflict-resolved-tag">
-          <span className="conflict-resolved-check" aria-hidden="true">✓</span>
-          Resolved
-        </span>
-        <span className="conflict-resolved-summary">
-          {question.answer
-            ? <>Picked <strong>{chosenLabel}</strong></>
-            : "Resolved."}
-        </span>
-        <button
-          type="button"
-          className="conflict-resolved-toggle"
-          onClick={() => setExpanded((v) => !v)}
-          aria-expanded={expanded}
-        >
-          {expanded ? "Hide" : "Show"}
-        </button>
-      </div>
-      {expanded && (
-        <div className="conflict-resolved-detail">
-          <p className="conflict-resolved-q">{question.question}</p>
-          <ul className="conflict-resolved-sides">
-            {sides.map((s) => {
-              const isChosen = chosen?.optionId === s.optionId;
-              return (
-                <li
-                  key={s.optionId}
-                  className={`conflict-resolved-side${isChosen ? " is-chosen" : ""}`}
-                >
-                  <strong>{s.author?.name ?? "Unknown"}:</strong> {s.label}
-                </li>
-              );
-            })}
-          </ul>
-          {question.answer?.freeform && (
-            <p className="conflict-resolved-note">Note: {question.answer.freeform}</p>
+    <article className="ask-msg ask-msg--conflict ask-msg--answered">
+      <div className="ask-msg-avatar" aria-hidden="true">C</div>
+      <div className="ask-msg-body">
+        <div className="ask-msg-meta">
+          <span className="ask-msg-name">Codevil</span>
+          <span className="ask-msg-pill ask-msg-pill--decision">
+            <span aria-hidden="true">✦</span> decision needed
+          </span>
+        </div>
+        <h3 className="ask-msg-question">{question.question}</h3>
+        <div className={`conflict-resolved${expanded ? " is-expanded" : ""}`}>
+          <div className="conflict-resolved-row">
+            <span className="conflict-resolved-tag">
+              <span className="conflict-resolved-check" aria-hidden="true">✓</span>
+              Resolved
+            </span>
+            <span className="conflict-resolved-summary">
+              {question.answer
+                ? <>Picked <strong>{chosenLabel}</strong></>
+                : "Resolved."}
+            </span>
+            <button
+              type="button"
+              className="conflict-resolved-toggle"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+            >
+              {expanded ? "Hide" : "Show"}
+            </button>
+          </div>
+          {expanded && (
+            <div className="conflict-resolved-detail">
+              <ul className="conflict-resolved-sides">
+                {sides.map((s) => {
+                  const isChosen = chosen?.optionId === s.optionId;
+                  return (
+                    <li
+                      key={s.optionId}
+                      className={`conflict-resolved-side${isChosen ? " is-chosen" : ""}`}
+                    >
+                      <strong>{s.author?.name ?? "Unknown"}:</strong> {s.label}
+                    </li>
+                  );
+                })}
+              </ul>
+              {question.answer?.freeform && (
+                <p className="conflict-resolved-note">Note: {question.answer.freeform}</p>
+              )}
+            </div>
           )}
         </div>
-      )}
-    </div>
+      </div>
+    </article>
   );
 }
 

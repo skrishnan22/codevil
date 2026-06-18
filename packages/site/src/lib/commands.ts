@@ -13,28 +13,33 @@ export const DEPLOY_STEPS: DeployStep[] = [
     ],
   },
   {
-    title: "Deploy the worker",
+    title: "Deploy the worker + web app",
     commands: [
       "cd packages/worker",
       "wrangler deploy",
-      "# → Deployed to https://codevil.<your-account>.workers.dev",
+      "# → API live at https://codevil.<your-account>.workers.dev",
+      "cd ../web",
+      "pnpm deploy",
+      "# → App live at https://codevil-ui.pages.dev",
     ],
   },
   {
     title: "Store your secrets",
     commands: [
-      "wrangler secret put CODEVIL_API_KEY   # CLI auth key you choose",
-      "wrangler secret put GITHUB_PAT        # GitHub Personal Access Token",
-      "wrangler secret put LLM_API_KEY       # Anthropic / OpenAI / etc.",
-      "wrangler secret put LLM_PROVIDER      # \"anthropic\", \"openai\", ...",
+      "wrangler secret put CODEVIL_API_KEY     # CLI auth key",
+      "wrangler secret put GITHUB_PAT          # GitHub Personal Access Token",
+      "wrangler secret put LLM_API_KEY         # Anthropic / OpenAI / Kimi / ...",
+      "wrangler secret put LLM_PROVIDER        # \"anthropic\", \"openai\", ...",
+      "wrangler secret put BETTER_AUTH_SECRET  # session signing secret",
+      "wrangler secret put GOOGLE_CLIENT_SECRET  # OAuth client secret",
     ],
   },
   {
-    title: "Install and configure the CLI",
+    title: "Claim your instance and invite the team",
     commands: [
-      "npx codevil init",
-      "# → Enter your backend URL and API key",
-      "# → Config saved to ~/.codevil/config",
+      "# Open the app URL in your browser",
+      "# Sign in with Google → enter the setup token → become Owner",
+      "# Invite teammates by email with owner / admin / developer / viewer roles",
     ],
   },
 ];

@@ -9,7 +9,7 @@ import {
   getWorkspaceTabAfterUserSelection,
   type WorkspaceTab,
 } from "@/lib/workspace-state";
-import { SessionTopBar } from "@/components/session/session-top-bar";
+import { SessionRail } from "@/components/session/session-rail";
 import { Timeline } from "@/components/session/Timeline";
 import { ChatInput } from "@/components/session/ChatInput";
 import { WorkspacePane } from "@/components/session/workspace-pane";
@@ -101,7 +101,7 @@ function SessionPage() {
 
   return (
     <div className="session-shell">
-      <SessionTopBar />
+      <SessionRail />
       <div className="session-workbench">
         <section className="conversation-pane" aria-label="Conversation">
           <RoomHeader />

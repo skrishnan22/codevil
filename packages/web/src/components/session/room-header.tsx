@@ -22,42 +22,38 @@ export function RoomHeader() {
   const activeIndex = getActivePhaseIndex(sessionPhase, planApproved);
 
   return (
-    <header className="room-header">
-      <div className="room-header-copy">
-        <div className="room-header-kicker">ROOM · {PHASES[activeIndex] ?? "PLAN"}</div>
-        <h1 className="room-header-title">{title}</h1>
-      </div>
-      <div className="room-header-meta">
-        <div className="room-avatars" aria-label={`${people.length + 1} in room`}>
+    <header className="room-editorial">
+      <div className="room-editorial-kicker">ROOM · {PHASES[activeIndex] ?? "PLAN"}</div>
+      <h1 className="room-editorial-title">{title}</h1>
+      <div className="room-editorial-meta">
+        <span className="room-phase-bars" aria-label={`Phase ${activeIndex + 1} of ${PHASES.length}`}>
+          {PHASES.map((phase, index) => (
+            <span
+              key={phase}
+              className={index <= activeIndex ? "room-phase-bar room-phase-bar--done" : "room-phase-bar"}
+              title={phase}
+            />
+          ))}
+        </span>
+        <span className="room-phase-copy">{activeIndex + 1}/{PHASES.length} · {PHASES[activeIndex]}</span>
+        <span className="room-editorial-meta-sep" aria-hidden="true">·</span>
+        <span className="room-avatars" aria-label={`${people.length + 1} in room`}>
           {people.map((person) => (
             <span
               key={person.id}
               className="room-avatar"
               title={person.name}
               aria-label={person.name}
-              style={{
-                "--avatar-color": avatarColors.get(getParticipantColorKey(person)),
-              } as CSSProperties}
+              style={{ "--avatar-color": avatarColors.get(getParticipantColorKey(person)) } as CSSProperties}
             >
               {person.name.slice(0, 1).toUpperCase()}
             </span>
           ))}
-          <span className="room-avatar room-avatar-agent" title="Codevil" aria-label="Codevil">
+          <span className="room-avatar room-avatar--agent" title="Codevil" aria-label="Codevil">
             <span />
           </span>
-        </div>
+        </span>
         <span className="room-occupancy">{people.length + 1} in room</span>
-        <span className="room-header-divider" />
-        <div className="room-phase-bars" aria-label={`Phase ${activeIndex + 1} of ${PHASES.length}`}>
-          {PHASES.map((phase, index) => (
-            <span
-              key={phase}
-              className={index <= activeIndex ? "done" : ""}
-              title={phase}
-            />
-          ))}
-        </div>
-        <span className="room-phase-copy">{activeIndex + 1}/{PHASES.length} · {PHASES[activeIndex]}</span>
       </div>
     </header>
   );

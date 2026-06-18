@@ -1,10 +1,10 @@
 export const SITE = {
   name: "Codevil",
-  tagline: "Self-hosted AI coding agents that run in your cloud.",
+  tagline: "Shared rooms where your team and an AI agent build code together.",
   appUrl: "https://codevil-ui.pages.dev",
   repoUrl: "https://github.com/anomalyco/codevil",
   description:
-    "Codevil is a self-hosted AI coding agent platform. Describe a task — Codevil plans, executes, verifies, and opens a pull request, all on your own Cloudflare account. Your code, your keys, your rules.",
+    "Codevil is a self-hosted AI coding agent platform. Start a room, point it at a repo, and your team watches the agent work in real time — direct it conversationally, annotate plans together, preview UI changes live, and ship a pull request. Runs on your own Cloudflare account.",
 } as const;
 
 export const NAV_LINKS = [

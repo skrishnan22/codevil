@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   buildSandboxWebSocketUrl,
+  buildSandboxDisconnectLogPayload,
   CODEVIL_SANDBOX_OPTIONS,
+  collectSandboxDiagnostics,
   getCodevilSandbox,
   mapSandboxMessageToCLIEvents,
   recordSandboxLifecycleEvent,
@@ -103,6 +105,155 @@ test("sets both cloudflare and codevil sandbox keepalive flags when available", 
     ["cloudflare", false],
     ["codevil", false, "timed out"],
   ]);
+});
+
+test("collects sandbox diagnostics from logs and lifecycle storage", async () => {
+  const diagnostics = await collectSandboxDiagnostics({
+    getProcessLogs: async (processId) => {
+      assert.equal(processId, "codevil-agent");
+      return { stdout: "out", stderr: "err" };
+    },
+    getCodevilLifecycleSnapshot: async () => ({
+      keepAlive: {
+        active: true,
+        reason: "session provisioning",
+        updated_at: "2026-06-16T00:00:00.000Z",
+      },
+      lastEvent: {
+        type: "activity_expired_deferred",
+        at: "2026-06-16T00:10:00.000Z",
+        reason: "session provisioning",
+      },
+    }),
+  }, "codevil-agent");
+
+  assert.deepEqual(diagnostics, {
+    logs: { stdout: "out", stderr: "err" },
+    lifecycle: {
+      keepAlive: {
+        active: true,
+        reason: "session provisioning",
+        updated_at: "2026-06-16T00:00:00.000Z",
+      },
+      lastEvent: {
+        type: "activity_expired_deferred",
+        at: "2026-06-16T00:10:00.000Z",
+        reason: "session provisioning",
+      },
+    },
+  });
+});
+
+test("returns lifecycle diagnostics when process logs fail", async () => {
+  const diagnostics = await collectSandboxDiagnostics({
+    getProcessLogs: async () => {
+      throw new Error("process not found");
+    },
+    getCodevilLifecycleSnapshot: async () => ({
+      lastEvent: {
+        type: "stop",
+        at: "2026-06-16T00:11:00.000Z",
+        exit_code: 137,
+        reason: "out of memory",
+      },
+    }),
+  }, "codevil-agent");
+
+  assert.deepEqual(diagnostics, {
+    logs: null,
+    lifecycle: {
+      lastEvent: {
+        type: "stop",
+        at: "2026-06-16T00:11:00.000Z",
+        exit_code: 137,
+        reason: "out of memory",
+      },
+    },
+    errors: {
+      logs: "process not found",
+    },
+  });
+});
+
+test("builds bounded sandbox disconnect log payload with actual diagnostics", () => {
+  const payload = buildSandboxDisconnectLogPayload({
+    sessionId: "ses_123",
+    closeCode: 1006,
+    closeReason: "",
+    state: "executing",
+    diagnostics: {
+      logs: {
+        stdout: `${"a".repeat(5000)}stdout-end`,
+        stderr: `line 1\nactual crash: out of memory\n${"b".repeat(5000)}stderr-end`,
+      },
+      lifecycle: {
+        keepAlive: {
+          active: true,
+          reason: "session provisioning",
+          updated_at: "2026-06-16T00:00:00.000Z",
+        },
+        lastEvent: {
+          type: "stop",
+          at: "2026-06-16T00:11:00.000Z",
+          exit_code: 137,
+          reason: "out of memory",
+        },
+      },
+    },
+    maxLogChars: 32,
+  });
+
+  assert.deepEqual(payload, {
+    session_id: "ses_123",
+    close_code: 1006,
+    close_reason: "none",
+    state: "executing",
+    lifecycle: {
+      keepAlive: {
+        active: true,
+        reason: "session provisioning",
+        updated_at: "2026-06-16T00:00:00.000Z",
+      },
+      lastEvent: {
+        type: "stop",
+        at: "2026-06-16T00:11:00.000Z",
+        exit_code: 137,
+        reason: "out of memory",
+      },
+    },
+    stdout_tail: `${"a".repeat(22)}stdout-end`,
+    stderr_tail: `${"b".repeat(22)}stderr-end`,
+    stdout_truncated: true,
+    stderr_truncated: true,
+  });
+});
+
+test("includes diagnostic collection errors in sandbox disconnect log payload", () => {
+  const payload = buildSandboxDisconnectLogPayload({
+    sessionId: "ses_123",
+    closeCode: 1011,
+    closeReason: "socket error",
+    state: "planning",
+    diagnostics: {
+      logs: null,
+      lifecycle: null,
+      errors: {
+        logs: "process not found",
+        lifecycle: "storage unavailable",
+      },
+    },
+  });
+
+  assert.deepEqual(payload, {
+    session_id: "ses_123",
+    close_code: 1011,
+    close_reason: "socket error",
+    state: "planning",
+    errors: {
+      logs: "process not found",
+      lifecycle: "storage unavailable",
+    },
+  });
 });
 
 test("retries transient sandbox 503 failures", async () => {

@@ -29,10 +29,12 @@ import {
 } from "@codevil/shared";
 import type { Sandbox } from "@cloudflare/sandbox";
 import {
+  buildSandboxDisconnectLogPayload,
   buildSandboxWebSocketUrl,
   mapSandboxMessageToCLIEvents,
   provisionSandbox,
   readProcessLogs,
+  readSandboxDiagnostics,
   setCodevilSandboxKeepAlive,
 } from "./sandbox.js";
 import { createDraftPullRequest, credentialRequestAllowed } from "./github.js";
@@ -448,14 +450,34 @@ export class Orchestrator extends DurableObject<Env> {
         && this.meta.state !== "awaiting_approval"
       ) {
         const activeRunId = this.meta.active_run?.id;
+        const state = this.meta.state;
+        const message = `Sandbox disconnected unexpectedly (code: ${code}, reason: ${reason || "none"}).`;
         this.transition("failed");
         if (activeRunId) {
+          this.meta.active_run = { ...this.meta.active_run!, state: "failed" };
+          this.saveMeta();
           this.cancelOpenQuestions(activeRunId, "sandbox disconnected");
+          this.appendAndBroadcast({
+            type: "agent_run_failed",
+            run_id: activeRunId,
+            message,
+          });
         }
         this.appendAndBroadcast({
           type: "error",
-          message: `Sandbox disconnected unexpectedly (code: ${code}, reason: ${reason || "none"}).`,
+          message,
         });
+        this.updateDirectory({
+          room_state: "failed",
+          sandbox_state: "failed",
+          active_run_state: activeRunId ? "failed" : null,
+        });
+        this.ctx.waitUntil(this.logSandboxDisconnectDiagnostics({
+          sessionId: this.meta.session_id,
+          closeCode: code,
+          closeReason: reason,
+          state,
+        }));
       }
       return;
     }
@@ -1832,6 +1854,37 @@ export class Orchestrator extends DurableObject<Env> {
   private closeSandboxSockets(reason: string): void {
     for (const sandbox of this.ctx.getWebSockets("sandbox")) {
       sandbox.close(1000, reason);
+    }
+  }
+
+  private async logSandboxDisconnectDiagnostics(options: {
+    sessionId: string;
+    closeCode: number;
+    closeReason: string;
+    state: SessionState;
+  }): Promise<void> {
+    try {
+      const diagnostics = await readSandboxDiagnostics(this.workerEnv.Sandbox, options.sessionId, "codevil-agent");
+      const payload = buildSandboxDisconnectLogPayload({
+        sessionId: options.sessionId,
+        closeCode: options.closeCode,
+        closeReason: options.closeReason,
+        state: options.state,
+        diagnostics,
+      });
+      this.getTracer()?.log(
+        "ERROR",
+        "sandbox.disconnect_diagnostics",
+        redactEvent(payload, this.redactionSecrets) as unknown as Record<string, unknown>,
+      );
+    } catch (error) {
+      this.getTracer()?.log("ERROR", "sandbox.disconnect_diagnostics.failed", {
+        session_id: options.sessionId,
+        close_code: options.closeCode,
+        close_reason: options.closeReason || "none",
+        state: options.state,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

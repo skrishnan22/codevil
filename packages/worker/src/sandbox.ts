@@ -51,6 +51,47 @@ export interface SandboxLifecycleEvent {
   error?: string;
 }
 
+export interface SandboxLifecycleSnapshot {
+  keepAlive?: SandboxKeepAliveState;
+  lastEvent?: SandboxLifecycleEvent;
+}
+
+export interface SandboxProcessLogs {
+  stdout: string;
+  stderr: string;
+}
+
+export interface SandboxDiagnostics {
+  logs: SandboxProcessLogs | null;
+  lifecycle: SandboxLifecycleSnapshot | null;
+  errors?: {
+    logs?: string;
+    lifecycle?: string;
+  };
+}
+
+export interface SandboxDisconnectLogPayloadOptions {
+  sessionId: string;
+  closeCode: number;
+  closeReason: string;
+  state?: string;
+  diagnostics: SandboxDiagnostics;
+  maxLogChars?: number;
+}
+
+export interface SandboxDisconnectLogPayload {
+  session_id: string;
+  close_code: number;
+  close_reason: string;
+  state?: string;
+  lifecycle?: SandboxLifecycleSnapshot;
+  errors?: SandboxDiagnostics["errors"];
+  stdout_tail?: string;
+  stderr_tail?: string;
+  stdout_truncated?: boolean;
+  stderr_truncated?: boolean;
+}
+
 export interface SandboxLifecycleStorage {
   put(key: string, value: unknown): Promise<void>;
 }
@@ -58,6 +99,14 @@ export interface SandboxLifecycleStorage {
 export interface CodevilKeepAliveSandbox {
   setKeepAlive?: (active: boolean) => Promise<void>;
   setCodevilKeepAlive?: (active: boolean, reason?: string) => Promise<void>;
+}
+
+export interface CodevilLifecycleSandbox {
+  getCodevilLifecycleSnapshot?: () => Promise<SandboxLifecycleSnapshot>;
+}
+
+export interface SandboxLogReader {
+  getProcessLogs(processId: string): Promise<SandboxProcessLogs>;
 }
 
 const DEFAULT_SANDBOX_RETRY_ATTEMPTS = 12;
@@ -207,6 +256,83 @@ export async function readProcessLogs(
   } catch {
     return null;
   }
+}
+
+export async function readSandboxDiagnostics<Binding>(
+  binding: Binding,
+  sessionId: string,
+  processId: string,
+): Promise<SandboxDiagnostics> {
+  const { getSandbox } = await import("@cloudflare/sandbox");
+  const sandbox = getCodevilSandbox(
+    getSandbox as unknown as (
+      binding: Binding,
+      sessionId: string,
+      options?: typeof CODEVIL_SANDBOX_OPTIONS,
+    ) => SandboxLogReader & CodevilLifecycleSandbox,
+    binding,
+    sessionId,
+  );
+  return collectSandboxDiagnostics(sandbox as SandboxLogReader & CodevilLifecycleSandbox, processId);
+}
+
+export async function collectSandboxDiagnostics(
+  sandbox: SandboxLogReader & CodevilLifecycleSandbox,
+  processId: string,
+): Promise<SandboxDiagnostics> {
+  const [logs, lifecycle] = await Promise.allSettled([
+    sandbox.getProcessLogs(processId),
+    typeof sandbox.getCodevilLifecycleSnapshot === "function"
+      ? sandbox.getCodevilLifecycleSnapshot()
+      : Promise.resolve(null),
+  ]);
+
+  const errors: SandboxDiagnostics["errors"] = {};
+  if (logs.status === "rejected") errors.logs = errorMessage(logs.reason);
+  if (lifecycle.status === "rejected") errors.lifecycle = errorMessage(lifecycle.reason);
+
+  return {
+    logs: logs.status === "fulfilled" ? logs.value : null,
+    lifecycle: lifecycle.status === "fulfilled" ? lifecycle.value : null,
+    ...(Object.keys(errors).length > 0 ? { errors } : {}),
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function buildSandboxDisconnectLogPayload(
+  options: SandboxDisconnectLogPayloadOptions,
+): SandboxDisconnectLogPayload {
+  const maxLogChars = Math.max(0, options.maxLogChars ?? 4_096);
+  const stdout = boundedTail(options.diagnostics.logs?.stdout, maxLogChars);
+  const stderr = boundedTail(options.diagnostics.logs?.stderr, maxLogChars);
+
+  return {
+    session_id: options.sessionId,
+    close_code: options.closeCode,
+    close_reason: options.closeReason || "none",
+    ...(options.state ? { state: options.state } : {}),
+    ...(options.diagnostics.lifecycle ? { lifecycle: options.diagnostics.lifecycle } : {}),
+    ...(options.diagnostics.errors ? { errors: options.diagnostics.errors } : {}),
+    ...(stdout.tail !== undefined ? { stdout_tail: stdout.tail } : {}),
+    ...(stderr.tail !== undefined ? { stderr_tail: stderr.tail } : {}),
+    ...(stdout.truncated ? { stdout_truncated: true } : {}),
+    ...(stderr.truncated ? { stderr_truncated: true } : {}),
+  };
+}
+
+function boundedTail(value: string | undefined, maxChars: number): {
+  tail?: string;
+  truncated: boolean;
+} {
+  if (value === undefined || value.length === 0) return { truncated: false };
+  if (value.length <= maxChars) return { tail: value, truncated: false };
+  return {
+    tail: value.slice(value.length - maxChars),
+    truncated: true,
+  };
 }
 
 export function mapSandboxMessageToCLIEvents(message: SandboxToDOMessage): DOToCLIEvent[] {

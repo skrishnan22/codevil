@@ -74,8 +74,9 @@ function GenericOpenQuestionItem({
 }: GenericOpenQuestionItemProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [freeform, setFreeform] = useState("");
+  const [freeformOpen, setFreeformOpen] = useState(false);
 
-  const hasOptions = question.options && question.options.length > 0;
+  const hasOptions = Boolean(question.options && question.options.length > 0);
   const hasSelection = selectedIds.length > 0 || freeform.trim().length > 0;
 
   function toggleOption(id: string) {
@@ -103,79 +104,94 @@ function GenericOpenQuestionItem({
   }
 
   return (
-    <article className="question-card">
-      <p className="question-card-text">{question.question}</p>
-      {question.context && (
-        <p className="question-card-context">{question.context}</p>
-      )}
-      {question.assignedTo && (
-        <p className="question-panel-note">
-          Assigned to {participantLabel(question.assignedTo)}
-        </p>
-      )}
-      {waitingHint && (
-        <p className="question-panel-note">{waitingHint}</p>
-      )}
-      <form className="question-card-form" onSubmit={handleSubmit}>
-        {hasOptions && (
-          <div className="question-option-list">
-            {question.options!.map((opt) => {
-              const selected = selectedIds.includes(opt.id);
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  className={`question-option-button${selected ? " question-option-button--selected" : ""}`}
-                  onClick={() => toggleOption(opt.id)}
-                  disabled={!canAnswer}
-                  aria-pressed={selected}
-                >
-                  <span className="question-option-label">{opt.label}</span>
-                  {opt.detail && (
-                    <span className="question-option-detail">{opt.detail}</span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {question.allowFreeform && (
-          <textarea
-            className="question-freeform-textarea"
-            placeholder="Type your answer…"
-            value={freeform}
-            onChange={(e) => setFreeform(e.target.value)}
-            rows={3}
-            disabled={!canAnswer}
-          />
-        )}
-        <div className="question-card-actions">
-          {canAssign && assignableParticipants.length > 0 && (
-            <label className="question-assignee-label">
-              <span>Assign to</span>
-              <select
-                className="question-assignee-select"
-                value={question.assignedTo?.id ?? ""}
-                onChange={handleAssign}
-              >
-                <option value="" disabled>Choose teammate</option>
-                {assignableParticipants.map((participant) => (
-                  <option key={participant.id} value={participant.id}>
-                    {participantLabel(participant)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={!canAnswer || !hasSelection}
-          >
-            Submit answer
-          </button>
+    <article className="ask-msg">
+      <div className="ask-msg-avatar" aria-hidden="true">C</div>
+      <div className="ask-msg-body">
+        <div className="ask-msg-meta">
+          <span className="ask-msg-name">Codevil</span>
+          <span className="ask-msg-pill">
+            <span aria-hidden="true">✦</span> asks
+          </span>
+          <span className="ask-msg-time">{formatAskMeta(question)}</span>
         </div>
-      </form>
+        <h3 className="ask-msg-question">{question.question}</h3>
+        {question.context && <p className="ask-msg-context">{question.context}</p>}
+        {question.assignedTo && (
+          <p className="ask-msg-note">Assigned to {participantLabel(question.assignedTo)}</p>
+        )}
+        {waitingHint && <p className="ask-msg-note">{waitingHint}</p>}
+        <form className="ask-msg-form" onSubmit={handleSubmit}>
+          {hasOptions && (
+            <div className="ask-msg-options">
+              {question.options!.map((opt) => {
+                const selected = selectedIds.includes(opt.id);
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={`ask-opt${selected ? " is-selected" : ""}`}
+                    onClick={() => toggleOption(opt.id)}
+                    disabled={!canAnswer}
+                    aria-pressed={selected}
+                  >
+                    <span className="ask-opt-row">
+                      <span className="ask-opt-check" aria-hidden="true" />
+                      <span className="ask-opt-title">{opt.label}</span>
+                    </span>
+                    {opt.detail && <p className="ask-opt-desc">{opt.detail}</p>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {question.allowFreeform && (!hasOptions || freeformOpen) && (
+            <textarea
+              className="ask-msg-freeform"
+              placeholder="Type your answer…"
+              value={freeform}
+              onChange={(e) => setFreeform(e.target.value)}
+              rows={3}
+              disabled={!canAnswer}
+            />
+          )}
+
+          <div className="ask-msg-actions">
+            {canAssign && assignableParticipants.length > 0 && (
+              <label className="ask-msg-assign">
+                <span>Assign to</span>
+                <select
+                  value={question.assignedTo?.id ?? ""}
+                  onChange={handleAssign}
+                >
+                  <option value="" disabled>Choose teammate</option>
+                  {assignableParticipants.map((participant) => (
+                    <option key={participant.id} value={participant.id}>
+                      {participantLabel(participant)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <button
+              type="submit"
+              className="ask-msg-submit"
+              disabled={!canAnswer || !hasSelection}
+            >
+              Submit answer
+            </button>
+            {question.allowFreeform && hasOptions && !freeformOpen && (
+              <button
+                type="button"
+                className="ask-msg-freeform-toggle"
+                onClick={() => setFreeformOpen(true)}
+              >
+                Or type your own answer ↓
+              </button>
+            )}
+          </div>
+        </form>
+      </div>
     </article>
   );
 }
@@ -195,6 +211,15 @@ function waitingHintForQuestion(question: QuestionViewModel, canAnswer: boolean)
   return "Waiting for a participant to answer.";
 }
 
+function formatAskMeta(question: QuestionViewModel): string {
+  if (question.assignedTo) {
+    return `assigned to ${participantLabel(question.assignedTo)}`;
+  }
+  if (question.answerableBy === "decider") return "session creator only";
+  if (question.answerableBy === "assigned") return "assigned participant only";
+  return "anyone in room";
+}
+
 // ─── Generic answered question ─────────────────────────────────────────────
 
 function GenericAnsweredQuestionItem({ question }: { question: QuestionViewModel }) {
@@ -209,16 +234,20 @@ function GenericAnsweredQuestionItem({ question }: { question: QuestionViewModel
       : null;
 
   return (
-    <article className="question-card question-card--answered">
-      <p className="question-card-text">{question.question}</p>
-      <div className="question-card-answer">
-        {chosenLabels && (
-          <p className="question-answer-choice">{chosenLabels}</p>
-        )}
-        {answer.freeform && (
-          <p className="question-answer-freeform">{answer.freeform}</p>
-        )}
-        <p className="question-answer-meta">
+    <article className="ask-msg ask-msg--answered">
+      <div className="ask-msg-avatar" aria-hidden="true">C</div>
+      <div className="ask-msg-body">
+        <div className="ask-msg-meta">
+          <span className="ask-msg-name">Codevil</span>
+          <span className="ask-msg-pill">
+            <span aria-hidden="true">✦</span> asks
+          </span>
+        </div>
+        <h3 className="ask-msg-question">{question.question}</h3>
+        {question.context && <p className="ask-msg-context">{question.context}</p>}
+        {chosenLabels && <p className="ask-msg-note">Chosen: {chosenLabels}</p>}
+        {answer.freeform && <p className="ask-msg-context">{answer.freeform}</p>}
+        <p className="ask-msg-note">
           Answered by {answer.answeredBy.name ?? answer.answeredBy.id}
         </p>
       </div>

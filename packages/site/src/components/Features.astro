@@ -3,32 +3,44 @@ import Section from "./Section.astro";
 
 const features = [
   {
-    title: "Plan → Approve → Execute",
-    body: "Read-only tools during planning make the plan phase safe by construction. Write tools are unlocked only after you approve — not via a system prompt asking the model to behave.",
+    title: "Multiplayer rooms",
+    body: "Multiple teammates connect to one session simultaneously. Everyone sees the same live stream and can direct the agent. Every human action is attributed — first-action-wins on simultaneous decisions.",
   },
   {
-    title: "Secret isolation",
-    body: "GitHub PAT is brokered over WebSocket on demand, never in env vars. LLM key lives in tmpfs, read once and unlinked. Event redaction scrubs secrets from the persisted log.",
+    title: "Collaborative plan annotation",
+    body: "When plan first is on, the plan opens for review. Highlight any section, leave threaded comments, discuss with your team. A consolidation agent merges feedback — and if comments conflict, the agent asks the room.",
+  },
+  {
+    title: "Ask the room",
+    body: "The agent has an ask_question tool: it asks the room a structured question and blocks until a human answers. First used for plan conflicts, but generic — any agent flow can use it to stay unstuck.",
+  },
+  {
+    title: "Live preview",
+    body: "For UI work, toggle on Live Preview. Codevil starts a dev server in the sandbox and proxies it through a Codevil-owned URL. See changes as the agent makes them. The raw sandbox URL is never exposed.",
+  },
+  {
+    title: "Projected conversation",
+    body: "The Conversation isn't a raw transcript. It shows user messages, finalized assistant replies, milestones, and attention requests. Raw tool detail lives in Activity — so the conversation stays useful for monitoring and review.",
+  },
+  {
+    title: "Team & roles",
+    body: "Google OAuth, invite-only membership. Owner, admin, developer, and viewer roles. One self-hosted deployment is one team. Cloudflare Access can gate it for broader org use.",
   },
   {
     title: "Ephemeral sandboxes",
-    body: "Each task runs in a fresh Linux container on Cloudflare Sandboxes. Destroyed the moment the session ends. Blast radius is one session — no persistent compromise.",
-  },
-  {
-    title: "Cost controls",
-    body: "max_cost, max_time, and max_steps guardrails — all configurable per run. Fail open with state preserved, never a hard kill that loses work.",
+    body: "Each run executes in a fresh Linux container on Cloudflare Sandboxes. Destroyed when the session ends. GitHub PAT is brokered on demand, never in env. LLM key lives in tmpfs, read once and unlinked.",
   },
   {
     title: "Bring your own keys",
-    body: "No proxy billing. Your LLM provider key, your spend. Pi supports 15+ providers out of the box, including Anthropic and OpenAI.",
+    body: "No proxy billing. Your LLM provider key, your spend. Works with Anthropic, OpenAI, Kimi, GLM, and any model Pi supports. Use a cheaper model for planning, a stronger one for execution.",
   },
   {
     title: "Cloudflare-native",
-    body: "Workers for routing, Durable Objects for per-session state, Sandboxes for execution, D1 for auth. One ecosystem, one bill, active-CPU pricing — idle is free.",
+    body: "Workers for routing, Durable Objects for per-session state, Sandboxes for execution, D1 for auth. One ecosystem, one bill. Active-CPU pricing on sandboxes — idle time is free.",
   },
 ];
 ---
-<Section id="features" eyebrow="Features" title="Built for self-hosted coding agents">
+<Section id="features" eyebrow="Features" title="Built for teams that ship with AI">
   <div class="grid gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-2 lg:grid-cols-3">
     {features.map((f) => (
       <div class="flex flex-col gap-2 bg-surface p-6">

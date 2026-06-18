@@ -30,6 +30,9 @@ export interface CodevilAuthOptions {
       secure: true;
     };
   };
+  account?: {
+    skipStateCookieCheck: true;
+  };
   trustedOrigins?: string[];
 }
 
@@ -84,6 +87,9 @@ export function buildAuthOptions(env: AuthConfigEnv): CodevilAuthOptions {
     },
     ...(crossSiteCookieAttributes
       ? { advanced: { defaultCookieAttributes: crossSiteCookieAttributes } }
+      : {}),
+    ...(crossSiteCookieAttributes
+      ? { account: { skipStateCookieCheck: true as const } }
       : {}),
     ...(trustedOrigins.length > 0 ? { trustedOrigins } : {}),
   };

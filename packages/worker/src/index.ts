@@ -3,6 +3,7 @@ import { Sandbox as BaseSandbox } from "@cloudflare/sandbox";
 import {
   getCodevilSandbox,
   recordSandboxLifecycleEvent,
+  readSandboxDiagnostics,
   SANDBOX_KEEPALIVE_STATE_KEY,
   SANDBOX_LIFECYCLE_EVENT_KEY,
   shouldDeferSandboxActivityExpiry,
@@ -333,6 +334,14 @@ export default {
         return withCors(request, env, json({ error: "Unauthorized" }, 401));
       }
       return withCors(request, env, await handleLogs(env, logsMatch[1]));
+    }
+
+    const diagnosticsMatch = path.match(/^\/sessions\/([^/]+)\/diagnostics$/);
+    if (diagnosticsMatch && request.method === "GET") {
+      if (!authenticate(request, env.CODEVIL_API_KEY)) {
+        return withCors(request, env, json({ error: "Unauthorized" }, 401));
+      }
+      return withCors(request, env, await handleDiagnostics(env, diagnosticsMatch[1]));
     }
 
     // POST /sessions/:id/simulate — trigger test events (dev only)
@@ -945,6 +954,16 @@ async function handleLogs(env: Env, sessionId: string): Promise<Response> {
     );
     const logs = await sandbox.getProcessLogs("codevil-agent");
     return json(logs, 200);
+  } catch (error) {
+    return json({
+      error: error instanceof Error ? error.message : String(error),
+    }, 500);
+  }
+}
+
+async function handleDiagnostics(env: Env, sessionId: string): Promise<Response> {
+  try {
+    return json(await readSandboxDiagnostics(env.Sandbox, sessionId, "codevil-agent"), 200);
   } catch (error) {
     return json({
       error: error instanceof Error ? error.message : String(error),

@@ -25,26 +25,26 @@ describe("DEPLOY_STEPS", () => {
     expect(joined).toContain("pnpm install");
   });
 
-  it("step 2 deploys the worker with wrangler", () => {
+  it("step 2 deploys the worker and web app", () => {
     const step = DEPLOY_STEPS[1];
     const joined = step.commands.join("\n");
-    expect(joined).toContain("cd packages/worker");
     expect(joined).toContain("wrangler deploy");
   });
 
-  it("step 3 sets the four required secrets", () => {
+  it("step 3 sets the required secrets including auth", () => {
     const step = DEPLOY_STEPS[2];
     const joined = step.commands.join("\n");
     expect(joined).toContain("wrangler secret put CODEVIL_API_KEY");
     expect(joined).toContain("wrangler secret put GITHUB_PAT");
     expect(joined).toContain("wrangler secret put LLM_API_KEY");
-    expect(joined).toContain("wrangler secret put LLM_PROVIDER");
+    expect(joined).toContain("wrangler secret put BETTER_AUTH_SECRET");
+    expect(joined).toContain("wrangler secret put GOOGLE_CLIENT_SECRET");
   });
 
-  it("step 4 installs and configures the CLI", () => {
+  it("step 4 covers claiming the instance and inviting the team", () => {
     const step = DEPLOY_STEPS[3];
-    const joined = step.commands.join("\n");
-    expect(joined).toContain("npx codevil init");
+    const joined = step.commands.join("\n").toLowerCase();
+    expect(joined).toMatch(/invite|team|claim|owner/);
   });
 
   it("every step satisfies the DeployStep type", () => {

@@ -1,27 +1,33 @@
 /* Codevil — design tokens */
 
 :root {
-  --accent-h: 235;
-  --accent: oklch(0.58 0.18 var(--accent-h));
-  --accent-soft: oklch(0.58 0.18 var(--accent-h) / 0.10);
-  --accent-fg: oklch(0.98 0.01 var(--accent-h));
+  --accent-h: 145;
+  --accent: #4F7860;
+  --accent-soft: #F0F4F1;
+  --accent-fg: #FFFFFF;
 
-  /* light theme */
-  --bg: oklch(0.995 0.002 260);
-  --surface: oklch(1 0 0);
-  --surface-2: oklch(0.985 0.003 260);
-  --surface-3: oklch(0.965 0.004 260);
-  --line: oklch(0.92 0.005 260);
-  --line-2: oklch(0.95 0.005 260);
-  --fg: oklch(0.18 0.01 260);
-  --fg-2: oklch(0.42 0.01 260);
-  --fg-3: oklch(0.62 0.008 260);
-  --fg-4: oklch(0.75 0.006 260);
+  /* light theme — cool linen + sage */
+  --bg: #F8F8F5;
+  --surface: #FFFFFF;
+  --surface-2: #FCFCFA;
+  --surface-3: #F4F4F0;
+  --line: #E3E6E1;
+  --line-2: #ECECE5;
+  --fg: #0F1419;
+  --fg-2: #1A1F26;
+  --fg-3: #4A5159;
+  --fg-4: #687A6E;
 
-  --ok: oklch(0.66 0.14 150);
-  --warn: oklch(0.72 0.14 75);
-  --err: oklch(0.62 0.18 25);
-  --info: oklch(0.62 0.13 235);
+  --ok: #4F7860;
+  --warn: #92400E;
+  --err: #B91C1C;
+  --info: #4F7860;
+
+  /* component-specific tokens */
+  --amber: #FEF3C7;
+  --amber-ink: #92400E;
+  --danger-bg: #FEF2F2;
+  --moss: #687A6E;
 
   --r-sm: 4px;
   --r-md: 6px;
@@ -30,23 +36,37 @@
 
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --serif: "Newsreader", Georgia, "Times New Roman", serif;
 
   --pad: 16px;
   --row-h: 28px;
 }
 
 .dark {
-  --bg: oklch(0.16 0.008 260);
-  --surface: oklch(0.19 0.008 260);
-  --surface-2: oklch(0.215 0.008 260);
-  --surface-3: oklch(0.24 0.008 260);
-  --line: oklch(0.30 0.008 260);
-  --line-2: oklch(0.26 0.008 260);
-  --fg: oklch(0.96 0.005 260);
-  --fg-2: oklch(0.78 0.008 260);
-  --fg-3: oklch(0.62 0.008 260);
-  --fg-4: oklch(0.48 0.008 260);
-  --accent-soft: oklch(0.58 0.18 var(--accent-h) / 0.18);
+  --bg: #11140F;
+  --surface: #1A1E18;
+  --surface-2: #20241D;
+  --surface-3: #272B23;
+  --line: #353A30;
+  --line-2: #2C3128;
+  --fg: #F2F2EC;
+  --fg-2: #D6D8CF;
+  --fg-3: #A0A59A;
+  --fg-4: #7E8576;
+
+  --accent: #7FA68B;
+  --accent-soft: #1F2C24;
+  --accent-fg: #0F1419;
+
+  --ok: #7FA68B;
+  --warn: #F5C97A;
+  --err: #F08585;
+  --info: #7FA68B;
+
+  --amber: #3A2E14;
+  --amber-ink: #F5C97A;
+  --danger-bg: #2A1414;
+  --moss: #A0A59A;
 }
 
 [data-density="compact"] {

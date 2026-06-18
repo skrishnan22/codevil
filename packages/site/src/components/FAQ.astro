@@ -3,28 +3,40 @@ import Section from "./Section.astro";
 
 const faqs = [
   {
-    q: "How much does self-hosting cost?",
-    a: "You pay Cloudflare directly for what you use. Sandbox billing is active-CPU only — idle sandboxes are free, so you only pay while an agent is actively working. LLM costs go through your own provider key with your own spend limits. Codevil itself adds no markup.",
+    q: "Is Codevil a CLI or a web app?",
+    a: "Both, but the web app is the primary surface. You start a room in the browser, your team joins, and you all watch and direct the agent together. A thin CLI client also exists for terminal-driven runs against the same backend.",
+  },
+  {
+    q: "Does the agent always plan before executing?",
+    a: "No. The default flow is: you send an Agent Request, the agent runs immediately. Plan first is an optional mode you flip on per request when you want a plan to review and annotate before the agent touches code. The old plan-then-approve gate is not the default loop.",
+  },
+  {
+    q: "How does multiplayer work?",
+    a: "Multiple teammates connect to one session at the same time. Everyone sees the same live stream — conversation, activity, tool calls. Everyone can direct the agent, approve, refine, or abort. Every human action is attributed to who did it, and simultaneous decisions resolve first-action-wins.",
+  },
+  {
+    q: "What is collaborative plan annotation?",
+    a: "When plan first is on, the plan opens for review before execution. Highlight any section, leave threaded comments, and discuss with your team. A consolidation pass merges feedback into a revised plan. If two comments conflict, the agent uses its ask_question tool to ask the room which way to go — and blocks until someone answers.",
+  },
+  {
+    q: "What is Live Preview?",
+    a: "For UI work, toggle on Live Preview. Codevil starts a dev server inside the sandbox and proxies it through a Codevil-owned URL, rendered in an iframe in the session. You see changes as the agent makes them. The raw Cloudflare Sandbox URL is never exposed to the browser.",
   },
   {
     q: "Which models are supported?",
-    a: "Pi is model-agnostic and supports 15+ LLM providers out of the box, including Anthropic, OpenAI, Google, and local providers via Ollama. You set the provider and model per run, and can even use a cheaper model for planning and a stronger one for execution.",
+    a: "Pi is model-agnostic and supports 15+ LLM providers — Anthropic, OpenAI, Kimi, GLM, Google, and local providers via Ollama. You pick the provider and model per session, and can use a cheaper model for planning and a stronger one for execution.",
+  },
+  {
+    q: "How much does self-hosting cost?",
+    a: "You pay Cloudflare directly. Sandbox billing is active-CPU only — idle sandboxes are free, so you only pay while an agent is actively working. LLM costs go through your own provider key with your own spend limits. Codevil adds no markup.",
   },
   {
     q: "Is it safe to run on my repositories?",
-    a: "Each task runs in an ephemeral sandbox that is destroyed when the session ends. The GitHub PAT is brokered over WebSocket on demand and never sits in the sandbox's environment. The LLM key is written to tmpfs, read once, and unlinked. Every event is redacted before it's persisted to the Durable Object's event log.",
-  },
-  {
-    q: "Where does my data live?",
-    a: "Everything stays in your Cloudflare account. The Durable Object's built-in SQLite holds the per-session event log, retained for 7 days after completion. No data is sent to any third party other than your chosen LLM provider.",
+    a: "Each run executes in an ephemeral sandbox destroyed when the session ends. The GitHub PAT is brokered over WebSocket on demand and never sits in the sandbox's environment. The LLM key is written to tmpfs, read once, and unlinked. Every event is redacted before it's persisted to the Durable Object's event log.",
   },
   {
     q: "Can my team use it?",
-    a: "Yes. v1 is built around an implicit single-team boundary — one self-hosted deployment is one team. Owner/admin/viewer roles and invite-only membership are already implemented. For broader team auth, Cloudflare Access (Zero Trust) can sit in front of the Worker.",
-  },
-  {
-    q: "Does it work with my existing repo setup?",
-    a: "Pi reads CLAUDE.md, agents.md, and similar root files from your repo. Verification uses whatever your repo already has — test suites, linters, type checkers discovered from package.json scripts, Makefile targets, and CI config. No custom verification config required.",
+    a: "Yes — that's the default. One self-hosted deployment is one team. Sign in with Google, invite teammates by email, and assign owner, admin, developer, or viewer roles. For broader org auth, Cloudflare Access (Zero Trust) can sit in front of the Worker.",
   },
 ];
 ---

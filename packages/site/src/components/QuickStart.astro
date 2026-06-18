@@ -2,20 +2,21 @@
 import Section from "./Section.astro";
 import DeployCommands from "./DeployCommands.tsx";
 ---
-<Section id="quickstart" eyebrow="Self-host" title="Deploy in four steps">
+<Section id="quickstart" eyebrow="Self-host" title="Run it on your Cloudflare account">
   <div class="grid gap-10 lg:grid-cols-[1fr_1.4fr] lg:items-start">
     <div class="flex flex-col gap-4">
       <p class="text-fg-3">
-        Codevil runs entirely on your own Cloudflare account. One <code class="font-mono text-fg-2">wrangler deploy</code>,
-        four secrets, and you're running coding agents on your repos.
+        Codevil runs entirely on your own Cloudflare account. Deploy the worker, set your
+        secrets, and your team signs in with Google. No platform fees, no proxy billing.
       </p>
       <ul class="flex flex-col gap-2 text-sm text-fg-3">
+        <li class="flex gap-2"><span class="text-accent">→</span> One <code class="font-mono text-fg-2">wrangler deploy</code> — Workers, Durable Objects, Sandboxes, D1.</li>
         <li class="flex gap-2"><span class="text-accent">→</span> Active-CPU billing on sandboxes — idle time is free.</li>
-        <li class="flex gap-2"><span class="text-accent">→</span> No multi-tenant billing to build. The CF account is the team boundary.</li>
-        <li class="flex gap-2"><span class="text-accent">→</span> Cloudflare Access can gate it for team use later.</li>
+        <li class="flex gap-2"><span class="text-accent">→</span> Google OAuth + invite-only membership built in. The CF account is the team boundary.</li>
+        <li class="flex gap-2"><span class="text-accent">→</span> Cloudflare Access can gate it for broader org use.</li>
       </ul>
       <p class="mt-2 text-sm text-fg-4">
-        Full setup reference lives in <a href="https://github.com/anomalyco/codevil/blob/main/SPEC.md" class="text-accent underline-offset-2 hover:underline">SPEC.md</a>.
+        Full reference in <a href="https://github.com/anomalyco/codevil/blob/main/SPEC.md" class="text-accent underline-offset-2 hover:underline">SPEC.md</a> and <a href="https://github.com/anomalyco/codevil/blob/main/CONTEXT.md" class="text-accent underline-offset-2 hover:underline">CONTEXT.md</a>.
       </p>
     </div>
     <div class="lg:sticky lg:top-20">

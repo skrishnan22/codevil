@@ -129,6 +129,7 @@ export function ActivityTab({ selectedActivityId, onSelectActivity }: ActivityTa
                 className="activity-turn-head"
                 onClick={() => onSelectActivity(turn.thinking?.id ?? turn.tools[0]?.id ?? turn.entries[0].id)}
               >
+                <span className={`activity-turn-marker activity-turn-marker--${turn.status}`} aria-hidden="true" />
                 <span className="activity-turn-index">t{turn.index}</span>
                 <span className="activity-turn-title">{turn.title}</span>
                 <span className="activity-turn-stats">{turn.tokensLabel} tok&nbsp; {turn.durationLabel}</span>

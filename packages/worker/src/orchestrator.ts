@@ -24,6 +24,10 @@ import {
   createTracer,
   setValidationDropSink,
   tracerValidationDropSink,
+  emptySessionSnapshot,
+  applyToSessionSnapshot,
+  type SessionSnapshot,
+  type ProjectionContext,
   type Span,
   type Tracer,
 } from "@codevil/shared";
@@ -216,6 +220,12 @@ export class Orchestrator extends DurableObject<Env> {
   private redactionSecrets: string[];
   private tracer: Tracer | null = null;
   private phaseSpans = new Map<SessionState, Span>();
+  private snapshot: SessionSnapshot = emptySessionSnapshot();
+  private snapshotCursor = 0;
+  private snapshotDirty = false;
+  private snapshotMessageCounter = 0;
+  private snapshotAlarmScheduled = false;
+  private snapshotHydrated = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -354,6 +364,14 @@ export class Orchestrator extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    // Persist the snapshot if dirty — this covers the debounce path from
+    // scheduleSnapshotPersist(). Reset the flag so the next dirty event can
+    // re-arm the alarm via scheduleSnapshotPersist().
+    this.snapshotAlarmScheduled = false;
+    if (this.snapshotDirty) {
+      this.persistSnapshot();
+    }
+
     this.loadMeta();
     if (!this.meta) return;
     if (isTerminalState(this.meta.state)) return;
@@ -2300,10 +2318,61 @@ export class Orchestrator extends DurableObject<Env> {
       "SELECT id FROM events ORDER BY id DESC LIMIT 1"
     ).one() as { id: number };
 
+    // Maintain in-memory snapshot. Reset counter to 0 so sub-indices are
+    // deterministic per cursor (msg_<id>_0, msg_<id>_1, ...).
+    this.snapshotMessageCounter = 0;
+    const ctx: ProjectionContext = {
+      uid: () => `msg_${row.id}_${this.snapshotMessageCounter++}`,
+      now: Date.now(),
+    };
+    this.snapshot = applyToSessionSnapshot(this.snapshot, row.id, redacted, ctx);
+    this.snapshotCursor = row.id;
+    this.snapshotDirty = true;
+
     const envelope = JSON.stringify({ cursor: row.id, event: redacted });
     for (const ws of this.ctx.getWebSockets("cli")) {
       ws.send(envelope);
     }
+
+    // Persist synchronously on terminal events; otherwise debounce via alarm.
+    const TERMINAL_TYPES = new Set([
+      "agent_run_completed",
+      "agent_run_failed",
+      "room_ready",
+      "complete",
+      "verification_failed",
+    ]);
+    if (TERMINAL_TYPES.has(redacted.type)) {
+      this.persistSnapshot();
+    } else {
+      this.scheduleSnapshotPersist();
+    }
+  }
+
+  private persistSnapshot(): void {
+    try {
+      this.sql.exec(
+        "INSERT OR REPLACE INTO snapshots (path, cursor, state_json, updated_at) VALUES (?, ?, ?, datetime('now'))",
+        "session",
+        this.snapshotCursor,
+        JSON.stringify(this.snapshot),
+      );
+      this.snapshotDirty = false;
+    } catch (error) {
+      this.getTracer()?.log("ERROR", "snapshot.persist.failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Do NOT rethrow — persistence failure is recoverable on the next alarm.
+    }
+  }
+
+  private scheduleSnapshotPersist(): void {
+    if (this.snapshotAlarmScheduled) return;
+    this.snapshotAlarmScheduled = true;
+    // 30s debounce — first dirty event after a quiet period arms the alarm.
+    // This may bring forward an existing alarm scheduled by armNextAlarm; that
+    // is safe because alarm() will call armNextAlarm() to reschedule as needed.
+    this.ctx.storage.setAlarm(Date.now() + 30_000);
   }
 
   private replayEvents(ws: WebSocket, afterCursor: number): void {
@@ -2347,6 +2416,26 @@ export class Orchestrator extends DurableObject<Env> {
       this.meta!.queued_runs ??= [];
       this.meta!.active_run ??= null;
       break;
+    }
+
+    // Hydrate the snapshot from the snapshots table on first cold-start load.
+    if (!this.snapshotHydrated) {
+      this.snapshotHydrated = true;
+      const snapRow = this.sql.exec(
+        "SELECT cursor, state_json FROM snapshots WHERE path = ?",
+        "session",
+      ).one() as { cursor: number; state_json: string } | undefined;
+      if (snapRow) {
+        try {
+          this.snapshot = JSON.parse(snapRow.state_json) as SessionSnapshot;
+          this.snapshotCursor = snapRow.cursor;
+        } catch (error) {
+          this.getTracer()?.log("ERROR", "snapshot.hydrate.failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          // Leave defaults; next append will rebuild from scratch.
+        }
+      }
     }
   }
 }

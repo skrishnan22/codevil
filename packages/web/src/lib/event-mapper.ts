@@ -6,19 +6,19 @@ export interface ProjectedSessionView {
   activityLog: ActivityEntry[];
 }
 
-let nextId = 0;
-function uid(): string {
-  return `msg_${++nextId}`;
+export interface ProjectionContext {
+  uid: () => string;
+  now: number;
 }
 
-export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
-  const ts = Date.now();
+export function mapEventToChat(event: DOToCLIEvent, ctx: ProjectionContext): ChatMessage[] {
+  const ts = ctx.now;
 
   switch (event.type) {
     case "session_created":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "status",
           content: `Session created: ${event.session_id}`,
@@ -30,7 +30,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
       if (event.message === "Waiting for user approval.") return [];
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "status",
           content: event.message,
@@ -48,7 +48,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "plan_ready":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "assistant",
           variant: "plan",
           content: event.plan,
@@ -60,7 +60,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "approval_requested":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "assistant",
           variant: "plan",
           content: event.plan,
@@ -76,7 +76,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "verification_failed":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "verification_failed",
           content: `Verification failed after ${event.attempts} attempt${event.attempts === 1 ? "" : "s"}.`,
@@ -88,7 +88,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "complete":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "complete",
           content: "Session completed.",
@@ -100,7 +100,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "error":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "error",
           content: event.message,
@@ -112,7 +112,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "preview_starting":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "status",
           content: `Starting preview: ${event.command}`,
@@ -126,7 +126,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "preview_error":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "error",
           content: event.message,
@@ -143,7 +143,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "room_ready":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "status",
           content: `Room ready for ${event.repo}`,
@@ -184,7 +184,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "agent_request_queued":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "status",
           content: `Queued agent request #${event.position}.`,
@@ -199,7 +199,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "agent_response":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "assistant",
           variant: "text",
           content: event.text,
@@ -214,7 +214,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "agent_run_failed":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "error",
           content: event.message,
@@ -224,7 +224,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
       ];
 
     case "agent_event":
-      return mapAgentEventToChat(event.event);
+      return mapAgentEventToChat(event.event, ctx);
 
     case "plan_revision_frozen":
       return [];
@@ -257,7 +257,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "annotation_withdrawn":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "status",
           content: `${event.withdrawn_by.name} withdrew an annotation.`,
@@ -269,7 +269,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "consolidation_started":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "status",
           content: "Consolidating plan feedback.",
@@ -281,7 +281,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
     case "brief_dispatched":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           role: "system",
           variant: "status",
           content: "Refinement brief dispatched.",
@@ -300,7 +300,7 @@ export function mapEventToChat(event: DOToCLIEvent): ChatMessage[] {
   }
 }
 
-function mapAgentEventToChat(raw: unknown): ChatMessage[] {
+function mapAgentEventToChat(raw: unknown, ctx: ProjectionContext): ChatMessage[] {
   if (!isRecord(raw) || typeof raw.type !== "string") return [];
 
   switch (raw.type) {
@@ -312,36 +312,36 @@ function mapAgentEventToChat(raw: unknown): ChatMessage[] {
   }
 }
 
-export function mapEventToActivity(event: DOToCLIEvent): ActivityEntry[] {
-  const ts = Date.now();
+export function mapEventToActivity(event: DOToCLIEvent, ctx: ProjectionContext): ActivityEntry[] {
+  const ts = ctx.now;
 
   switch (event.type) {
     case "session_created":
-      return [eventEntry("Room created", ts, event.session_id)];
+      return [eventEntry("Room created", ts, ctx, event.session_id)];
 
     case "status":
       if (event.message === "Waiting for user approval.") return [];
-      return [statusEventEntry(event.message, ts)];
+      return [statusEventEntry(event.message, ts, ctx)];
 
     case "clone_progress":
       return [];
 
     case "room_ready":
-      return [eventEntry("Room ready", ts, event.repo)];
+      return [eventEntry("Room ready", ts, ctx, event.repo)];
 
     case "preview_starting":
-      return [eventEntry("Preview starting", ts, event.command)];
+      return [eventEntry("Preview starting", ts, ctx, event.command)];
 
     case "preview_ready":
-      return [eventEntry("Preview ready", ts, event.url)];
+      return [eventEntry("Preview ready", ts, ctx, event.url)];
 
     case "preview_error":
-      return [eventEntry("Preview error", ts, event.message, "error")];
+      return [eventEntry("Preview error", ts, ctx, event.message, "error")];
 
     case "phase":
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           kind: "phase_divider",
           status: "success",
           timestamp: ts,
@@ -354,44 +354,44 @@ export function mapEventToActivity(event: DOToCLIEvent): ActivityEntry[] {
       ];
 
     case "agent_event":
-      return mapAgentEventToActivity(event.event, ts);
+      return mapAgentEventToActivity(event.event, ts, ctx);
 
     case "agent_run_started":
-      return [eventEntry("Agent run started", ts, event.text)];
+      return [eventEntry("Agent run started", ts, ctx, event.text)];
 
     case "agent_run_completed":
-      return [eventEntry("Agent finished", ts, event.pr_url)];
+      return [eventEntry("Agent finished", ts, ctx, event.pr_url)];
 
     case "agent_run_failed":
-      return [eventEntry("Agent failed", ts, event.message, "error")];
+      return [eventEntry("Agent failed", ts, ctx, event.message, "error")];
 
     case "plan_revision_frozen":
-      return [eventEntry("Plan revision frozen", ts, `Round ${event.round}`)];
+      return [eventEntry("Plan revision frozen", ts, ctx, `Round ${event.round}`)];
 
     case "annotation_created":
-      return [eventEntry("Plan annotation", ts, event.annotation.comment)];
+      return [eventEntry("Plan annotation", ts, ctx, event.annotation.comment)];
 
     case "annotation_replied":
-      return [eventEntry("Annotation reply", ts, event.reply.comment)];
+      return [eventEntry("Annotation reply", ts, ctx, event.reply.comment)];
 
     case "annotation_withdrawn":
-      return [eventEntry("Annotation withdrawn", ts, event.thread_id)];
+      return [eventEntry("Annotation withdrawn", ts, ctx, event.thread_id)];
 
     case "consolidation_started":
-      return [eventEntry("Consolidation started", ts, `Round ${event.round}`)];
+      return [eventEntry("Consolidation started", ts, ctx, `Round ${event.round}`)];
 
     case "brief_dispatched":
-      return [eventEntry("Brief dispatched", ts, "brief sent")];
+      return [eventEntry("Brief dispatched", ts, ctx, "brief sent")];
 
     case "annotations_consumed":
-      return [eventEntry("Annotations consumed", ts, `${event.thread_ids.length} annotations`)];
+      return [eventEntry("Annotations consumed", ts, ctx, `${event.thread_ids.length} annotations`)];
 
     default:
       return [];
   }
 }
 
-function mapAgentEventToActivity(raw: unknown, ts: number): ActivityEntry[] {
+function mapAgentEventToActivity(raw: unknown, ts: number, ctx: ProjectionContext): ActivityEntry[] {
   if (!isRecord(raw) || typeof raw.type !== "string") return [];
 
   switch (raw.type) {
@@ -399,7 +399,7 @@ function mapAgentEventToActivity(raw: unknown, ts: number): ActivityEntry[] {
       const name = readToolName(raw);
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           kind: "tool_call",
           status: "running",
           timestamp: ts,
@@ -421,7 +421,7 @@ function mapAgentEventToActivity(raw: unknown, ts: number): ActivityEntry[] {
           : JSON.stringify(raw.result ?? "");
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           kind: "tool_call",
           status: success ? "success" : "error",
           timestamp: ts,
@@ -442,7 +442,7 @@ function mapAgentEventToActivity(raw: unknown, ts: number): ActivityEntry[] {
       const text = readMessageDelta(raw);
       return [
         {
-          id: uid(),
+          id: ctx.uid(),
           kind: "thinking",
           status: "running",
           timestamp: ts,
@@ -451,13 +451,13 @@ function mapAgentEventToActivity(raw: unknown, ts: number): ActivityEntry[] {
       ];
     }
     case "agent_start":
-      return [eventEntry("Agent started", ts)];
+      return [eventEntry("Agent started", ts, ctx)];
     case "agent_end":
-      return [eventEntry("Agent finished", ts)];
+      return [eventEntry("Agent finished", ts, ctx)];
     case "turn_start":
-      return [eventEntry("Turn started", ts)];
+      return [eventEntry("Turn started", ts, ctx)];
     case "turn_end":
-      return [eventEntry("Turn finished", ts, describeTurnEnd(raw))];
+      return [eventEntry("Turn finished", ts, ctx, describeTurnEnd(raw))];
     default:
       return [];
   }
@@ -466,10 +466,11 @@ function mapAgentEventToActivity(raw: unknown, ts: number): ActivityEntry[] {
 export function projectEvent(
   state: ProjectedSessionView,
   event: DOToCLIEvent,
+  ctx: ProjectionContext,
 ): ProjectedSessionView {
-  const activityLog = projectActivity(state.activityLog, event);
+  const activityLog = projectActivity(state.activityLog, event, ctx);
   return {
-    messages: projectMessages(state.messages, event),
+    messages: projectMessages(state.messages, event, ctx),
     activityLog,
   };
 }
@@ -477,19 +478,20 @@ export function projectEvent(
 export function projectEvents(
   state: ProjectedSessionView,
   events: DOToCLIEvent[],
+  ctx: ProjectionContext,
 ): ProjectedSessionView {
-  return events.reduce(projectEvent, state);
+  return events.reduce((s, e) => projectEvent(s, e, ctx), state);
 }
 
-function projectMessages(messages: ChatMessage[], event: DOToCLIEvent): ChatMessage[] {
-  const mapped = mapEventToChat(event);
+function projectMessages(messages: ChatMessage[], event: DOToCLIEvent, ctx: ProjectionContext): ChatMessage[] {
+  const mapped = mapEventToChat(event, ctx);
   if (mapped.length === 0) return messages;
   return [...messages, ...mapped];
 }
 
-function projectActivity(activityLog: ActivityEntry[], event: DOToCLIEvent): ActivityEntry[] {
+function projectActivity(activityLog: ActivityEntry[], event: DOToCLIEvent, ctx: ProjectionContext): ActivityEntry[] {
   if (event.type !== "agent_event") {
-    const mapped = mapEventToActivity(event);
+    const mapped = mapEventToActivity(event, ctx);
     return mapped.length === 0 ? activityLog : [...activityLog, ...mapped];
   }
 
@@ -506,7 +508,7 @@ function projectActivity(activityLog: ActivityEntry[], event: DOToCLIEvent): Act
         ...activityLog.slice(0, -1),
         {
           ...last,
-          timestamp: Date.now(),
+          timestamp: ctx.now,
           thinking: { text: last.thinking.text + text },
         },
       ];
@@ -515,10 +517,10 @@ function projectActivity(activityLog: ActivityEntry[], event: DOToCLIEvent): Act
     return [
       ...activityLog,
       {
-        id: uid(),
+        id: ctx.uid(),
         kind: "thinking",
         status: "running",
-        timestamp: Date.now(),
+        timestamp: ctx.now,
         thinking: { text },
       },
     ];
@@ -529,7 +531,7 @@ function projectActivity(activityLog: ActivityEntry[], event: DOToCLIEvent): Act
     if (last?.kind === "thinking" && last.status === "running") {
       return [
         ...activityLog.slice(0, -1),
-        { ...last, status: "success", timestamp: Date.now() },
+        { ...last, status: "success", timestamp: ctx.now },
       ];
     }
     return activityLog;
@@ -552,7 +554,7 @@ function projectActivity(activityLog: ActivityEntry[], event: DOToCLIEvent): Act
           ? {
               ...entry,
               status: success ? "success" : "error",
-              timestamp: Date.now(),
+              timestamp: ctx.now,
               tool: entry.tool
                 ? {
                     ...entry.tool,
@@ -566,7 +568,7 @@ function projectActivity(activityLog: ActivityEntry[], event: DOToCLIEvent): Act
     }
   }
 
-  const mapped = mapAgentEventToActivity(raw, Date.now());
+  const mapped = mapAgentEventToActivity(raw, ctx.now, ctx);
   return mapped.length === 0 ? activityLog : [...activityLog, ...mapped];
 }
 
@@ -615,11 +617,12 @@ function readMessageDelta(raw: Record<string, unknown>): string {
 function eventEntry(
   label: string,
   timestamp: number,
+  ctx: ProjectionContext,
   detail?: string,
   status: ActivityEntry["status"] = "success",
 ): ActivityEntry {
   return {
-    id: uid(),
+    id: ctx.uid(),
     kind: "event",
     status,
     timestamp,
@@ -639,9 +642,9 @@ function classifyStatusMessage(message: string): [string, string | undefined] {
   return [message, undefined];
 }
 
-function statusEventEntry(message: string, timestamp: number): ActivityEntry {
+function statusEventEntry(message: string, timestamp: number, ctx: ProjectionContext): ActivityEntry {
   const [label, detail] = classifyStatusMessage(message);
-  return eventEntry(label, timestamp, detail);
+  return eventEntry(label, timestamp, ctx, detail);
 }
 
 function describeTurnEnd(raw: Record<string, unknown>): string | undefined {

@@ -1,11 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { mapEventToChat, mapEventToActivity, projectEvent } from "../event-mapper";
+import type { ProjectionContext } from "../event-mapper";
 import type { DOToCLIEvent } from "@codevil/shared";
+
+function makeCtx(now = 1_000_000): ProjectionContext {
+  let counter = 0;
+  return { uid: () => `msg_${++counter}`, now };
+}
 
 describe("mapEventToChat", () => {
   it("maps session_created to a system message", () => {
     const event: DOToCLIEvent = { type: "session_created", session_id: "ses_abc" };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].role).toBe("system");
     expect(messages[0].variant).toBe("status");
@@ -14,7 +20,7 @@ describe("mapEventToChat", () => {
 
   it("maps status to a system message", () => {
     const event: DOToCLIEvent = { type: "status", message: "Provisioning sandbox..." };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].role).toBe("system");
     expect(messages[0].variant).toBe("status");
@@ -27,33 +33,34 @@ describe("mapEventToChat", () => {
       message: "Plan approved. Starting execution.",
       actor: "Alice",
     };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages[0].actor).toBe("Alice");
   });
 
   it("leaves actor undefined for an unattributed status event", () => {
     const event: DOToCLIEvent = { type: "status", message: "Cloning repo." };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages[0].actor).toBeUndefined();
   });
 
   it("maps room_ready to a room-ready status message", () => {
     const event: DOToCLIEvent = { type: "room_ready", repo: "github.com/acme/app" };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].variant).toBe("status");
     expect(messages[0].content).toBe("Room ready for github.com/acme/app");
   });
 
   it("keeps participant join and leave noise out of conversation", () => {
+    const ctx = makeCtx();
     const joined = mapEventToChat({
       type: "participant_joined",
       participant: { id: "usr_123", name: "Alice" },
-    });
+    }, ctx);
     const left = mapEventToChat({
       type: "participant_left",
       participant: { id: "usr_123", name: "Alice" },
-    });
+    }, ctx);
 
     expect(joined).toEqual([]);
     expect(left).toEqual([]);
@@ -66,7 +73,7 @@ describe("mapEventToChat", () => {
       actor: { id: "usr_123", name: "Alice" },
       text: "hello room",
       created_at: "2026-06-03T00:00:00.000Z",
-    });
+    }, makeCtx());
 
     expect(messages).toHaveLength(1);
     expect(messages[0].role).toBe("user");
@@ -82,19 +89,19 @@ describe("mapEventToChat", () => {
       message: "Alice already approved this plan.",
       actor: "Alice",
     };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages[0].actor).toBe("Alice");
   });
 
   it("does not render awaiting approval status separately from the plan card", () => {
     const event: DOToCLIEvent = { type: "status", message: "Waiting for user approval." };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(0);
   });
 
   it("keeps phase events out of conversation", () => {
     const event: DOToCLIEvent = { type: "phase", phase: "planning", model: "claude-sonnet-4-6" };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toEqual([]);
   });
 
@@ -105,7 +112,7 @@ describe("mapEventToChat", () => {
       cost: { input_tokens: 1000, output_tokens: 500, total_cost_usd: 0.01 },
       refinement_round: 0,
     };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].variant).toBe("plan");
     expect(messages[0].content).toBe("## Plan\n\n1. Do X");
@@ -121,7 +128,7 @@ describe("mapEventToChat", () => {
       cost: { input_tokens: 1000, output_tokens: 500, total_cost_usd: 0.01 },
       refinement_round: 0,
     };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].variant).toBe("plan");
     expect(messages[0].content).toBe("## Plan\n\n1. Do X");
@@ -129,24 +136,25 @@ describe("mapEventToChat", () => {
   });
 
   it("maps agent request queue events to room status messages", () => {
+    const ctx = makeCtx();
     const requested = mapEventToChat({
       type: "agent_request",
       run_id: "run_123",
       actor: { id: "usr_123", name: "Alice" },
       text: "fix the bug",
       created_at: "2026-06-03T00:00:00.000Z",
-    });
+    }, ctx);
     const queued = mapEventToChat({
       type: "agent_request_queued",
       run_id: "run_124",
       position: 2,
-    });
+    }, ctx);
     const started = mapEventToChat({
       type: "agent_run_started",
       run_id: "run_123",
       actor: { id: "usr_123", name: "Alice" },
       text: "fix the bug",
-    });
+    }, ctx);
 
     expect(requested[0].role).toBe("user");
     expect(requested[0].actor).toBe("Alice");
@@ -157,16 +165,17 @@ describe("mapEventToChat", () => {
   });
 
   it("keeps run completion out of chat and maps failures", () => {
+    const ctx = makeCtx();
     const completed = mapEventToChat({
       type: "agent_run_completed",
       run_id: "run_123",
       pr_url: "https://github.com/user/repo/pull/1",
-    });
+    }, ctx);
     const failed = mapEventToChat({
       type: "agent_run_failed",
       run_id: "run_123",
       message: "tests failed",
-    });
+    }, ctx);
 
     expect(completed).toEqual([]);
     expect(failed[0].variant).toBe("error");
@@ -178,7 +187,7 @@ describe("mapEventToChat", () => {
       type: "agent_response",
       run_id: "run_123",
       text: "Rate limits are configured in src/rate-limit.ts.",
-    });
+    }, makeCtx());
 
     expect(messages).toHaveLength(1);
     expect(messages[0].role).toBe("assistant");
@@ -189,7 +198,7 @@ describe("mapEventToChat", () => {
 
   it("maps complete to a complete message with pr_url", () => {
     const event: DOToCLIEvent = { type: "complete", pr_url: "https://github.com/user/repo/pull/1" };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].variant).toBe("complete");
     expect(messages[0].meta?.pr_url).toBe("https://github.com/user/repo/pull/1");
@@ -197,7 +206,7 @@ describe("mapEventToChat", () => {
 
   it("maps error to an error message", () => {
     const event: DOToCLIEvent = { type: "error", message: "Something broke" };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].variant).toBe("error");
     expect(messages[0].content).toBe("Something broke");
@@ -208,7 +217,7 @@ describe("mapEventToChat", () => {
       type: "agent_event",
       event: { type: "tool_execution_end", tool: "bash", args: { command: "npm test" }, success: true },
     };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toEqual([]);
   });
 
@@ -217,7 +226,7 @@ describe("mapEventToChat", () => {
       type: "agent_event",
       event: { type: "tool_execution_end", toolName: "find", args: { path: ".", pattern: "README.md" }, isError: false },
     };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(0);
   });
 
@@ -226,19 +235,19 @@ describe("mapEventToChat", () => {
       type: "agent_event",
       event: { type: "message_update", content: "Let me look at" },
     };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(0);
   });
 
   it("keeps clone_progress line noise out of the durable timeline", () => {
     const event: DOToCLIEvent = { type: "clone_progress", line: "Receiving objects: 50%" };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(0);
   });
 
   it("maps verification_failed to a verification_failed message", () => {
     const event: DOToCLIEvent = { type: "verification_failed", attempts: 3, last_error: "test failed" };
-    const messages = mapEventToChat(event);
+    const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].variant).toBe("verification_failed");
     expect(messages[0].meta?.attempts).toBe(3);
@@ -248,13 +257,16 @@ describe("mapEventToChat", () => {
 
 describe("projectEvent", () => {
   it("coalesces streamed message updates into one thinking entry", () => {
+    const ctx = makeCtx();
     const first = projectEvent(
       { messages: [], activityLog: [] },
       { type: "agent_event", event: { type: "message_update", content: "Analyzing " } },
+      ctx,
     );
     const second = projectEvent(
       first,
       { type: "agent_event", event: { type: "message_update", content: "the repo." } },
+      ctx,
     );
 
     expect(second.messages).toHaveLength(0);
@@ -264,6 +276,7 @@ describe("projectEvent", () => {
   });
 
   it("coalesces Pi assistant text deltas into one thinking entry", () => {
+    const ctx = makeCtx();
     const first = projectEvent(
       { messages: [], activityLog: [] },
       {
@@ -273,6 +286,7 @@ describe("projectEvent", () => {
           assistantMessageEvent: { type: "text_delta", delta: "Reading " },
         },
       },
+      ctx,
     );
     const second = projectEvent(
       first,
@@ -283,6 +297,7 @@ describe("projectEvent", () => {
           assistantMessageEvent: { type: "text_delta", delta: "files." },
         },
       },
+      ctx,
     );
 
     expect(second.activityLog).toHaveLength(1);
@@ -302,6 +317,7 @@ describe("projectEvent", () => {
           },
         },
       },
+      makeCtx(),
     );
 
     expect(projected.messages).toHaveLength(0);
@@ -321,6 +337,7 @@ describe("projectEvent", () => {
           ],
         },
       },
+      makeCtx(),
     );
 
     expect(projected.messages).toHaveLength(0);
@@ -350,19 +367,23 @@ describe("projectEvent", () => {
           ],
         },
       },
+      makeCtx(),
     );
 
     expect(projected.messages).toHaveLength(1);
   });
 
   it("updates a running tool entry when the matching tool ends", () => {
+    const ctx = makeCtx();
     const started = projectEvent(
       { messages: [], activityLog: [] },
       { type: "agent_event", event: { type: "tool_execution_start", tool: "bash", args: { command: "pnpm test" } } },
+      ctx,
     );
     const ended = projectEvent(
       started,
       { type: "agent_event", event: { type: "tool_execution_end", tool: "bash", args: { command: "pnpm test" }, result: "PASS", success: true } },
+      ctx,
     );
 
     expect(ended.messages).toHaveLength(0);
@@ -372,6 +393,7 @@ describe("projectEvent", () => {
   });
 
   it("updates Pi tool events using toolCallId", () => {
+    const ctx = makeCtx();
     const started = projectEvent(
       { messages: [], activityLog: [] },
       {
@@ -383,6 +405,7 @@ describe("projectEvent", () => {
           args: { path: "src/index.ts" },
         },
       },
+      ctx,
     );
     const ended = projectEvent(
       started,
@@ -396,6 +419,7 @@ describe("projectEvent", () => {
           isError: false,
         },
       },
+      ctx,
     );
 
     expect(ended.activityLog).toHaveLength(1);
@@ -408,6 +432,7 @@ describe("projectEvent", () => {
     const projected = projectEvent(
       { messages: [], activityLog: [] },
       { type: "agent_event", event: { type: "agent_start" } },
+      makeCtx(),
     );
 
     expect(projected.activityLog).toHaveLength(1);
@@ -422,7 +447,7 @@ describe("mapEventToActivity", () => {
       type: "agent_event",
       event: { type: "tool_execution_start", tool: "bash", args: { command: "npm test" } },
     };
-    const entries = mapEventToActivity(event);
+    const entries = mapEventToActivity(event, makeCtx());
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe("tool_call");
     expect(entries[0].status).toBe("running");
@@ -435,7 +460,7 @@ describe("mapEventToActivity", () => {
       type: "agent_event",
       event: { type: "tool_execution_end", tool: "bash", args: { command: "npm test" }, result: "PASS", success: true },
     };
-    const entries = mapEventToActivity(event);
+    const entries = mapEventToActivity(event, makeCtx());
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe("tool_call");
     expect(entries[0].status).toBe("success");
@@ -448,7 +473,7 @@ describe("mapEventToActivity", () => {
       type: "agent_event",
       event: { type: "message_update", content: "Analyzing the code..." },
     };
-    const entries = mapEventToActivity(event);
+    const entries = mapEventToActivity(event, makeCtx());
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe("thinking");
     expect(entries[0].thinking?.text).toBe("Analyzing the code...");
@@ -456,7 +481,7 @@ describe("mapEventToActivity", () => {
 
   it("maps phase event to a phase_divider entry", () => {
     const event: DOToCLIEvent = { type: "phase", phase: "executing", model: "claude-opus-4-6" };
-    const entries = mapEventToActivity(event);
+    const entries = mapEventToActivity(event, makeCtx());
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe("phase_divider");
     expect(entries[0].phase?.label).toContain("Agent turn");
@@ -470,9 +495,9 @@ describe("mapEventToActivity", () => {
       text: "fix the test",
     };
 
-    expect(mapEventToChat(event)).toEqual([]);
-    expect(mapEventToActivity(event)[0].event?.label).toBe("Agent run started");
-    expect(mapEventToActivity(event)[0].event?.detail).toBe("fix the test");
+    expect(mapEventToChat(event, makeCtx())).toEqual([]);
+    expect(mapEventToActivity(event, makeCtx())[0].event?.label).toBe("Agent run started");
+    expect(mapEventToActivity(event, makeCtx())[0].event?.detail).toBe("fix the test");
   });
 
   it("maps room lifecycle events to activity entries for the right pane", () => {
@@ -483,7 +508,7 @@ describe("mapEventToActivity", () => {
     ];
 
     const labels = events.flatMap((event) =>
-      mapEventToActivity(event).map((entry) => entry.event?.label),
+      mapEventToActivity(event, makeCtx()).map((entry) => entry.event?.label),
     );
 
     expect(labels).toEqual([
@@ -497,7 +522,7 @@ describe("mapEventToActivity", () => {
     const entries = mapEventToActivity({
       type: "clone_progress",
       line: "Receiving objects: 50%",
-    });
+    }, makeCtx());
 
     expect(entries).toEqual([]);
   });

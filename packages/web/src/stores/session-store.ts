@@ -41,7 +41,7 @@ export interface QuestionViewModel {
 import type { ChatMessage, ActivityEntry, SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
-import { projectEvents } from "../lib/event-mapper";
+import { projectEvents, type ProjectionContext } from "../lib/event-mapper";
 
 export interface PlanRevisionState {
   runId: string;
@@ -161,6 +161,7 @@ const initialState: SessionStoreState = {
 };
 
 let wsHandle: { send: (msg: CLIToDOMessage) => void; close: () => void } | null = null;
+let localCounter = 0;
 let pendingEvents: DOToCLIEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let previewReloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -299,6 +300,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             pendingEvents = [];
             flushTimer = null;
 
+            const ctx: ProjectionContext = {
+              uid: () => `msg_${++localCounter}`,
+              now: Date.now(),
+            };
             set((state) =>
               projectEvents(
                 {
@@ -306,6 +311,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
                   activityLog: state.activityLog,
                 },
                 events,
+                ctx,
               ),
             );
           }, 100);

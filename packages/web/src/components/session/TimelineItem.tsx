@@ -15,18 +15,8 @@ function formatTime(ts: number): string {
 
 function QuestionTimelineItem({ question }: { question: QuestionViewModel }) {
   return (
-    <div className="timeline-msg agent" id={`question-${question.requestId}`}>
-      <div className="timeline-msg-avatar agent" aria-hidden="true">C</div>
-      <div className="timeline-msg-body">
-        <div className="timeline-msg-meta">
-          <span className="timeline-msg-sender">Codevil</span>
-          <span>·</span>
-          <span>{formatTime(question.raisedAt)}</span>
-        </div>
-        <div className="timeline-msg-bubble timeline-msg-bubble--question">
-          <QuestionItem question={question} />
-        </div>
-      </div>
+    <div id={`question-${question.requestId}`}>
+      <QuestionItem question={question} />
     </div>
   );
 }

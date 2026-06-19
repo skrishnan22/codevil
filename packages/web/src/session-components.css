@@ -3167,10 +3167,22 @@ button.current-activity:hover { background: var(--surface-3); }
   color: var(--fg-3);
   line-height: 1.55;
   flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .activity-thinking-row .activity-chevron {
   display: none;
+}
+
+/* Expand the thinking transcript when the row is active (selected/clicked). */
+.activity-thinking-row.active .activity-thinking-text,
+.activity-turn-card.active .activity-thinking-text {
+  -webkit-line-clamp: unset;
+  display: block;
+  overflow: visible;
 }
 
 .activity-tool-list {

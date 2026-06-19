@@ -33,8 +33,15 @@ describe("loadConfig", () => {
     expect(loadConfig()).toEqual({ endpoint: "https://saved.example.workers.dev" });
   });
 
-  it("returns null when neither saved nor deploy-time backend URL exists", () => {
-    expect(loadConfig()).toBeNull();
+  it("uses the current origin when the UI and API are deployed together", () => {
+    vi.stubGlobal("window", {
+      location: {
+        hostname: "codevil.example.workers.dev",
+        origin: "https://codevil.example.workers.dev",
+      },
+    });
+
+    expect(loadConfig()).toEqual({ endpoint: "https://codevil.example.workers.dev" });
   });
 
   it("uses the local Worker URL for localhost development without a saved override", () => {

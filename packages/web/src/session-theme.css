@@ -35,7 +35,7 @@
   --r-xl: 14px;
 
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --sans: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --serif: "Newsreader", Georgia, "Times New Roman", serif;
 
   --pad: 16px;
@@ -43,30 +43,31 @@
 }
 
 .dark {
-  --bg: #11140F;
-  --surface: #1A1E18;
-  --surface-2: #20241D;
-  --surface-3: #272B23;
-  --line: #353A30;
-  --line-2: #2C3128;
-  --fg: #F2F2EC;
-  --fg-2: #D6D8CF;
-  --fg-3: #A0A59A;
-  --fg-4: #7E8576;
+  /* Linear-inspired dark — near-black with subtle blue, indigo accent */
+  --bg: #0F0F11;
+  --surface: #16161A;
+  --surface-2: #1C1C21;
+  --surface-3: #232329;
+  --line: #2A2A31;
+  --line-2: #1F1F25;
+  --fg: #E3E4E6;
+  --fg-2: #C8CACD;
+  --fg-3: #8E9095;
+  --fg-4: #6B6D72;
 
-  --accent: #7FA68B;
-  --accent-soft: #1F2C24;
-  --accent-fg: #0F1419;
+  --accent: #606ACC;
+  --accent-soft: #1A1B3A;
+  --accent-fg: #FFFFFF;
 
-  --ok: #7FA68B;
+  --ok: #69C967;
   --warn: #F5C97A;
-  --err: #F08585;
-  --info: #7FA68B;
+  --err: #FF7E78;
+  --info: #606ACC;
 
-  --amber: #3A2E14;
+  --amber: #2A230F;
   --amber-ink: #F5C97A;
   --danger-bg: #2A1414;
-  --moss: #A0A59A;
+  --moss: #8E9095;
 }
 
 [data-density="compact"] {

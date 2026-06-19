@@ -34,7 +34,15 @@ function defaultConfig(): SessionConfig | null {
   if (endpoint) return { endpoint };
 
   const localEndpoint = localDevelopmentEndpoint();
-  return localEndpoint ? { endpoint: localEndpoint } : null;
+  if (localEndpoint) return { endpoint: localEndpoint };
+
+  const deployedEndpoint = deployedSameOriginEndpoint();
+  return deployedEndpoint ? { endpoint: deployedEndpoint } : null;
+}
+
+function deployedSameOriginEndpoint(): string | null {
+  if (typeof window === "undefined") return null;
+  return normalizeEndpoint(window.location.origin);
 }
 
 function normalizeEndpoint(value: unknown): string | null {

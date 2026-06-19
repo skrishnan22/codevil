@@ -2,11 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isAppShellNavigation,
   originAllowed,
   isOriginGuardedPath,
   requireTrustedOrigin,
   trustedOrigins,
 } from "../dist/http-guards.js";
+
+test("isAppShellNavigation recognizes browser navigation", () => {
+  const request = new Request("https://codevil.example.com/invite/inv_123", {
+    headers: { accept: "text/html,application/xhtml+xml" },
+  });
+
+  assert.equal(isAppShellNavigation(request), true);
+  assert.equal(isAppShellNavigation(new Request(request.url)), false);
+  assert.equal(isAppShellNavigation(new Request(request.url, {
+    method: "POST",
+    headers: { accept: "text/html" },
+  })), false);
+});
 
 test("trustedOrigins includes request origin, auth origin, and configured web origins", () => {
   const origins = trustedOrigins(

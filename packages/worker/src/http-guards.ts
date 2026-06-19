@@ -5,6 +5,10 @@ export interface TrustedOriginEnv {
   CODEVIL_WEB_ORIGIN?: string;
 }
 
+export function isAppShellNavigation(request: Request): boolean {
+  return request.method === "GET" && (request.headers.get("Accept") ?? "").includes("text/html");
+}
+
 export function trustedOrigins(request: Request, env: TrustedOriginEnv): string[] {
   const origins = [
     new URL(request.url).origin,

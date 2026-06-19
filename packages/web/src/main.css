@@ -81,38 +81,39 @@
   }
 
   .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
-    --sidebar: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
+    /* Linear-inspired: near-black with subtle blue cast, indigo accent */
+    --background: 240 8% 6%;          /* #0f0f11 */
+    --foreground: 220 5% 90%;         /* #e3e4e6 */
+    --card: 240 8% 8%;
+    --card-foreground: 220 5% 90%;
+    --popover: 240 8% 9%;
+    --popover-foreground: 220 5% 90%;
+    --primary: 232 51% 59%;           /* #606acc */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 6% 14%;
+    --secondary-foreground: 220 5% 90%;
+    --muted: 240 6% 12%;
+    --muted-foreground: 220 5% 60%;
+    --accent: 240 6% 14%;
+    --accent-foreground: 220 5% 90%;
+    --destructive: 3 100% 73%;        /* #ff7e78 */
+    --destructive-foreground: 240 8% 6%;
+    --border: 240 6% 16%;
+    --input: 240 6% 16%;
+    --ring: 232 51% 59%;
+    --chart-1: 232 51% 59%;
+    --chart-2: 119 50% 60%;
+    --chart-3: 262 100% 81%;
+    --chart-4: 3 100% 73%;
+    --chart-5: 40 90% 65%;
+    --sidebar: 240 8% 5%;
+    --sidebar-foreground: 220 5% 85%;
+    --sidebar-primary: 232 51% 59%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 240 6% 12%;
+    --sidebar-accent-foreground: 220 5% 90%;
+    --sidebar-border: 240 6% 14%;
+    --sidebar-ring: 232 51% 59%;
   }
 }
 
@@ -130,6 +131,93 @@
   .app-topbar {
     @apply flex h-14 shrink-0 items-center justify-between border-b bg-background/90 px-5 backdrop-blur;
     box-shadow: 0 1px 0 hsl(var(--border)), 0 8px 32px hsl(var(--foreground) / 0.05);
+  }
+
+  .app-topbar-profile {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 10px 0 6px;
+    border-radius: var(--r-md);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--fg-2);
+    transition: background-color 120ms ease;
+  }
+
+  .app-topbar-profile:hover {
+    background: var(--surface-2);
+  }
+
+  .app-topbar-profile-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 9999px;
+    background: var(--fg);
+    color: var(--bg);
+    font: 600 12px var(--sans);
+  }
+
+  .app-topbar-profile-name {
+    font: 500 12px var(--sans);
+    color: var(--fg-2);
+  }
+
+  .app-topbar-profile-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    min-width: 200px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 6px;
+    box-shadow: 0 8px 24px rgba(15, 20, 25, 0.1);
+    z-index: 50;
+  }
+
+  .app-topbar-profile-menu-head {
+    padding: 8px 10px;
+    line-height: 1.4;
+  }
+
+  .app-topbar-profile-menu-name {
+    font: 600 13px var(--sans);
+    color: var(--fg);
+  }
+
+  .app-topbar-profile-menu-email {
+    font: 400 11px var(--sans);
+    color: var(--fg-4);
+  }
+
+  .app-topbar-profile-menu-divider {
+    height: 1px;
+    background: var(--line-2);
+    margin: 4px 0;
+  }
+
+  .app-topbar-profile-menu-action {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    border-radius: calc(var(--r-md) - 2px);
+    font: 500 12px var(--sans);
+    color: var(--fg-3);
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+
+  .app-topbar-profile-menu-action:hover {
+    background: var(--surface-2);
   }
 
   .brand-lockup {

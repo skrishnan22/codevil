@@ -3,6 +3,7 @@ dist/
 *.tsbuildinfo
 .wrangler/
 .dev.vars
+.env.production
 **/bin
 .superpowers/
 .agents/skills

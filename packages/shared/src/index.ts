@@ -44,6 +44,15 @@ export {
 } from "./questions.js";
 
 export type {
+  LLMProviderId,
+  LLMProviderDefinition,
+} from "./providers.js";
+export {
+  LLM_PROVIDERS,
+  getProviderDefinition,
+} from "./providers.js";
+
+export type {
   SessionCreatedEvent,
   StatusEvent,
   CloneProgressEvent,

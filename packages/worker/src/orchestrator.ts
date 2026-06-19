@@ -38,6 +38,10 @@ import {
   setCodevilSandboxKeepAlive,
 } from "./sandbox.js";
 import { createDraftPullRequest, credentialRequestAllowed } from "./github.js";
+import {
+  collectProviderCredentialSecrets,
+  getProvisioningCredentialContext,
+} from "./provider-credentials.js";
 import { redactEvent } from "./redaction.js";
 import {
   sanitizeDisplayName,
@@ -65,6 +69,9 @@ interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
   DB: D1Database;
   CODEVIL_API_KEY: string;
+  OPENCODE_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENAI_API_KEY?: string;
   CODEVIL_LLM_KEY?: string;
   GITHUB_PAT?: string;
   CODEVIL_PREVIEW_ORIGIN?: string;
@@ -136,6 +143,72 @@ function questionAnswerDeniedMessage(question: {
   return "Only the session creator can answer this question.";
 }
 
+interface SandboxProvisioningTraceOptions<T> {
+  tracer: Tracer;
+  secrets: readonly string[];
+  attributes: Record<string, unknown>;
+  provision: () => Promise<T>;
+}
+
+export async function traceSandboxProvisioning<T>(
+  options: SandboxProvisioningTraceOptions<T>,
+): Promise<T> {
+  const { tracer, secrets, attributes, provision } = options;
+
+  try {
+    return await tracer.span(
+      "sandbox.provision",
+      { attributes },
+      async () => {
+        try {
+          return await provision();
+        } catch (error) {
+          throw redactedProvisioningError(error, secrets);
+        }
+      },
+    );
+  } catch (error) {
+    tracer.log(
+      "ERROR",
+      "sandbox.provision.failed",
+      redactEvent(provisioningErrorAttributes(error), secrets),
+    );
+    throw error;
+  }
+}
+
+function redactedProvisioningError(error: unknown, secrets: readonly string[]): Error {
+  const attributes = redactEvent(provisioningErrorAttributes(error), secrets);
+  const redacted = new Error(String(attributes.message));
+  redacted.name = String(attributes.name ?? "Error");
+  if (typeof attributes.stack === "string") redacted.stack = attributes.stack;
+
+  for (const [key, value] of Object.entries(attributes)) {
+    if (key === "name" || key === "message" || key === "stack") continue;
+    Object.defineProperty(redacted, key, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  return redacted;
+}
+
+function provisioningErrorAttributes(error: unknown): Record<string, unknown> {
+  const structured = typeof error === "object" && error !== null
+    ? Object.fromEntries(Object.entries(error))
+    : {};
+
+  return {
+    ...structured,
+    name: error instanceof Error ? error.name : undefined,
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  };
+}
+
 export class Orchestrator extends DurableObject<Env> {
   private sql: SqlStorage;
   private meta: SessionMeta | null = null;
@@ -147,7 +220,11 @@ export class Orchestrator extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.workerEnv = env;
-    this.redactionSecrets = [env.CODEVIL_API_KEY, env.CODEVIL_LLM_KEY, env.GITHUB_PAT].filter((secret): secret is string => Boolean(secret));
+    this.redactionSecrets = [
+      env.CODEVIL_API_KEY,
+      ...collectProviderCredentialSecrets(env),
+      env.GITHUB_PAT,
+    ].filter((secret): secret is string => Boolean(secret));
     this.sql = ctx.storage.sql;
 
     this.sql.exec(`
@@ -1309,32 +1386,27 @@ export class Orchestrator extends DurableObject<Env> {
     const tracer = this.getTracer();
     try {
       const wsUrl = buildSandboxWebSocketUrl(this.meta.worker_url, this.meta.session_id);
-      await tracer!.span(
-        "sandbox.provision",
-        {
-          attributes: {
-            provider: this.meta.provider,
-            plan_model: this.meta.plan_model,
-            has_llm_key: Boolean(this.workerEnv.CODEVIL_LLM_KEY),
-          },
+      const provisioningContext = getProvisioningCredentialContext(this.workerEnv, this.meta.provider);
+      await traceSandboxProvisioning({
+        tracer: tracer!,
+        secrets: this.redactionSecrets,
+        attributes: {
+          provider: this.meta.provider,
+          plan_model: this.meta.plan_model,
+          has_llm_key: provisioningContext.hasLlmKey,
         },
-        () =>
+        provision: () =>
           provisionSandbox({
             binding: this.workerEnv.Sandbox,
             sessionId: this.meta!.session_id,
             wsUrl,
             apiKey: this.workerEnv.CODEVIL_API_KEY,
             provider: this.meta!.provider,
-            llmKey: this.workerEnv.CODEVIL_LLM_KEY,
+            llmKey: provisioningContext.llmKey,
           }),
-      );
+      });
       this.appendAndBroadcast({ type: "status", message: "Sandbox process started." });
     } catch (error) {
-      tracer?.log("ERROR", "sandbox.provision.failed", {
-        name: error instanceof Error ? error.name : undefined,
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      });
       this.transition("failed");
       this.appendAndBroadcast({
         type: "error",

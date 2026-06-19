@@ -288,5 +288,9 @@ function estimateTurnDuration(entries: ActivityEntry[]): string {
 
 function estimateDuration(entry: ActivityEntry): string {
   if (entry.kind !== "tool_call") return "";
-  return entry.status === "success" ? "120ms" : entry.status;
+  // We only have a single timestamp per entry (when it started). Without a
+  // completion timestamp on the entry itself, we can't compute a real duration
+  // — so the column carries status only, not a fake number.
+  if (entry.status === "error") return "error";
+  return "";
 }

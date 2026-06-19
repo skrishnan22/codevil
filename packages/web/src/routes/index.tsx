@@ -3,17 +3,12 @@ import { useState, useEffect, useMemo } from "react";
 import { loadConfig } from "@/lib/config";
 import {
   claimSetup,
-  createInvitation,
   createSession,
   getAuthMe,
-  listInvitations,
   listSessions,
-  revokeInvitation,
   signInWithGoogle,
   signOut,
   type AuthMeResponse,
-  type InvitationRole,
-  type InvitationSummary,
 } from "@/lib/api-client";
 import { DEFAULT_CONFIG } from "@codevil/shared";
 import type { SessionSummary } from "@/types";
@@ -70,10 +65,6 @@ function saveModelPrefs(prefs: ModelPrefs): void {
   localStorage.setItem(MODEL_PREFS_KEY, JSON.stringify(prefs));
 }
 
-function canManageInvites(auth: AuthMeResponse): boolean {
-  return auth.membership?.role === "owner" || auth.membership?.role === "admin";
-}
-
 type SessionStatus = "running" | "review" | "done" | "failed" | "idle";
 
 const STATUS_LABEL: Record<SessionStatus, string> = {
@@ -108,7 +99,6 @@ function deriveStatus(session: SessionSummary): SessionStatus {
 
 const FILTERS = ["all", "running", "review", "done"] as const;
 type Filter = (typeof FILTERS)[number];
-const INVITE_ROLES: InvitationRole[] = ["admin", "developer", "viewer"];
 
 const FILTER_LABEL: Record<Filter, string> = {
   all: "All",
@@ -154,13 +144,6 @@ function HomePage() {
   const [signingOut, setSigningOut] = useState(false);
   const [setupToken, setSetupToken] = useState("");
   const [setupSubmitting, setSetupSubmitting] = useState(false);
-  const [invitations, setInvitations] = useState<InvitationSummary[]>([]);
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<InvitationRole>("developer");
-  const [inviteLoading, setInviteLoading] = useState(false);
-  const [inviteMessage, setInviteMessage] = useState<string | null>(null);
-  const [inviteError, setInviteError] = useState<string | null>(null);
-  const [lastInviteUrl, setLastInviteUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const prefs = loadModelPrefs();
@@ -182,9 +165,6 @@ function HomePage() {
       setAuthState(auth);
       if (auth.authenticated && auth.membership?.status === "active") {
         await refreshSessions();
-        if (canManageInvites(auth)) {
-          await refreshInvitations();
-        }
       }
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : String(err));
@@ -201,17 +181,6 @@ function HomePage() {
       setSessions(result.sessions);
     } catch {
       /* The create form already surfaces config/API errors. */
-    }
-  }
-
-  async function refreshInvitations() {
-    const config = loadConfig();
-    if (!config) return;
-    try {
-      const result = await listInvitations(config);
-      setInvitations(result.invitations);
-    } catch (err) {
-      setInviteError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -290,67 +259,10 @@ function HomePage() {
       const auth = await getAuthMe(config);
       setAuthState(auth);
       setSessions([]);
-      setInvitations([]);
-      setLastInviteUrl(null);
-      setInviteMessage(null);
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : String(err));
     } finally {
       setSigningOut(false);
-    }
-  }
-
-  async function handleCreateInvite(e: React.FormEvent) {
-    e.preventDefault();
-    const config = loadConfig();
-    if (!config) {
-      setInviteError("Configure your backend URL in Settings first.");
-      return;
-    }
-
-    setInviteLoading(true);
-    setInviteError(null);
-    setInviteMessage(null);
-    setLastInviteUrl(null);
-    try {
-      const result = await createInvitation(config, { email: inviteEmail.trim(), role: inviteRole });
-      if (result.status === "created") {
-        setInviteEmail("");
-        setLastInviteUrl(result.invite_url ?? null);
-        if (result.email_delivery?.status === "sent") {
-          setInviteMessage("Invite email sent.");
-        } else if (result.email_delivery?.status === "failed") {
-          setInviteMessage(`Invite created, but email failed: ${result.email_delivery.error}`);
-        } else {
-          setInviteMessage("Invite created. Email is not configured, copy the link below.");
-        }
-        await refreshInvitations();
-      } else if (result.status === "already_invited") {
-        setInviteMessage("That email already has a pending invite.");
-      } else if (result.status === "already_member") {
-        setInviteMessage("That email already belongs to a team member.");
-      } else {
-        setInviteMessage("That member is disabled and cannot be invited.");
-      }
-    } catch (err) {
-      setInviteError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setInviteLoading(false);
-    }
-  }
-
-  async function handleRevokeInvite(invitationId: string) {
-    const config = loadConfig();
-    if (!config) return;
-
-    setInviteError(null);
-    setInviteMessage(null);
-    try {
-      await revokeInvitation(config, invitationId);
-      setInviteMessage("Invite revoked.");
-      await refreshInvitations();
-    } catch (err) {
-      setInviteError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -374,10 +286,6 @@ function HomePage() {
         : sessions.filter((session) => deriveStatus(session) === filter),
     [sessions, filter],
   );
-
-  const inviteRoleOptions = authState?.membership?.role === "owner"
-    ? (["owner", ...INVITE_ROLES] as InvitationRole[])
-    : INVITE_ROLES;
 
   if (authLoading) {
     return (
@@ -476,7 +384,6 @@ function HomePage() {
             Point Codevil at a repo, pick your models, and bring your team into a shared room with the agent.
           </p>
         </section>
-        <AuthStatus auth={authState} onSignOut={handleSignOut} signingOut={signingOut} />
 
         <form className="home-launcher" onSubmit={handleSubmit}>
           <div className="home-launcher-repo">
@@ -545,59 +452,6 @@ function HomePage() {
             </button>
           </div>
         </form>
-
-        {authState && canManageInvites(authState) && (
-          <section className="home-team" aria-labelledby="team-invites-title">
-            <div className="home-sessions-head">
-              <h2 id="team-invites-title">Team invites</h2>
-            </div>
-            <form className="home-team-invite" onSubmit={handleCreateInvite}>
-              <label className="home-launcher-field">
-                <span>Email</span>
-                <input
-                  type="email"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder="alice@example.com"
-                  required
-                />
-              </label>
-              <label className="home-launcher-field">
-                <span>Role</span>
-                <select value={inviteRole} onChange={(e) => setInviteRole(e.target.value as InvitationRole)}>
-                  {inviteRoleOptions.map((role) => (
-                    <option key={role} value={role}>{role}</option>
-                  ))}
-                </select>
-              </label>
-              <button type="submit" className="home-launcher-create" disabled={!inviteEmail.trim() || inviteLoading}>
-                {inviteLoading ? "Inviting…" : "Invite"}
-              </button>
-            </form>
-            {lastInviteUrl && (
-              <div className="home-team-link">
-                <input value={lastInviteUrl} readOnly onFocus={(e) => e.currentTarget.select()} />
-              </div>
-            )}
-            {inviteMessage && <p className="home-team-note">{inviteMessage}</p>}
-            {inviteError && <p className="home-error">{inviteError}</p>}
-            {invitations.length > 0 && (
-              <div className="home-team-list">
-                {invitations.map((invitation) => (
-                  <div key={invitation.id} className="home-team-row">
-                    <span>
-                      <strong>{invitation.email}</strong>
-                      <span>{invitation.role}</span>
-                    </span>
-                    <button type="button" onClick={() => void handleRevokeInvite(invitation.id)}>
-                      Revoke
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
 
         <section className="home-sessions" aria-labelledby="recent-sessions-title">
           <div className="home-sessions-head">

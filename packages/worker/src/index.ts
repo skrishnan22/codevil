@@ -55,7 +55,7 @@ import {
 } from "./auth-redirect.js";
 import { configuredWebOrigins, missingAuthConfigKeys } from "./auth-config.js";
 import { createEmailProvider } from "./email.js";
-import { isOriginGuardedPath, requireTrustedOrigin } from "./http-guards.js";
+import { isAppShellNavigation, isOriginGuardedPath, requireTrustedOrigin } from "./http-guards.js";
 import { can, type AuthAction } from "@codevil/shared";
 
 // Subclass the Cloudflare Sandbox so Codevil can keep active agent sessions
@@ -170,7 +170,12 @@ interface Env {
   ORCHESTRATOR: DurableObjectNamespace<Orchestrator>;
   Sandbox: DurableObjectNamespace<Sandbox>;
   DB: D1Database;
+  ASSETS: Fetcher;
   CODEVIL_API_KEY: string;
+  OPENCODE_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENAI_API_KEY?: string;
+  CODEVIL_LLM_KEY?: string;
   BETTER_AUTH_URL?: string;
   BETTER_AUTH_SECRET?: string;
   GOOGLE_CLIENT_ID?: string;
@@ -286,6 +291,10 @@ export default {
       return withCors(request, env, await handleAcceptInvite(request, env, inviteAcceptMatch[1]));
     }
 
+    if (path.startsWith("/invite/") && isAppShellNavigation(request)) {
+      return env.ASSETS.fetch(request);
+    }
+
     const inviteMatch = path.match(/^\/invite\/([^/]+)$/);
     if (inviteMatch && request.method === "GET") {
       return withCors(request, env, await handleGetInvite(env, inviteMatch[1]));
@@ -353,6 +362,10 @@ export default {
       return withCors(request, env, await handleSimulate(env, simMatch[1]));
     }
 
+    if (request.method === "GET" || request.method === "HEAD") {
+      return env.ASSETS.fetch(request);
+    }
+
     return withCors(request, env, json({ error: "Not found" }, 404));
   },
 } satisfies ExportedHandler<Env>;
@@ -398,7 +411,7 @@ async function handleBetterAuth(request: Request, env: Env): Promise<Response> {
     }, 503);
   }
 
-  const auth = createCodevilAuth(env);
+  const auth = createCodevilAuth(env, new URL(request.url).origin);
   return auth.handler(request);
 }
 
@@ -499,7 +512,7 @@ async function requireAuthContext(
 }
 
 async function getAuthSession(request: Request, env: Env): Promise<AuthSession | null> {
-  const auth = createCodevilAuth(env);
+  const auth = createCodevilAuth(env, new URL(request.url).origin);
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session) return null;
 

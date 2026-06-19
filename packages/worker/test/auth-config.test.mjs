@@ -19,11 +19,17 @@ const baseEnv = {
 
 test("missingAuthConfigKeys reports absent required auth settings", () => {
   assert.deepEqual(missingAuthConfigKeys({ DB: {} }), [
-    "BETTER_AUTH_URL",
     "BETTER_AUTH_SECRET",
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
   ]);
+});
+
+test("buildAuthOptions accepts a request-derived base URL", () => {
+  const { BETTER_AUTH_URL: _, ...env } = baseEnv;
+  const options = buildAuthOptions(env, "https://codevil.example.com/");
+
+  assert.equal(options.baseURL, "https://codevil.example.com");
 });
 
 test("missingAuthConfigKeys accepts configured auth env", () => {

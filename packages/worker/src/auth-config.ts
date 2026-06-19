@@ -37,7 +37,6 @@ export interface CodevilAuthOptions {
 }
 
 const REQUIRED_AUTH_KEYS = [
-  "BETTER_AUTH_URL",
   "BETTER_AUTH_SECRET",
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
@@ -59,13 +58,14 @@ export function configuredWebOrigins(env: Pick<AuthConfigEnv, "CODEVIL_WEB_ORIGI
     .filter(Boolean);
 }
 
-export function buildAuthOptions(env: AuthConfigEnv): CodevilAuthOptions {
+export function buildAuthOptions(env: AuthConfigEnv, requestBaseURL?: string): CodevilAuthOptions {
   const missing = missingAuthConfigKeys(env);
   if (missing.length > 0) {
     throw new Error(`Missing auth config: ${missing.join(", ")}`);
   }
 
-  const baseURL = env.BETTER_AUTH_URL!.replace(/\/$/, "");
+  const baseURL = (requestBaseURL ?? env.BETTER_AUTH_URL ?? "").replace(/\/$/, "");
+  if (!baseURL) throw new Error("Missing auth base URL");
   const trustedOrigins = configuredWebOrigins(env);
   const crossSiteCookieAttributes = needsCrossSiteCookies(baseURL, trustedOrigins)
     ? { sameSite: "none" as const, secure: true as const }

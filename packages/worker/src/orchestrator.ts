@@ -449,7 +449,24 @@ export class Orchestrator extends DurableObject<Env> {
 
     this.ctx.acceptWebSocket(server, ["cli"]);
     server.serializeAttachment({ participant, auth });
-    this.replayEvents(server, cursor);
+
+    // Send the snapshot frame first if the joiner is behind the snapshot cursor.
+    // This lets late joiners hydrate from the snapshot instead of replaying all
+    // events from cursor 0.  Fresh sessions have snapshotCursor === 0, so the
+    // guard is false and the existing replay path runs unchanged.
+    let replayCursor = cursor;
+    if (cursor < this.snapshotCursor) {
+      const frame = JSON.stringify({
+        type: "snapshot",
+        path: "session",
+        cursor: this.snapshotCursor,
+        state: this.snapshot,
+      });
+      server.send(frame);
+      replayCursor = this.snapshotCursor;
+    }
+
+    this.replayEvents(server, replayCursor);
     this.appendAndBroadcast({ type: "participant_joined", participant });
 
     return new Response(null, { status: 101, webSocket: client });

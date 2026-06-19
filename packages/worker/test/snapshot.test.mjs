@@ -145,3 +145,104 @@ test("snapshot: uid pattern matches msg_<cursorId>_<subIndex> format", () => {
   subIndex = 0;
   assert.equal(uid(), "msg_42_0");
 });
+
+// ---------------------------------------------------------------------------
+// Task 5: Snapshot frame on join
+//
+// The Orchestrator class cannot be instantiated in Node (no cloudflare:workers).
+// Instead, we extract the snapshot-send logic as a pure function that mirrors
+// the guard in orchestrator.ts:fetch(), and test that directly.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure helper — mirrors the logic in Orchestrator.fetch().
+ *
+ * Returns the cursor to use for tail replay (either the original cursor or
+ * snapshotCursor if the joiner was behind).
+ *
+ * @param {object} server  - mock WS server with a `send(str)` method
+ * @param {number} cursor  - cursor the joining client sent in the URL
+ * @param {number} snapshotCursor - current snapshotCursor from the DO
+ * @param {object} snapshot - current in-memory snapshot from the DO
+ * @returns {number} the cursor to pass to replayEvents
+ */
+function sendSnapshotIfBehind(server, cursor, snapshotCursor, snapshot) {
+  if (cursor < snapshotCursor) {
+    const frame = JSON.stringify({
+      type: "snapshot",
+      path: "session",
+      cursor: snapshotCursor,
+      state: snapshot,
+    });
+    server.send(frame);
+    return snapshotCursor;
+  }
+  return cursor;
+}
+
+test("join: sends snapshot frame first when joiner cursor is behind snapshotCursor", () => {
+  const sent = [];
+  const mockServer = { send: (msg) => sent.push(msg) };
+
+  const snapshot = { sessionPhase: "executing", messages: [], participants: [] };
+  const snapshotCursor = 10;
+  const joinerCursor = 0;
+
+  const replayCursor = sendSnapshotIfBehind(mockServer, joinerCursor, snapshotCursor, snapshot);
+
+  assert.equal(sent.length, 1, "exactly one frame should be sent");
+  const frame = JSON.parse(sent[0]);
+  assert.equal(frame.type, "snapshot");
+  assert.equal(frame.path, "session");
+  assert.equal(frame.cursor, 10);
+  assert.deepEqual(frame.state, snapshot);
+  assert.equal(replayCursor, 10, "tail replay must start at snapshotCursor");
+});
+
+test("join: does not send snapshot frame when joiner cursor equals snapshotCursor", () => {
+  const sent = [];
+  const mockServer = { send: (msg) => sent.push(msg) };
+
+  const snapshot = { sessionPhase: "executing" };
+  const snapshotCursor = 10;
+
+  const replayCursor = sendSnapshotIfBehind(mockServer, 10, snapshotCursor, snapshot);
+
+  assert.equal(sent.length, 0, "no frame should be sent when cursor === snapshotCursor");
+  assert.equal(replayCursor, 10, "replayCursor stays the same");
+});
+
+test("join: does not send snapshot frame when joiner cursor is ahead of snapshotCursor", () => {
+  const sent = [];
+  const mockServer = { send: (msg) => sent.push(msg) };
+
+  const snapshot = { sessionPhase: "ready" };
+  const snapshotCursor = 5;
+
+  const replayCursor = sendSnapshotIfBehind(mockServer, 15, snapshotCursor, snapshot);
+
+  assert.equal(sent.length, 0, "no frame sent for a reconnecting client ahead of snapshot");
+  assert.equal(replayCursor, 15, "replayCursor unchanged");
+});
+
+test("join: fresh session (snapshotCursor === 0, joinerCursor === 0) skips snapshot frame", () => {
+  const sent = [];
+  const mockServer = { send: (msg) => sent.push(msg) };
+
+  // Fresh session: snapshotCursor and joinerCursor are both 0.
+  const replayCursor = sendSnapshotIfBehind(mockServer, 0, 0, {});
+
+  assert.equal(sent.length, 0, "no snapshot frame for a fresh session");
+  assert.equal(replayCursor, 0, "replayCursor stays 0");
+});
+
+test("join: snapshot frame cursor value matches snapshotCursor, not the joiner's cursor", () => {
+  const sent = [];
+  const mockServer = { send: (msg) => sent.push(msg) };
+
+  const snapshotCursor = 99;
+  sendSnapshotIfBehind(mockServer, 3, snapshotCursor, { messages: [] });
+
+  const frame = JSON.parse(sent[0]);
+  assert.equal(frame.cursor, 99, "frame.cursor must equal snapshotCursor");
+});

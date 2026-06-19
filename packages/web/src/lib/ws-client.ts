@@ -1,4 +1,5 @@
-import type { DOToCLIEvent, CLIToDOMessage } from "@codevil/shared";
+import type { DOToCLIEvent, CLIToDOMessage, SnapshotFrame } from "@codevil/shared";
+import { SnapshotFrameSchema } from "@codevil/shared";
 
 export interface EventEnvelope {
   cursor: number;
@@ -9,6 +10,7 @@ export interface WSClientOptions {
   wsUrl: string;
   initialCursor?: number;
   onEvent: (envelope: EventEnvelope) => void;
+  onSnapshot?: (frame: SnapshotFrame) => void;
   onOpen?: () => void;
   onClose?: (code: number, reason: string) => void;
   onError?: (error: Event) => void;
@@ -66,7 +68,25 @@ export function connectWebSocket(options: WSClientOptions): {
 
     ws.onmessage = (event) => {
       if (typeof event.data !== "string") return;
-      const envelope = parseEnvelope(event.data);
+
+      // Check for the snapshot frame shape before attempting to parse as an
+      // event envelope.  Snapshot frames have { type: "snapshot", path, cursor, state }.
+      const raw = JSON.parse(event.data);
+      if (raw && typeof raw === "object" && raw.type === "snapshot") {
+        const result = SnapshotFrameSchema.safeParse(raw);
+        if (result.success && options.onSnapshot) {
+          // Advance cursor so reconnects start after the snapshot.
+          cursor = Math.max(cursor, result.data.cursor);
+          options.onSnapshot(result.data);
+        }
+        return;
+      }
+
+      // Re-use the already-parsed value to avoid a second JSON.parse.
+      if (typeof raw.cursor !== "number" || !raw.event || typeof (raw.event as Record<string, unknown>).type !== "string") {
+        throw new Error("Invalid event envelope");
+      }
+      const envelope: EventEnvelope = { cursor: raw.cursor as number, event: raw.event as DOToCLIEvent };
       cursor = Math.max(cursor, envelope.cursor);
       options.onEvent(envelope);
     };

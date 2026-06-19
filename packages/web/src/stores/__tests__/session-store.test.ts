@@ -486,4 +486,156 @@ describe("session event state inference", () => {
       globalThis.WebSocket = originalWebSocket;
     }
   });
+
+  it("onSnapshot replaces all projection-derived store fields with the frame's state", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(url: string) {
+        this.url = url;
+        sockets.push(this);
+      }
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_snap",
+        "https://example.com/sessions/ses_snap/ws",
+      );
+
+      // Set some stale state that should be overwritten by the snapshot
+      useSessionStore.setState({
+        messages: [{ id: "stale", role: "system", variant: "status", content: "old", timestamp: 0 }],
+        participants: [{ id: "usr_stale", name: "Stale User" }],
+        sessionPhase: "awaiting_approval",
+        planApproved: true,
+        cursor: 5,
+      });
+
+      const snapshotState = {
+        cursor: 42,
+        sessionPhase: "executing",
+        planApproved: false,
+        messages: [
+          { id: "msg_1", role: "assistant", variant: "text", content: "hello from snapshot", timestamp: 100 },
+        ],
+        activityLog: [
+          { id: "act_1", kind: "event", status: "success", timestamp: 100, event: { label: "Session created" } },
+        ],
+        participants: [{ id: "usr_alice", name: "Alice" }],
+        preview: { status: "idle", url: null, command: null, port: null, error: null, apps: [], selectedAppKey: null, reloadRevision: 0, outputLines: [] },
+        planRevision: null,
+        annotations: [],
+        questions: [],
+        selectedAnnotationId: null,
+      };
+
+      // Simulate receiving a snapshot frame
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: "snapshot",
+          path: "session",
+          cursor: 42,
+          state: snapshotState,
+        }),
+      });
+
+      const storeState = useSessionStore.getState();
+      expect(storeState.cursor).toBe(42);
+      expect(storeState.sessionPhase).toBe("executing");
+      expect(storeState.planApproved).toBe(false);
+      expect(storeState.messages).toHaveLength(1);
+      expect(storeState.messages[0].id).toBe("msg_1");
+      expect(storeState.activityLog).toHaveLength(1);
+      expect(storeState.participants).toHaveLength(1);
+      expect(storeState.participants[0].id).toBe("usr_alice");
+      expect(storeState.annotations).toEqual([]);
+      expect(storeState.questions).toEqual([]);
+      expect(storeState.selectedAnnotationId).toBeNull();
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("onSnapshot does not affect state from a stale connection generation", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(url: string) {
+        this.url = url;
+        sockets.push(this);
+      }
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_gen",
+        "https://example.com/sessions/ses_gen/ws",
+      );
+
+      // Immediately connect again, invalidating the first generation
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_gen_2",
+        "https://example.com/sessions/ses_gen_2/ws",
+      );
+
+      // A snapshot frame arriving on the first (stale) socket should be ignored
+      const staleSnapshotState = {
+        cursor: 99,
+        sessionPhase: "completed",
+        planApproved: true,
+        messages: [{ id: "stale_msg", role: "system", variant: "status", content: "stale", timestamp: 0 }],
+        activityLog: [],
+        participants: [],
+        preview: { status: "idle", url: null, command: null, port: null, error: null, apps: [], selectedAppKey: null, reloadRevision: 0, outputLines: [] },
+        planRevision: null,
+        annotations: [],
+        questions: [],
+        selectedAnnotationId: null,
+      };
+
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: "snapshot",
+          path: "session",
+          cursor: 99,
+          state: staleSnapshotState,
+        }),
+      });
+
+      // State should not reflect the stale snapshot
+      const storeState = useSessionStore.getState();
+      expect(storeState.cursor).not.toBe(99);
+      expect(storeState.sessionPhase).not.toBe("completed");
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
 });

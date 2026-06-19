@@ -331,6 +331,27 @@ export type QuestionAssignedEvent = z.infer<typeof QuestionAssignedEventSchema>;
 export type QuestionAnsweredEvent = z.infer<typeof QuestionAnsweredEventSchema>;
 export type DOToCLIEvent = z.infer<typeof DOToCLIEventSchema>;
 
+// --- WS server frames (DO → CLI transport layer) ---
+//
+// The wire carries two distinct frame shapes:
+//   1. EventEnvelope: { cursor: number; event: DOToCLIEvent }
+//      — used for live updates and replayed tail events (unchanged)
+//   2. SnapshotFrame: { type: "snapshot"; path: string; cursor: number; state: unknown }
+//      — sent at most once per WS connection, before the event tail, so late
+//        joiners can hydrate from the snapshot instead of replaying from cursor 0.
+//
+// `state` uses z.unknown() because SessionSnapshot's nested types (ChatMessage,
+// ActivityEntry, etc.) do not have zod schemas — the server is the source of
+// truth and the client treats the snapshot as an opaque blob to apply directly.
+
+export const SnapshotFrameSchema = z.object({
+  type: z.literal("snapshot"),
+  path: z.string(),           // 'session' today; routing key for future per-run paths
+  cursor: z.number().int().nonnegative(),
+  state: z.unknown(),
+});
+export type SnapshotFrame = z.infer<typeof SnapshotFrameSchema>;
+
 // --- CLI → DO messages ---
 
 export const ApproveMessageSchema = z.object({

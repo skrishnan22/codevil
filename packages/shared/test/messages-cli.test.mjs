@@ -40,6 +40,7 @@ import {
   DOToCLIEventSchema,
   CLIToDOMessageSchema,
   PersistedDOToCLIEventSchema,
+  SnapshotFrameSchema,
 } from "../dist/index.js";
 
 // Canonical fixture for the new AnnotationAnchor shape.
@@ -545,4 +546,67 @@ test("CLIToDOMessageSchema accepts question_assign messages", () => {
     assigned_to: { id: "usr_2", name: "Bob" },
   });
   assert.equal(parsed.type, "question_assign");
+});
+
+// ---------------------------------------------------------------------------
+// SnapshotFrameSchema (Task 5)
+// ---------------------------------------------------------------------------
+
+test("SnapshotFrameSchema: parses a valid snapshot frame", () => {
+  const state = { cursor: 10, sessionPhase: "executing", messages: [] };
+  const parsed = SnapshotFrameSchema.parse({
+    type: "snapshot",
+    path: "session",
+    cursor: 10,
+    state,
+  });
+  assert.equal(parsed.type, "snapshot");
+  assert.equal(parsed.path, "session");
+  assert.equal(parsed.cursor, 10);
+  assert.deepEqual(parsed.state, state);
+});
+
+test("SnapshotFrameSchema: rejects a frame without the required type literal", () => {
+  const result = SnapshotFrameSchema.safeParse({
+    type: "event",
+    path: "session",
+    cursor: 5,
+    state: {},
+  });
+  assert.equal(result.success, false);
+});
+
+test("SnapshotFrameSchema: rejects a frame with a negative cursor", () => {
+  const result = SnapshotFrameSchema.safeParse({
+    type: "snapshot",
+    path: "session",
+    cursor: -1,
+    state: {},
+  });
+  assert.equal(result.success, false);
+});
+
+test("SnapshotFrameSchema: rejects a frame missing the path field", () => {
+  const result = SnapshotFrameSchema.safeParse({
+    type: "snapshot",
+    cursor: 5,
+    state: {},
+  });
+  assert.equal(result.success, false);
+});
+
+test("SnapshotFrameSchema: accepts a state with arbitrary nested structure", () => {
+  const complexState = {
+    messages: [{ id: "m1", role: "user", content: "hello" }],
+    participants: [{ id: "usr_1", name: "Alice" }],
+    preview: { status: "idle" },
+    nested: { deep: { value: 42 } },
+  };
+  const parsed = SnapshotFrameSchema.parse({
+    type: "snapshot",
+    path: "session",
+    cursor: 0,
+    state: complexState,
+  });
+  assert.deepEqual(parsed.state, complexState);
 });

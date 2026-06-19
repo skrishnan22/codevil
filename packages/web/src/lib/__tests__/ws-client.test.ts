@@ -1,5 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { buildWebSocketUrl, connectWebSocket, parseEnvelope } from "../ws-client";
+import type { SnapshotFrame } from "@codevil/shared";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -107,6 +108,123 @@ describe("connectWebSocket", () => {
       expect(reconnecting).toHaveBeenCalled();
       vi.runOnlyPendingTimers();
       expect(sockets[1].url).toContain("cursor=9");
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("calls onSnapshot when a snapshot frame is received and skips onEvent", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(public url: string) { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    try {
+      const onEvent = vi.fn();
+      const onSnapshot = vi.fn();
+
+      connectWebSocket({
+        wsUrl: "wss://example.com/sessions/ses_1/ws",
+        onEvent,
+        onSnapshot,
+      });
+
+      const snapshotFrame = {
+        type: "snapshot",
+        path: "session",
+        cursor: 42,
+        state: { sessionPhase: "executing", messages: [], participants: [] },
+      };
+      sockets[0].onmessage?.({ data: JSON.stringify(snapshotFrame) });
+
+      expect(onSnapshot).toHaveBeenCalledTimes(1);
+      const received = onSnapshot.mock.calls[0][0] as SnapshotFrame;
+      expect(received.type).toBe("snapshot");
+      expect(received.cursor).toBe(42);
+      expect(received.path).toBe("session");
+      expect(onEvent).not.toHaveBeenCalled();
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("advances the cursor after receiving a snapshot frame so reconnects resume after it", () => {
+    vi.useFakeTimers();
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(public url: string) { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    try {
+      connectWebSocket({
+        wsUrl: "wss://example.com/sessions/ses_1/ws",
+        onEvent() {},
+        onSnapshot() {},
+      });
+
+      // Receive a snapshot at cursor 99
+      sockets[0].onmessage?.({ data: JSON.stringify({ type: "snapshot", path: "session", cursor: 99, state: {} }) });
+      // Trigger a reconnect
+      sockets[0].onclose?.({ code: 1006, reason: "" });
+      vi.runOnlyPendingTimers();
+
+      // The reconnect URL should resume from cursor 99 (or higher)
+      expect(sockets[1].url).toContain("cursor=99");
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("ignores a malformed snapshot frame (missing cursor) without crashing", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(public url: string) { sockets.push(this); }
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    try {
+      const onSnapshot = vi.fn();
+      connectWebSocket({
+        wsUrl: "wss://example.com/sessions/ses_1/ws",
+        onEvent() {},
+        onSnapshot,
+      });
+
+      // Missing `cursor` field — safeParse should fail, onSnapshot should not be called
+      sockets[0].onmessage?.({ data: JSON.stringify({ type: "snapshot", path: "session", state: {} }) });
+      expect(onSnapshot).not.toHaveBeenCalled();
     } finally {
       globalThis.WebSocket = originalWebSocket;
     }

@@ -83,8 +83,9 @@ export function connectWebSocket(options: WSClientOptions): {
       }
 
       // Re-use the already-parsed value to avoid a second JSON.parse.
+      // Silently drop malformed envelopes — symmetric with the snapshot frame path above.
       if (typeof raw.cursor !== "number" || !raw.event || typeof (raw.event as Record<string, unknown>).type !== "string") {
-        throw new Error("Invalid event envelope");
+        return;
       }
       const envelope: EventEnvelope = { cursor: raw.cursor as number, event: raw.event as DOToCLIEvent };
       cursor = Math.max(cursor, envelope.cursor);

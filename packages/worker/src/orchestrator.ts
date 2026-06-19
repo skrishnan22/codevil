@@ -68,6 +68,8 @@ import {
   socketAuthFromRequest,
   type SocketAuthContext,
 } from "./ws-authorization.js";
+import { sendSnapshotIfBehind } from "./snapshot-frame.js";
+export { sendSnapshotIfBehind } from "./snapshot-frame.js";
 
 interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
@@ -454,17 +456,12 @@ export class Orchestrator extends DurableObject<Env> {
     // This lets late joiners hydrate from the snapshot instead of replaying all
     // events from cursor 0.  Fresh sessions have snapshotCursor === 0, so the
     // guard is false and the existing replay path runs unchanged.
-    let replayCursor = cursor;
-    if (cursor < this.snapshotCursor) {
-      const frame = JSON.stringify({
-        type: "snapshot",
-        path: "session",
-        cursor: this.snapshotCursor,
-        state: this.snapshot,
-      });
-      server.send(frame);
-      replayCursor = this.snapshotCursor;
-    }
+    const replayCursor = sendSnapshotIfBehind(
+      (data) => server.send(data),
+      cursor,
+      this.snapshotCursor,
+      this.snapshot,
+    );
 
     this.replayEvents(server, replayCursor);
     this.appendAndBroadcast({ type: "participant_joined", participant });

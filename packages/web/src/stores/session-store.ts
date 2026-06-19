@@ -241,7 +241,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         const snap = frame.state as SessionSnapshot;
         set((state) => ({
           cursor: frame.cursor,
-          sessionPhase: snap.sessionPhase ?? state.sessionPhase,
+          sessionPhase: snap.sessionPhase,
           planApproved: snap.planApproved,
           messages: snap.messages,
           activityLog: snap.activityLog,

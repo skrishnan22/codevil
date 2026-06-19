@@ -565,6 +565,8 @@ describe("session event state inference", () => {
       expect(storeState.annotations).toEqual([]);
       expect(storeState.questions).toEqual([]);
       expect(storeState.selectedAnnotationId).toBeNull();
+      expect(storeState.preview).toEqual(snapshotState.preview);
+      expect(storeState.planRevision).toEqual(snapshotState.planRevision);
     } finally {
       globalThis.WebSocket = originalWebSocket;
     }

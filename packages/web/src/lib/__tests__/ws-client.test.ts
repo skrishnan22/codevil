@@ -43,24 +43,36 @@ describe("parseEnvelope", () => {
 });
 
 describe("connectWebSocket", () => {
+  // Shared FakeWebSocket class used across tests in this describe block.
+  // Individual tests that need custom behaviour (e.g. readyState = 0 on
+  // construction, or a `sent` array) override only what they need via the
+  // per-test `sockets` array captured in the constructor.
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = FakeWebSocket.OPEN;
+    sent: string[] = [];
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onclose: ((event: { code: number; reason: string }) => void) | null = null;
+    onerror: ((event: Event) => void) | null = null;
+    constructor(public url: string) {}
+    send(message: string) { this.sent.push(message); }
+    close() {}
+  }
+
   it("queues messages while connecting and flushes them when open", () => {
     const originalWebSocket = globalThis.WebSocket;
     const sockets: FakeWebSocket[] = [];
 
-    class FakeWebSocket {
-      static OPEN = 1;
-      readyState = 0;
-      sent: string[] = [];
-      onopen: (() => void) | null = null;
-      onmessage: ((event: { data: string }) => void) | null = null;
-      onclose: ((event: { code: number; reason: string }) => void) | null = null;
-      onerror: ((event: Event) => void) | null = null;
-      constructor(public url: string) { sockets.push(this); }
-      send(message: string) { this.sent.push(message); }
-      close() {}
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url);
+        this.readyState = 0;
+        sockets.push(this);
+      }
     }
 
-    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
     try {
       const client = connectWebSocket({
         wsUrl: "wss://example.com/sessions/ses_1/ws",
@@ -83,19 +95,15 @@ describe("connectWebSocket", () => {
     const sockets: FakeWebSocket[] = [];
     const reconnecting = vi.fn();
 
-    class FakeWebSocket {
-      static OPEN = 1;
-      readyState = 0;
-      onopen: (() => void) | null = null;
-      onmessage: ((event: { data: string }) => void) | null = null;
-      onclose: ((event: { code: number; reason: string }) => void) | null = null;
-      onerror: ((event: Event) => void) | null = null;
-      constructor(public url: string) { sockets.push(this); }
-      send() {}
-      close() {}
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url);
+        this.readyState = 0;
+        sockets.push(this);
+      }
     }
 
-    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
     try {
       connectWebSocket({
         wsUrl: "wss://example.com/sessions/ses_1/ws",
@@ -117,19 +125,11 @@ describe("connectWebSocket", () => {
     const originalWebSocket = globalThis.WebSocket;
     const sockets: FakeWebSocket[] = [];
 
-    class FakeWebSocket {
-      static OPEN = 1;
-      readyState = FakeWebSocket.OPEN;
-      onopen: (() => void) | null = null;
-      onmessage: ((event: { data: string }) => void) | null = null;
-      onclose: ((event: { code: number; reason: string }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      constructor(public url: string) { sockets.push(this); }
-      send() {}
-      close() {}
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) { super(url); sockets.push(this); }
     }
 
-    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
     try {
       const onEvent = vi.fn();
       const onSnapshot = vi.fn();
@@ -164,19 +164,11 @@ describe("connectWebSocket", () => {
     const originalWebSocket = globalThis.WebSocket;
     const sockets: FakeWebSocket[] = [];
 
-    class FakeWebSocket {
-      static OPEN = 1;
-      readyState = FakeWebSocket.OPEN;
-      onopen: (() => void) | null = null;
-      onmessage: ((event: { data: string }) => void) | null = null;
-      onclose: ((event: { code: number; reason: string }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      constructor(public url: string) { sockets.push(this); }
-      send() {}
-      close() {}
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) { super(url); sockets.push(this); }
     }
 
-    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
     try {
       connectWebSocket({
         wsUrl: "wss://example.com/sessions/ses_1/ws",
@@ -201,19 +193,11 @@ describe("connectWebSocket", () => {
     const originalWebSocket = globalThis.WebSocket;
     const sockets: FakeWebSocket[] = [];
 
-    class FakeWebSocket {
-      static OPEN = 1;
-      readyState = FakeWebSocket.OPEN;
-      onopen: (() => void) | null = null;
-      onmessage: ((event: { data: string }) => void) | null = null;
-      onclose: ((event: { code: number; reason: string }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      constructor(public url: string) { sockets.push(this); }
-      send() {}
-      close() {}
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) { super(url); sockets.push(this); }
     }
 
-    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
     try {
       const onSnapshot = vi.fn();
       connectWebSocket({

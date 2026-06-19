@@ -349,6 +349,7 @@ export {
   emptyPreviewState,
   emptySessionSnapshot,
   applyToSessionSnapshot,
+  applyToChatActivity,
   inferPhase,
   inferPlanApproved,
   reducePreviewState,

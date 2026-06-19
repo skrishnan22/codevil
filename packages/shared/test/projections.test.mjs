@@ -6,6 +6,7 @@ import {
   mapEventToActivity,
   projectEvent,
   applyToSessionSnapshot,
+  applyToChatActivity,
   emptySessionSnapshot,
   inferPhase,
   inferPlanApproved,
@@ -455,4 +456,27 @@ test("applyToSessionSnapshot: messages and activityLog accumulate across events"
   snap = applyToSessionSnapshot(snap, 2, { type: "status", message: "Provisioning sandbox..." }, ctx);
   assert.ok(snap.messages.length >= 2);
   assert.ok(snap.activityLog.length >= 2);
+});
+
+// ---------------------------------------------------------------------------
+// applyToChatActivity
+// ---------------------------------------------------------------------------
+
+test("applyToChatActivity: accumulates messages and activityLog without touching structural fields", () => {
+  const ctx = makeCtx();
+  const initial = { messages: [], activityLog: [] };
+  const next = applyToChatActivity(initial, { type: "session_created", session_id: "ses_1" }, ctx);
+  assert.ok(next.messages.length >= 1, "should produce at least one message");
+  assert.ok(next.activityLog.length >= 1, "should produce at least one activity entry");
+  // applyToChatActivity returns only messages and activityLog — no structural fields.
+  assert.equal(Object.keys(next).sort().join(","), "activityLog,messages");
+});
+
+test("applyToChatActivity: accumulates across multiple events (batch simulation)", () => {
+  const ctx = makeCtx();
+  let state = { messages: [], activityLog: [] };
+  state = applyToChatActivity(state, { type: "session_created", session_id: "ses_2" }, ctx);
+  state = applyToChatActivity(state, { type: "status", message: "Provisioning sandbox..." }, ctx);
+  assert.ok(state.messages.length >= 2);
+  assert.ok(state.activityLog.length >= 2);
 });

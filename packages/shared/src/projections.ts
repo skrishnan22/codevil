@@ -129,9 +129,12 @@ export function applyToSessionSnapshot(
   const annotations = reduceAnnotations(annotationsAfterRevisionReset, event);
   const questions = reduceQuestions(snap.questions, event, ctx);
 
-  // Project messages and activity log.
-  const activityLog = projectActivity(snap.activityLog, event, ctx);
-  const messages = projectMessages(snap.messages, event, ctx);
+  // Project messages and activity log via the dedicated chat/activity helper.
+  const { messages, activityLog } = applyToChatActivity(
+    { messages: snap.messages, activityLog: snap.activityLog },
+    event,
+    ctx,
+  );
 
   return {
     cursor,
@@ -145,6 +148,24 @@ export function applyToSessionSnapshot(
     selectedAnnotationId: isNewRevision ? null : snap.selectedAnnotationId,
     messages,
     activityLog,
+  };
+}
+
+/**
+ * Projects only the `messages` and `activityLog` slices of a SessionSnapshot.
+ * Used by the web client's batched flush path, which has already advanced the
+ * seven structural reducers (phase, planApproved, preview, participants,
+ * planRevision, annotations, questions, selectedAnnotationId) per-event and
+ * only needs the heavy chat/activity fields recomputed in batch.
+ */
+export function applyToChatActivity(
+  state: Pick<SessionSnapshot, "messages" | "activityLog">,
+  event: DOToCLIEvent,
+  ctx: ProjectionContext,
+): Pick<SessionSnapshot, "messages" | "activityLog"> {
+  return {
+    messages: projectMessages(state.messages, event, ctx),
+    activityLog: projectActivity(state.activityLog, event, ctx),
   };
 }
 

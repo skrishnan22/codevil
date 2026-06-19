@@ -13,6 +13,7 @@ import type {
 } from "@codevil/shared";
 import {
   applyToSessionSnapshot,
+  applyToChatActivity,
   emptySessionSnapshot,
   // Re-export pure reducers so existing imports from session-store continue to work.
   inferPhase,
@@ -23,6 +24,13 @@ import {
   reduceAnnotations,
   reduceQuestions,
   parseRaisedAt,
+} from "@codevil/shared";
+import type {
+  ChatMessage,
+  ActivityEntry,
+  PreviewState,
+  PlanRevisionState,
+  QuestionViewModel,
 } from "@codevil/shared";
 
 export {
@@ -57,18 +65,18 @@ export type { PreviewStatus } from "@codevil/shared";
 interface SessionStoreState {
   sessionId: string | null;
   wsUrl: string | null;
-  messages: import("@codevil/shared").ChatMessage[];
-  activityLog: import("@codevil/shared").ActivityEntry[];
+  messages: ChatMessage[];
+  activityLog: ActivityEntry[];
   participants: ParticipantIdentity[];
   sessionPhase: SessionState | null;
   cursor: number;
   connectionStatus: ConnectionStatus;
   error: string | null;
   planApproved: boolean;
-  preview: import("@codevil/shared").PreviewState;
-  planRevision: import("@codevil/shared").PlanRevisionState | null;
+  preview: PreviewState;
+  planRevision: PlanRevisionState | null;
   annotations: AnnotationThread[];
-  questions: import("@codevil/shared").QuestionViewModel[];
+  questions: QuestionViewModel[];
   selectedAnnotationId: string | null;
   currentUserId: string | null;
   sessionCreatorId: string | null;
@@ -287,26 +295,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
                   uid: () => `msg_${++localCounter}`,
                   now: pending.now,
                 };
-                const snap = applyToSessionSnapshot(
-                  {
-                    cursor: state.cursor,
-                    sessionPhase: state.sessionPhase,
-                    planApproved: state.planApproved,
-                    messages,
-                    activityLog,
-                    participants: state.participants,
-                    preview: state.preview,
-                    planRevision: state.planRevision,
-                    annotations: state.annotations,
-                    questions: state.questions,
-                    selectedAnnotationId: state.selectedAnnotationId,
-                  },
-                  pending.cursor,
+                const next = applyToChatActivity(
+                  { messages, activityLog },
                   pending.event,
                   batchCtx,
                 );
-                messages = snap.messages;
-                activityLog = snap.activityLog;
+                messages = next.messages;
+                activityLog = next.activityLog;
               }
 
               return { messages, activityLog };

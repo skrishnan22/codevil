@@ -326,6 +326,43 @@ export {
   PiUnknownEventSchema,
 } from "./pi-events.js";
 
+export type {
+  ChatMessageRole,
+  ChatMessageMeta,
+  ChatMessage,
+  ActivityEntryStatus,
+  ActivityEntry,
+  PreviewStatus,
+  PreviewState,
+  PlanRevisionState,
+  QuestionAnswer,
+  QuestionViewModel,
+  ParticipantIdentity as ProjectionParticipantIdentity,
+} from "./projection-types.js";
+
+export type {
+  ProjectionContext,
+  SessionSnapshot,
+  ProjectedSessionView,
+} from "./projections.js";
+export {
+  emptyPreviewState,
+  emptySessionSnapshot,
+  applyToSessionSnapshot,
+  inferPhase,
+  inferPlanApproved,
+  reducePreviewState,
+  reducePlanRevision,
+  reduceParticipants,
+  reduceAnnotations,
+  parseRaisedAt,
+  reduceQuestions,
+  mapEventToChat,
+  mapEventToActivity,
+  projectEvent,
+  projectEvents,
+} from "./projections.js";
+
 export type { Boundary, ValidationDrop } from "./validation.js";
 export {
   parseInbound,

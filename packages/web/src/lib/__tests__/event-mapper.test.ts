@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mapEventToChat, mapEventToActivity, projectEvent } from "../event-mapper";
-import type { ProjectionContext } from "../event-mapper";
+import { mapEventToChat, mapEventToActivity, projectEvent } from "@codevil/shared";
+import type { ProjectionContext } from "@codevil/shared";
 import type { DOToCLIEvent } from "@codevil/shared";
 
 function makeCtx(now = 1_000_000): ProjectionContext {

@@ -127,7 +127,7 @@ export function applyToSessionSnapshot(
 
   const annotationsAfterRevisionReset = isNewRevision ? [] : snap.annotations;
   const annotations = reduceAnnotations(annotationsAfterRevisionReset, event);
-  const questions = reduceQuestions(snap.questions, event);
+  const questions = reduceQuestions(snap.questions, event, ctx);
 
   // Project messages and activity log.
   const activityLog = projectActivity(snap.activityLog, event, ctx);
@@ -361,18 +361,19 @@ export function reduceAnnotations(
 }
 
 /**
- * Parse an ISO `raised_at` to epoch ms, falling back to local `now` if the
+ * Parse an ISO `raised_at` to epoch ms, falling back to `fallback` if the
  * field is missing (legacy persisted events) or unparseable.
  */
-export function parseRaisedAt(raisedAt: string | undefined): number {
-  if (!raisedAt) return Date.now();
+export function parseRaisedAt(raisedAt: string | undefined, fallback: number): number {
+  if (!raisedAt) return fallback;
   const t = Date.parse(raisedAt);
-  return Number.isFinite(t) ? t : Date.now();
+  return Number.isFinite(t) ? t : fallback;
 }
 
 export function reduceQuestions(
   current: QuestionViewModel[],
   event: DOToCLIEvent,
+  ctx: ProjectionContext,
 ): QuestionViewModel[] {
   switch (event.type) {
     case "question_raised": {
@@ -390,8 +391,8 @@ export function reduceQuestions(
         assignedTo: event.assigned_to,
         status: "open",
         // Legacy persisted events (pre-schema-update) lack raised_at; their
-        // relative ordering is best-effort using local clock at reduction time.
-        raisedAt: parseRaisedAt(event.raised_at),
+        // relative ordering is best-effort using ctx.now at reduction time.
+        raisedAt: parseRaisedAt(event.raised_at, ctx.now),
       };
       return [...current, viewModel];
     }

@@ -52,7 +52,7 @@ import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
-export type PreviewStatus = "idle" | "starting" | "ready" | "error";
+export type { PreviewStatus } from "@codevil/shared";
 
 interface SessionStoreState {
   sessionId: string | null;
@@ -144,10 +144,21 @@ let localCounter = 0;
 let previewReloadTimer: ReturnType<typeof setTimeout> | null = null;
 let connectionGeneration = 0;
 const PREVIEW_RELOAD_DEBOUNCE_MS = 1_000;
+const PENDING_EVENTS_DEBOUNCE_MS = 100;
+
+// Pending events buffer for the 100 ms messages/activityLog debounce.
+// Structural fields (phase, plan, preview, participants, etc.) are applied
+// per-event; messages and activityLog are batched here and flushed at most
+// every 100 ms to avoid a re-render per streaming token.
+let pendingEvents: { cursor: number; event: DOToCLIEvent; now: number }[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function clearPendingEvents(): void {
-  // No-op: the batching debounce was removed when messages/activityLog projection
-  // was merged into applyToSessionSnapshot. Kept for call-site compatibility.
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  pendingEvents = [];
 }
 
 function clearPreviewReloadTimer(): void {
@@ -217,14 +228,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       onEvent(envelope: EventEnvelope) {
         if (generation !== connectionGeneration) return;
 
-        // Build the current snapshot from store state, apply the event, then
-        // write the updated fields back to the store (keeping the flat shape).
-        set((state) => {
-          const ctx = {
-            uid: () => `msg_${++localCounter}`,
-            now: Date.now(),
-          };
+        const now = Date.now();
+        const ctx = {
+          uid: () => `msg_${++localCounter}`,
+          now,
+        };
 
+        // Apply structural (non-streaming) fields immediately so the UI
+        // responds to phase changes, plan updates, etc. without waiting for
+        // the 100 ms debounce.  messages and activityLog are intentionally
+        // excluded here — they are batched below.
+        set((state) => {
           const currentSnap = {
             cursor: state.cursor,
             sessionPhase: state.sessionPhase,
@@ -241,12 +255,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
           const next = applyToSessionSnapshot(currentSnap, envelope.cursor, envelope.event, ctx);
 
+          // Only update the structural (non-message) fields immediately.
           return {
             cursor: next.cursor,
             sessionPhase: next.sessionPhase,
             planApproved: next.planApproved,
-            messages: next.messages,
-            activityLog: next.activityLog,
             participants: next.participants,
             preview: next.preview,
             planRevision: next.planRevision,
@@ -255,6 +268,51 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             selectedAnnotationId: next.selectedAnnotationId,
           };
         });
+
+        // Enqueue the event for the batched messages/activityLog flush.
+        pendingEvents.push({ cursor: envelope.cursor, event: envelope.event, now });
+
+        if (flushTimer === null) {
+          flushTimer = setTimeout(() => {
+            flushTimer = null;
+            const batch = pendingEvents;
+            pendingEvents = [];
+
+            set((state) => {
+              let messages = state.messages;
+              let activityLog = state.activityLog;
+
+              for (const pending of batch) {
+                const batchCtx = {
+                  uid: () => `msg_${++localCounter}`,
+                  now: pending.now,
+                };
+                const snap = applyToSessionSnapshot(
+                  {
+                    cursor: state.cursor,
+                    sessionPhase: state.sessionPhase,
+                    planApproved: state.planApproved,
+                    messages,
+                    activityLog,
+                    participants: state.participants,
+                    preview: state.preview,
+                    planRevision: state.planRevision,
+                    annotations: state.annotations,
+                    questions: state.questions,
+                    selectedAnnotationId: state.selectedAnnotationId,
+                  },
+                  pending.cursor,
+                  pending.event,
+                  batchCtx,
+                );
+                messages = snap.messages;
+                activityLog = snap.activityLog;
+              }
+
+              return { messages, activityLog };
+            });
+          }, PENDING_EVENTS_DEBOUNCE_MS);
+        }
 
         if (shouldReloadPreviewAfterEvent(envelope.event) && get().preview.status === "ready") {
           clearPreviewReloadTimer();

@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { parseRaisedAt, reduceQuestions } from "../session-store";
 import type { QuestionViewModel } from "../session-store";
-import type { DOToCLIEvent } from "@codevil/shared";
+import type { DOToCLIEvent, ProjectionContext } from "@codevil/shared";
 
 const PARTICIPANT = { id: "usr_1", name: "Alice" };
+
+function makeCtx(now = 1_000_000): ProjectionContext {
+  let counter = 0;
+  return { uid: () => `msg_${++counter}`, now };
+}
 
 function makeRaisedEvent(
   requestId: string,
@@ -45,7 +50,7 @@ function makeAnsweredEvent(requestId: string): DOToCLIEvent {
 
 describe("reduceQuestions", () => {
   it("appends a new question when question_raised", () => {
-    const result = reduceQuestions([], makeRaisedEvent("req_1"));
+    const result = reduceQuestions([], makeRaisedEvent("req_1"), makeCtx());
     expect(result).toHaveLength(1);
     expect(result[0].requestId).toBe("req_1");
     expect(result[0].status).toBe("open");
@@ -53,54 +58,59 @@ describe("reduceQuestions", () => {
   });
 
   it("dedupes by request_id: ignores a second raised event with the same id", () => {
-    const first = reduceQuestions([], makeRaisedEvent("req_1"));
-    const second = reduceQuestions(first, makeRaisedEvent("req_1"));
+    const first = reduceQuestions([], makeRaisedEvent("req_1"), makeCtx());
+    const second = reduceQuestions(first, makeRaisedEvent("req_1"), makeCtx());
     expect(second).toHaveLength(1);
     expect(second).toBe(first); // identity
   });
 
   it("tracks multiple questions independently", () => {
-    const after1 = reduceQuestions([], makeRaisedEvent("req_1"));
-    const after2 = reduceQuestions(after1, makeRaisedEvent("req_2"));
+    const ctx = makeCtx();
+    const after1 = reduceQuestions([], makeRaisedEvent("req_1"), ctx);
+    const after2 = reduceQuestions(after1, makeRaisedEvent("req_2"), ctx);
     expect(after2).toHaveLength(2);
     expect(after2[0].requestId).toBe("req_1");
     expect(after2[1].requestId).toBe("req_2");
   });
 
   it("sets status to answered and stores answer on question_answered", () => {
-    const withQuestion = reduceQuestions([], makeRaisedEvent("req_1"));
-    const result = reduceQuestions(withQuestion, makeAnsweredEvent("req_1"));
+    const ctx = makeCtx();
+    const withQuestion = reduceQuestions([], makeRaisedEvent("req_1"), ctx);
+    const result = reduceQuestions(withQuestion, makeAnsweredEvent("req_1"), ctx);
     expect(result[0].status).toBe("answered");
     expect(result[0].answer?.optionIds).toEqual(["opt_1"]);
     expect(result[0].answer?.answeredBy).toEqual(PARTICIPANT);
   });
 
   it("answered event on the correct question out of multiple", () => {
+    const ctx = makeCtx();
     const state = reduceQuestions(
-      reduceQuestions([], makeRaisedEvent("req_1")),
+      reduceQuestions([], makeRaisedEvent("req_1"), ctx),
       makeRaisedEvent("req_2"),
+      ctx,
     );
-    const result = reduceQuestions(state, makeAnsweredEvent("req_2"));
+    const result = reduceQuestions(state, makeAnsweredEvent("req_2"), ctx);
     expect(result[0].status).toBe("open");    // req_1 untouched
     expect(result[1].status).toBe("answered"); // req_2 answered
   });
 
   it("returns current by identity for unknown request_id on answered event", () => {
     const state: QuestionViewModel[] = [];
-    const result = reduceQuestions(state, makeAnsweredEvent("nonexistent"));
+    const result = reduceQuestions(state, makeAnsweredEvent("nonexistent"), makeCtx());
     expect(result).toBe(state);
   });
 
   it("returns current by identity on already-answered question (no mutation)", () => {
-    const withQ = reduceQuestions([], makeRaisedEvent("req_1"));
-    const answered = reduceQuestions(withQ, makeAnsweredEvent("req_1"));
-    const again = reduceQuestions(answered, makeAnsweredEvent("req_1"));
+    const ctx = makeCtx();
+    const withQ = reduceQuestions([], makeRaisedEvent("req_1"), ctx);
+    const answered = reduceQuestions(withQ, makeAnsweredEvent("req_1"), ctx);
+    const again = reduceQuestions(answered, makeAnsweredEvent("req_1"), ctx);
     expect(again).toBe(answered); // identity
   });
 
   it("returns current by identity on unrelated events", () => {
     const state: QuestionViewModel[] = [];
-    const result = reduceQuestions(state, { type: "status", message: "hello" });
+    const result = reduceQuestions(state, { type: "status", message: "hello" }, makeCtx());
     expect(result).toBe(state);
   });
 
@@ -112,7 +122,7 @@ describe("reduceQuestions", () => {
       options: [{ id: "opt_a", label: "Option A" }],
       context: "some context",
     });
-    const [vm] = reduceQuestions([], event);
+    const [vm] = reduceQuestions([], event, makeCtx());
     expect(vm.allowFreeform).toBe(true);
     expect(vm.allowMultiple).toBe(true);
     expect(vm.answerableBy).toBe("anyone");
@@ -126,20 +136,21 @@ describe("reduceQuestions", () => {
       answerable_by: "assigned",
       assigned_to: { id: "usr_2", name: "Bob" },
     });
-    const [vm] = reduceQuestions([], event);
+    const [vm] = reduceQuestions([], event, makeCtx());
     expect(vm.answerableBy).toBe("assigned");
     expect(vm.assignedTo).toEqual({ id: "usr_2", name: "Bob" });
   });
 
   it("updates an open question on question_assigned", () => {
-    const state = reduceQuestions([], makeRaisedEvent("req_1"));
+    const ctx = makeCtx();
+    const state = reduceQuestions([], makeRaisedEvent("req_1"), ctx);
     const result = reduceQuestions(state, {
       type: "question_assigned",
       request_id: "req_1",
       assigned_to: { id: "usr_2", name: "Bob" },
       assigned_by: { id: "usr_1", name: "Alice" },
       assigned_at: "2024-01-01T00:00:01.000Z",
-    });
+    }, ctx);
     expect(result[0].answerableBy).toBe("assigned");
     expect(result[0].assignedTo).toEqual({ id: "usr_2", name: "Bob" });
   });
@@ -152,48 +163,42 @@ describe("reduceQuestions", () => {
       assigned_to: { id: "usr_2", name: "Bob" },
       assigned_by: { id: "usr_1", name: "Alice" },
       assigned_at: "2024-01-01T00:00:01.000Z",
-    });
+    }, makeCtx());
     expect(result).toBe(state);
   });
 
   it("derives raisedAt from raised_at on the event", () => {
     const event = makeRaisedEvent("req_t", { raised_at: "2024-06-01T12:34:56.000Z" });
-    const [vm] = reduceQuestions([], event);
+    const [vm] = reduceQuestions([], event, makeCtx());
     expect(vm.raisedAt).toBe(Date.parse("2024-06-01T12:34:56.000Z"));
   });
 
-  it("falls back to local time when raised_at is missing (legacy persisted event)", () => {
+  it("falls back to ctx.now when raised_at is missing (legacy persisted event)", () => {
     // Simulate a legacy event by stripping raised_at after construction.
     const event = makeRaisedEvent("req_legacy");
     delete (event as { raised_at?: string }).raised_at;
-    const before = Date.now();
-    const [vm] = reduceQuestions([], event);
-    const after = Date.now();
-    expect(vm.raisedAt).toBeGreaterThanOrEqual(before);
-    expect(vm.raisedAt).toBeLessThanOrEqual(after);
+    const ctx = makeCtx(9_999_999);
+    const [vm] = reduceQuestions([], event, ctx);
+    expect(vm.raisedAt).toBe(9_999_999);
   });
 });
 
 describe("parseRaisedAt", () => {
   it("parses an ISO timestamp", () => {
-    expect(parseRaisedAt("2024-01-01T00:00:00.000Z")).toBe(
+    expect(parseRaisedAt("2024-01-01T00:00:00.000Z", 9999)).toBe(
       Date.parse("2024-01-01T00:00:00.000Z"),
     );
   });
 
-  it("falls back to Date.now() when undefined", () => {
-    const before = Date.now();
-    const out = parseRaisedAt(undefined);
-    const after = Date.now();
-    expect(out).toBeGreaterThanOrEqual(before);
-    expect(out).toBeLessThanOrEqual(after);
+  it("falls back to the provided fallback when undefined", () => {
+    const fallback = 1234567890;
+    const out = parseRaisedAt(undefined, fallback);
+    expect(out).toBe(fallback);
   });
 
-  it("falls back to Date.now() when input is unparseable", () => {
-    const before = Date.now();
-    const out = parseRaisedAt("not-a-date");
-    const after = Date.now();
-    expect(out).toBeGreaterThanOrEqual(before);
-    expect(out).toBeLessThanOrEqual(after);
+  it("falls back to the provided fallback when input is unparseable", () => {
+    const fallback = 9999;
+    const out = parseRaisedAt("not-a-date", fallback);
+    expect(out).toBe(fallback);
   });
 });

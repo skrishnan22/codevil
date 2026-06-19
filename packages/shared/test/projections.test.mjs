@@ -374,7 +374,7 @@ test("reduceQuestions: appends a new question when question_raised", () => {
     answerable_by: "decider",
     status: "open",
     raised_at: "2024-01-01T00:00:00.000Z",
-  });
+  }, makeCtx());
   assert.equal(result.length, 1);
   assert.equal(result[0].requestId, "req_1");
   assert.equal(result[0].status, "open");
@@ -386,16 +386,21 @@ test("reduceQuestions: appends a new question when question_raised", () => {
 
 test("parseRaisedAt: parses an ISO timestamp", () => {
   assert.equal(
-    parseRaisedAt("2024-01-01T00:00:00.000Z"),
+    parseRaisedAt("2024-01-01T00:00:00.000Z", 9999),
     Date.parse("2024-01-01T00:00:00.000Z"),
   );
 });
 
-test("parseRaisedAt: falls back to Date.now() when undefined", () => {
-  const before = Date.now();
-  const out = parseRaisedAt(undefined);
-  const after = Date.now();
-  assert.ok(out >= before && out <= after);
+test("parseRaisedAt: falls back to the provided fallback when undefined", () => {
+  const fallback = 1234567890;
+  const out = parseRaisedAt(undefined, fallback);
+  assert.equal(out, fallback);
+});
+
+test("parseRaisedAt: falls back to the provided fallback when unparseable", () => {
+  const fallback = 9999;
+  const out = parseRaisedAt("not-a-date", fallback);
+  assert.equal(out, fallback);
 });
 
 // ---------------------------------------------------------------------------

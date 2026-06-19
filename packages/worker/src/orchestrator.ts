@@ -284,7 +284,6 @@ export class Orchestrator extends DurableObject<Env> {
         cancelled_reason TEXT,
         created_at TEXT NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS idx_events_path_id ON events(path, id);
       CREATE TABLE IF NOT EXISTS snapshots (
         path        TEXT PRIMARY KEY,
         cursor      INTEGER NOT NULL,
@@ -305,6 +304,10 @@ export class Orchestrator extends DurableObject<Env> {
       const message = error instanceof Error ? error.message : String(error);
       if (!message.toLowerCase().includes("duplicate column")) throw error;
     }
+    // Index runs after the column is guaranteed to exist (either added above or pre-existing).
+    this.sql.exec(
+      "CREATE INDEX IF NOT EXISTS idx_events_path_id ON events(path, id)"
+    );
   }
 
   private ensureQuestionAssignmentColumns(): void {

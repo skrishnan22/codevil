@@ -284,8 +284,27 @@ export class Orchestrator extends DurableObject<Env> {
         cancelled_reason TEXT,
         created_at TEXT NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_events_path_id ON events(path, id);
+      CREATE TABLE IF NOT EXISTS snapshots (
+        path        TEXT PRIMARY KEY,
+        cursor      INTEGER NOT NULL,
+        state_json  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      );
     `);
+    this.ensureEventPathColumn();
     this.ensureQuestionAssignmentColumns();
+  }
+
+  private ensureEventPathColumn(): void {
+    // ALTER TABLE cannot use IF NOT EXISTS in SQLite; wrap in try/catch to
+    // gracefully handle re-initialization on already-migrated DOs.
+    try {
+      this.sql.exec("ALTER TABLE events ADD COLUMN path TEXT NOT NULL DEFAULT 'session'");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.toLowerCase().includes("duplicate column")) throw error;
+    }
   }
 
   private ensureQuestionAssignmentColumns(): void {

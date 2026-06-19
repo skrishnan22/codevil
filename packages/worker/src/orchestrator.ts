@@ -122,6 +122,16 @@ export interface InitOptions {
   created_by?: ParticipantIdentity;
 }
 
+// Event types that indicate the session reached a significant milestone.
+// Declared at module scope so it is allocated once per process, not per event.
+const SNAPSHOT_TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "agent_run_completed",
+  "agent_run_failed",
+  "room_ready",
+  "complete",
+  "verification_failed",
+]);
+
 // State → phase span name. Phase spans live across multiple WS messages,
 // so we hold the open Span on the DO instance and end it on transition out.
 const PHASE_SPAN_NAMES: Partial<Record<SessionState, string>> = {
@@ -369,6 +379,7 @@ export class Orchestrator extends DurableObject<Env> {
     // re-arm the alarm via scheduleSnapshotPersist().
     this.snapshotAlarmScheduled = false;
     if (this.snapshotDirty) {
+      // persistSnapshot is synchronous (workerd SqlStorage.exec is sync). If it becomes async, this needs `await`.
       this.persistSnapshot();
     }
 
@@ -2335,14 +2346,7 @@ export class Orchestrator extends DurableObject<Env> {
     }
 
     // Persist synchronously on terminal events; otherwise debounce via alarm.
-    const TERMINAL_TYPES = new Set([
-      "agent_run_completed",
-      "agent_run_failed",
-      "room_ready",
-      "complete",
-      "verification_failed",
-    ]);
-    if (TERMINAL_TYPES.has(redacted.type)) {
+    if (SNAPSHOT_TERMINAL_EVENT_TYPES.has(redacted.type)) {
       this.persistSnapshot();
     } else {
       this.scheduleSnapshotPersist();
@@ -2406,6 +2410,7 @@ export class Orchestrator extends DurableObject<Env> {
     );
   }
 
+  // Hydrates session_meta and the latest persisted snapshot from SQLite. Called once on cold-start.
   private loadMeta(): void {
     if (this.meta) return;
     const row = this.sql.exec(
@@ -2420,6 +2425,8 @@ export class Orchestrator extends DurableObject<Env> {
 
     // Hydrate the snapshot from the snapshots table on first cold-start load.
     if (!this.snapshotHydrated) {
+      // Set the guard before parsing so a corrupt row doesn't trigger infinite re-hydration attempts.
+      // On parse failure we keep the empty snapshot defaults; the next append rebuilds from scratch.
       this.snapshotHydrated = true;
       const snapRow = this.sql.exec(
         "SELECT cursor, state_json FROM snapshots WHERE path = ?",

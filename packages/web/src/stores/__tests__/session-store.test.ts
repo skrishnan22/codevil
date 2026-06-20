@@ -759,16 +759,14 @@ describe("session event state inference", () => {
     globalThis.WebSocket = makeFakeWebSocket(sockets) as unknown as typeof WebSocket;
 
     try {
-      useSessionStore.setState({ cursor: 42 });
       useSessionStore.getState().connectToSession(
         { endpoint: "https://example.com" },
         "ses_empty_batch",
         "https://example.com/sessions/ses_empty_batch/ws",
-        { initialCursor: 42 },
       );
 
-      // The connectToSession resets the cursor to 0 for a new session.
-      // Send an empty replay_batch — cursor should not advance beyond 0.
+      // connectToSession starts a fresh session at cursor 0.
+      // An empty replay_batch ("you're up to date") must not advance the cursor.
       sockets[0].onmessage?.({
         data: JSON.stringify({ type: "replay_batch", events: [] }),
       });

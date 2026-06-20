@@ -70,7 +70,6 @@ import {
 import { sendSnapshotIfBehind } from "./snapshot-frame.js";
 export { sendSnapshotIfBehind } from "./snapshot-frame.js";
 import { buildReplayBatch } from "./replay-batch.js";
-export { buildReplayBatch } from "./replay-batch.js";
 
 interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;

@@ -1,6 +1,39 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { inferPhase, inferPlanApproved, reduceParticipants, reducePreviewState, useSessionStore } from "../session-store";
 
+// Minimal WebSocket stub shape used by replay_batch tests that share this definition.
+interface IFakeWebSocket {
+  url: string;
+  readyState: number;
+  onopen: (() => void) | null;
+  onmessage: ((event: { data: string }) => void) | null;
+  onclose: ((event: { code: number; reason: string }) => void) | null;
+  onerror: (() => void) | null;
+  send(): void;
+  close(): void;
+}
+
+// Factory that creates a FakeWebSocket constructor which pushes instances
+// into the provided `sockets` array.  Used by the three onReplayBatch tests
+// to avoid repeating the same 15-line class body verbatim.
+function makeFakeWebSocket(sockets: IFakeWebSocket[]) {
+  return class {
+    static OPEN = 1;
+    readyState = 1;
+    url: string;
+    onopen: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    onclose: ((event: { code: number; reason: string }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(url: string) {
+      this.url = url;
+      (sockets as unknown[]).push(this);
+    }
+    send() {}
+    close() {}
+  };
+}
+
 describe("session event state inference", () => {
   afterEach(() => {
     useSessionStore.getState().reset();
@@ -643,25 +676,8 @@ describe("session event state inference", () => {
 
   it("onReplayBatch applies all events in order in a single update", () => {
     const originalWebSocket = globalThis.WebSocket;
-    const sockets: FakeWebSocket[] = [];
-
-    class FakeWebSocket {
-      static OPEN = 1;
-      readyState = FakeWebSocket.OPEN;
-      url: string;
-      onopen: (() => void) | null = null;
-      onmessage: ((event: { data: string }) => void) | null = null;
-      onclose: ((event: { code: number; reason: string }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      constructor(url: string) {
-        this.url = url;
-        sockets.push(this);
-      }
-      send() {}
-      close() {}
-    }
-
-    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const sockets: IFakeWebSocket[] = [];
+    globalThis.WebSocket = makeFakeWebSocket(sockets) as unknown as typeof WebSocket;
 
     try {
       useSessionStore.getState().connectToSession(
@@ -697,27 +713,50 @@ describe("session event state inference", () => {
     }
   });
 
+  it("replay_batch is applied synchronously without draining timers (bypasses pendingEvents debounce)", () => {
+    vi.useFakeTimers();
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: IFakeWebSocket[] = [];
+    globalThis.WebSocket = makeFakeWebSocket(sockets) as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_sync",
+        "https://example.com/sessions/ses_sync/ws",
+      );
+
+      // Dispatch a replay_batch with two events.
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: "replay_batch",
+          events: [
+            { cursor: 1, event: { type: "session_created", session_id: "ses_sync" } },
+            {
+              cursor: 2,
+              event: {
+                type: "participant_joined",
+                participant: { id: "usr_sync", name: "SyncUser" },
+              },
+            },
+          ],
+        }),
+      });
+
+      // State must reflect the batch IMMEDIATELY — no timer advancement allowed.
+      // If this fails, onReplayBatch mistakenly queued events onto pendingEvents.
+      const storeState = useSessionStore.getState();
+      expect(storeState.cursor).toBe(2);
+      expect(storeState.participants.some((p: { id: string }) => p.id === "usr_sync")).toBe(true);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
   it("onReplayBatch with empty events does not change cursor", () => {
     const originalWebSocket = globalThis.WebSocket;
-    const sockets: FakeWebSocket[] = [];
-
-    class FakeWebSocket {
-      static OPEN = 1;
-      readyState = FakeWebSocket.OPEN;
-      url: string;
-      onopen: (() => void) | null = null;
-      onmessage: ((event: { data: string }) => void) | null = null;
-      onclose: ((event: { code: number; reason: string }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      constructor(url: string) {
-        this.url = url;
-        sockets.push(this);
-      }
-      send() {}
-      close() {}
-    }
-
-    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const sockets: IFakeWebSocket[] = [];
+    globalThis.WebSocket = makeFakeWebSocket(sockets) as unknown as typeof WebSocket;
 
     try {
       useSessionStore.setState({ cursor: 42 });
@@ -742,25 +781,8 @@ describe("session event state inference", () => {
 
   it("onReplayBatch from a stale connection is ignored", () => {
     const originalWebSocket = globalThis.WebSocket;
-    const sockets: FakeWebSocket[] = [];
-
-    class FakeWebSocket {
-      static OPEN = 1;
-      readyState = FakeWebSocket.OPEN;
-      url: string;
-      onopen: (() => void) | null = null;
-      onmessage: ((event: { data: string }) => void) | null = null;
-      onclose: ((event: { code: number; reason: string }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      constructor(url: string) {
-        this.url = url;
-        sockets.push(this);
-      }
-      send() {}
-      close() {}
-    }
-
-    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const sockets: IFakeWebSocket[] = [];
+    globalThis.WebSocket = makeFakeWebSocket(sockets) as unknown as typeof WebSocket;
 
     try {
       useSessionStore.getState().connectToSession(

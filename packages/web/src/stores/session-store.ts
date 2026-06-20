@@ -258,6 +258,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         // Intentionally bypasses the 100 ms pendingEvents debounce: a replay
         // batch is a one-shot bulk delivery, not a live token-streaming burst.
         // All events are reduced in a single set() call for immediate rendering.
+        const batchNow = Date.now();
         set((state) => {
           let snap: SessionSnapshot = {
             cursor: state.cursor,
@@ -275,7 +276,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           for (const item of frame.events) {
             const ctx: ProjectionContext = {
               uid: () => `msg_${++localCounter}`,
-              now: Date.now(),
+              now: batchNow,
             };
             snap = applyToSessionSnapshot(snap, item.cursor, item.event as DOToCLIEvent, ctx);
           }

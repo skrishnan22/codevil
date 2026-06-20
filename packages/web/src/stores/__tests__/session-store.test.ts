@@ -640,4 +640,162 @@ describe("session event state inference", () => {
       globalThis.WebSocket = originalWebSocket;
     }
   });
+
+  it("onReplayBatch applies all events in order in a single update", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(url: string) {
+        this.url = url;
+        sockets.push(this);
+      }
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_batch",
+        "https://example.com/sessions/ses_batch/ws",
+      );
+
+      // Send a replay_batch with a session_created and a participant_joined
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: "replay_batch",
+          events: [
+            { cursor: 1, event: { type: "session_created", session_id: "ses_batch" } },
+            {
+              cursor: 2,
+              event: {
+                type: "participant_joined",
+                participant: { id: "usr_alice", name: "Alice" },
+              },
+            },
+          ],
+        }),
+      });
+
+      const storeState = useSessionStore.getState();
+      // Cursor should advance to the last event's cursor
+      expect(storeState.cursor).toBe(2);
+      // Participant should be reflected in the store
+      expect(storeState.participants.some((p: { id: string }) => p.id === "usr_alice")).toBe(true);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("onReplayBatch with empty events does not change cursor", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(url: string) {
+        this.url = url;
+        sockets.push(this);
+      }
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.setState({ cursor: 42 });
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_empty_batch",
+        "https://example.com/sessions/ses_empty_batch/ws",
+        { initialCursor: 42 },
+      );
+
+      // The connectToSession resets the cursor to 0 for a new session.
+      // Send an empty replay_batch — cursor should not advance beyond 0.
+      sockets[0].onmessage?.({
+        data: JSON.stringify({ type: "replay_batch", events: [] }),
+      });
+
+      expect(useSessionStore.getState().cursor).toBe(0);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("onReplayBatch from a stale connection is ignored", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class FakeWebSocket {
+      static OPEN = 1;
+      readyState = FakeWebSocket.OPEN;
+      url: string;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(url: string) {
+        this.url = url;
+        sockets.push(this);
+      }
+      send() {}
+      close() {}
+    }
+
+    globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+    try {
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_stale_1",
+        "https://example.com/sessions/ses_stale_1/ws",
+      );
+      // Immediately connect again, invalidating the first generation
+      useSessionStore.getState().connectToSession(
+        { endpoint: "https://example.com" },
+        "ses_stale_2",
+        "https://example.com/sessions/ses_stale_2/ws",
+      );
+
+      // A replay_batch on the first (stale) socket should be ignored
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: "replay_batch",
+          events: [
+            {
+              cursor: 99,
+              event: {
+                type: "participant_joined",
+                participant: { id: "usr_stale", name: "Stale" },
+              },
+            },
+          ],
+        }),
+      });
+
+      const storeState = useSessionStore.getState();
+      expect(storeState.cursor).not.toBe(99);
+      expect(storeState.participants.some((p: { id: string }) => p.id === "usr_stale")).toBe(false);
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
 });

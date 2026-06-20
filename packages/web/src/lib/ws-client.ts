@@ -1,5 +1,5 @@
-import type { DOToCLIEvent, CLIToDOMessage, SnapshotFrame } from "@codevil/shared";
-import { SnapshotFrameSchema } from "@codevil/shared";
+import type { DOToCLIEvent, CLIToDOMessage, SnapshotFrame, ReplayBatchFrame } from "@codevil/shared";
+import { SnapshotFrameSchema, ReplayBatchFrameSchema } from "@codevil/shared";
 
 export interface EventEnvelope {
   cursor: number;
@@ -11,6 +11,7 @@ export interface WSClientOptions {
   initialCursor?: number;
   onEvent: (envelope: EventEnvelope) => void;
   onSnapshot?: (frame: SnapshotFrame) => void;
+  onReplayBatch?: (frame: ReplayBatchFrame) => void;
   onOpen?: () => void;
   onClose?: (code: number, reason: string) => void;
   onError?: (error: Event) => void;
@@ -79,6 +80,18 @@ export function connectWebSocket(options: WSClientOptions): {
           cursor = Math.max(cursor, result.data.cursor);
           options.onSnapshot(result.data);
         }
+        return;
+      }
+
+      // replay_batch frames carry all tail events in one shot.  Advance cursor
+      // to the last item's cursor (if any) and route to onReplayBatch.
+      if (raw && typeof raw === "object" && (raw as { type?: unknown }).type === "replay_batch") {
+        const result = ReplayBatchFrameSchema.safeParse(raw);
+        if (!result.success) return;   // silent drop, matching snapshot path
+        // Advance cursor to the last item's cursor (if any).
+        const last = result.data.events[result.data.events.length - 1];
+        if (last) cursor = Math.max(cursor, last.cursor);
+        options.onReplayBatch?.(result.data);
         return;
       }
 

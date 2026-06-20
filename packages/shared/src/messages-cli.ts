@@ -352,6 +352,21 @@ export const SnapshotFrameSchema = z.object({
 });
 export type SnapshotFrame = z.infer<typeof SnapshotFrameSchema>;
 
+// ReplayBatchFrame: sent once per connection after the optional snapshot frame,
+// carrying ALL tail events in a single WS frame.  Empty events array means the
+// client is already up to date.  `event` is z.unknown() because events were
+// validated when written — re-validation on replay is intentionally skipped.
+export const ReplayBatchFrameSchema = z.object({
+  type: z.literal("replay_batch"),
+  events: z.array(
+    z.object({
+      cursor: z.number().int().nonnegative(),
+      event: z.unknown(),    // server-authoritative; events validated when written
+    }),
+  ),
+});
+export type ReplayBatchFrame = z.infer<typeof ReplayBatchFrameSchema>;
+
 // --- CLI → DO messages ---
 
 export const ApproveMessageSchema = z.object({

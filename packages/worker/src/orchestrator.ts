@@ -19,7 +19,6 @@ import {
   MAX_REFINEMENT_ROUNDS,
   CLIToDOMessageSchema,
   SandboxToDOMessageSchema,
-  PersistedDOToCLIEventSchema,
   parseInbound,
   createTracer,
   setValidationDropSink,
@@ -70,6 +69,8 @@ import {
 } from "./ws-authorization.js";
 import { sendSnapshotIfBehind } from "./snapshot-frame.js";
 export { sendSnapshotIfBehind } from "./snapshot-frame.js";
+import { buildReplayBatch } from "./replay-batch.js";
+export { buildReplayBatch } from "./replay-batch.js";
 
 interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
@@ -2394,24 +2395,19 @@ export class Orchestrator extends DurableObject<Env> {
   }
 
   private replayEvents(ws: WebSocket, afterCursor: number): void {
-    for (const row of this.sql.exec(
-      "SELECT id, event_json FROM events WHERE id > ? ORDER BY id ASC",
+    // Schema re-validation skipped: rows were validated when written.
+    const rows = this.sql.exec(
+      "SELECT id, event_json FROM events WHERE id > ? AND path = 'session' ORDER BY id ASC",
       afterCursor,
-    )) {
-      const id = row["id"] as number;
-      const eventJson = row["event_json"] as string;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(eventJson);
-      } catch {
-        continue;
-      }
-      // Lenient on replay: only require a tagged object so a schema change
-      // doesn't kill reconnects against history written by a prior deploy.
-      const event = parseInbound(PersistedDOToCLIEventSchema, parsed, "persisted_replay");
-      if (!event) continue;
-      ws.send(JSON.stringify({ cursor: id, event }));
-    }
+    );
+    const events = buildReplayBatch(
+      (function* () {
+        for (const row of rows) {
+          yield { id: row["id"] as number, event_json: row["event_json"] as string };
+        }
+      })(),
+    );
+    ws.send(JSON.stringify({ type: "replay_batch", events }));
   }
 
   // --- Meta persistence ---

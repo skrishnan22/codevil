@@ -58,7 +58,7 @@ export type {
 import type { SessionConfig, NewSessionParams } from "../types";
 import { createSession } from "../lib/api-client";
 import { connectWebSocket, type EventEnvelope } from "../lib/ws-client";
-import type { SnapshotFrame } from "@codevil/shared";
+import type { SnapshotFrame, ReplayBatchFrame } from "@codevil/shared";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 export type { PreviewStatus } from "@codevil/shared";
@@ -252,6 +252,47 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           questions: snap.questions,
           selectedAnnotationId: snap.selectedAnnotationId,
         }));
+      },
+      onReplayBatch(frame: ReplayBatchFrame) {
+        if (generation !== connectionGeneration) return;
+        // Intentionally bypasses the 100 ms pendingEvents debounce: a replay
+        // batch is a one-shot bulk delivery, not a live token-streaming burst.
+        // All events are reduced in a single set() call for immediate rendering.
+        set((state) => {
+          let snap: SessionSnapshot = {
+            cursor: state.cursor,
+            sessionPhase: state.sessionPhase,
+            planApproved: state.planApproved,
+            messages: state.messages,
+            activityLog: state.activityLog,
+            participants: state.participants,
+            preview: state.preview,
+            planRevision: state.planRevision,
+            annotations: state.annotations,
+            questions: state.questions,
+            selectedAnnotationId: state.selectedAnnotationId,
+          };
+          for (const item of frame.events) {
+            const ctx: ProjectionContext = {
+              uid: () => `msg_${++localCounter}`,
+              now: Date.now(),
+            };
+            snap = applyToSessionSnapshot(snap, item.cursor, item.event as DOToCLIEvent, ctx);
+          }
+          return {
+            cursor: snap.cursor,
+            sessionPhase: snap.sessionPhase,
+            planApproved: snap.planApproved,
+            messages: snap.messages,
+            activityLog: snap.activityLog,
+            participants: snap.participants,
+            preview: snap.preview,
+            planRevision: snap.planRevision,
+            annotations: snap.annotations,
+            questions: snap.questions,
+            selectedAnnotationId: snap.selectedAnnotationId,
+          };
+        });
       },
       onEvent(envelope: EventEnvelope) {
         if (generation !== connectionGeneration) return;

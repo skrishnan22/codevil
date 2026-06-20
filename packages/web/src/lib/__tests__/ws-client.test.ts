@@ -213,4 +213,136 @@ describe("connectWebSocket", () => {
       globalThis.WebSocket = originalWebSocket;
     }
   });
+
+  it("routes a replay_batch frame to onReplayBatch and not to onEvent", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) { super(url); sockets.push(this); }
+    }
+
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
+    try {
+      const onEvent = vi.fn();
+      const onReplayBatch = vi.fn();
+
+      connectWebSocket({
+        wsUrl: "wss://example.com/sessions/ses_1/ws",
+        onEvent,
+        onReplayBatch,
+      });
+
+      const batchFrame = {
+        type: "replay_batch",
+        events: [
+          { cursor: 1, event: { type: "session_created", session_id: "ses_1" } },
+          { cursor: 2, event: { type: "status", message: "Provisioning..." } },
+        ],
+      };
+      sockets[0].onmessage?.({ data: JSON.stringify(batchFrame) });
+
+      expect(onReplayBatch).toHaveBeenCalledTimes(1);
+      expect(onReplayBatch.mock.calls[0][0].type).toBe("replay_batch");
+      expect(onReplayBatch.mock.calls[0][0].events).toHaveLength(2);
+      expect(onEvent).not.toHaveBeenCalled();
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("advances cursor to last event cursor after replay_batch", () => {
+    vi.useFakeTimers();
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) { super(url); sockets.push(this); }
+    }
+
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
+    try {
+      connectWebSocket({
+        wsUrl: "wss://example.com/sessions/ses_1/ws",
+        onEvent() {},
+        onReplayBatch() {},
+      });
+
+      // Send a batch with last cursor = 15
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: "replay_batch",
+          events: [
+            { cursor: 10, event: { type: "status", message: "a" } },
+            { cursor: 15, event: { type: "status", message: "b" } },
+          ],
+        }),
+      });
+
+      // Trigger a reconnect and check the URL
+      sockets[0].onclose?.({ code: 1006, reason: "" });
+      vi.runOnlyPendingTimers();
+
+      expect(sockets[1].url).toContain("cursor=15");
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("does not advance cursor after an empty replay_batch", () => {
+    vi.useFakeTimers();
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) { super(url); sockets.push(this); }
+    }
+
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
+    try {
+      connectWebSocket({
+        wsUrl: "wss://example.com/sessions/ses_1/ws",
+        initialCursor: 5,
+        onEvent() {},
+        onReplayBatch() {},
+      });
+
+      // Send an empty batch — cursor should stay at 5
+      sockets[0].onmessage?.({
+        data: JSON.stringify({ type: "replay_batch", events: [] }),
+      });
+
+      sockets[0].onclose?.({ code: 1006, reason: "" });
+      vi.runOnlyPendingTimers();
+
+      expect(sockets[1].url).toContain("cursor=5");
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
+  it("silently drops a malformed replay_batch frame", () => {
+    const originalWebSocket = globalThis.WebSocket;
+    const sockets: FakeWebSocket[] = [];
+
+    class LocalFakeWebSocket extends FakeWebSocket {
+      constructor(url: string) { super(url); sockets.push(this); }
+    }
+
+    globalThis.WebSocket = LocalFakeWebSocket as unknown as typeof WebSocket;
+    try {
+      const onReplayBatch = vi.fn();
+      connectWebSocket({
+        wsUrl: "wss://example.com/sessions/ses_1/ws",
+        onEvent() {},
+        onReplayBatch,
+      });
+
+      // Missing `events` field — safeParse should fail
+      sockets[0].onmessage?.({ data: JSON.stringify({ type: "replay_batch" }) });
+      expect(onReplayBatch).not.toHaveBeenCalled();
+    } finally {
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
 });

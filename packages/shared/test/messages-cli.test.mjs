@@ -41,6 +41,7 @@ import {
   CLIToDOMessageSchema,
   PersistedDOToCLIEventSchema,
   SnapshotFrameSchema,
+  ReplayBatchFrameSchema,
 } from "../dist/index.js";
 
 // Canonical fixture for the new AnnotationAnchor shape.
@@ -609,4 +610,55 @@ test("SnapshotFrameSchema: accepts a state with arbitrary nested structure", () 
     state: complexState,
   });
   assert.deepEqual(parsed.state, complexState);
+});
+
+// ---------------------------------------------------------------------------
+// ReplayBatchFrameSchema (Task 6)
+// ---------------------------------------------------------------------------
+
+test("ReplayBatchFrameSchema: parses a valid batch with multiple items", () => {
+  const parsed = ReplayBatchFrameSchema.parse({
+    type: "replay_batch",
+    events: [
+      { cursor: 1, event: { type: "session_created", session_id: "ses_1" } },
+      { cursor: 2, event: { type: "status", message: "Provisioning..." } },
+      { cursor: 3, event: { type: "room_ready", repo: "github.com/acme/app" } },
+    ],
+  });
+  assert.equal(parsed.type, "replay_batch");
+  assert.equal(parsed.events.length, 3);
+  assert.equal(parsed.events[0].cursor, 1);
+  assert.equal(parsed.events[2].cursor, 3);
+});
+
+test("ReplayBatchFrameSchema: parses an empty batch (up-to-date signal)", () => {
+  const parsed = ReplayBatchFrameSchema.parse({
+    type: "replay_batch",
+    events: [],
+  });
+  assert.equal(parsed.type, "replay_batch");
+  assert.equal(parsed.events.length, 0);
+});
+
+test("ReplayBatchFrameSchema: rejects a frame missing the events field", () => {
+  const result = ReplayBatchFrameSchema.safeParse({
+    type: "replay_batch",
+  });
+  assert.equal(result.success, false);
+});
+
+test("ReplayBatchFrameSchema: rejects a frame with wrong type literal", () => {
+  const result = ReplayBatchFrameSchema.safeParse({
+    type: "snapshot",
+    events: [],
+  });
+  assert.equal(result.success, false);
+});
+
+test("ReplayBatchFrameSchema: rejects an item with a negative cursor", () => {
+  const result = ReplayBatchFrameSchema.safeParse({
+    type: "replay_batch",
+    events: [{ cursor: -1, event: { type: "status", message: "bad" } }],
+  });
+  assert.equal(result.success, false);
 });

@@ -1,23 +1,92 @@
 import type { DOToCLIEvent } from "@codevil/shared";
-import { PersistedDOToCLIEventSchema, parseInbound } from "@codevil/shared";
+import {
+  PersistedDOToCLIEventSchema,
+  SnapshotFrameSchema,
+  ReplayBatchFrameSchema,
+  parseInbound,
+} from "@codevil/shared";
 
 export interface EventEnvelope {
   cursor: number;
   event: DOToCLIEvent;
 }
 
+// Discriminated result type for parseEnvelope, covering the three wire-frame shapes.
+export type ParsedFrame =
+  | { kind: "envelope"; cursor: number; event: DOToCLIEvent }
+  | { kind: "snapshot"; cursor: number }
+  | { kind: "replay_batch"; events: Array<{ cursor: number; event: DOToCLIEvent }> }
+  | { kind: "unknown" };
+
 export function parseEnvelope(raw: string): EventEnvelope | null {
+  const frame = parseFrame(raw);
+  if (frame.kind === "envelope") {
+    return { cursor: frame.cursor, event: frame.event };
+  }
+  // snapshot and replay_batch frames are not EventEnvelopes.
+  // Return null to signal "no single event to render" — the caller should
+  // use parseFrame directly when it needs to handle all frame kinds.
+  return null;
+}
+
+/**
+ * Parses any wire frame the DO may send.  Handles all three shapes:
+ *   - { type: "snapshot", ... }        → kind: "snapshot"
+ *   - { type: "replay_batch", ... }    → kind: "replay_batch"
+ *   - { cursor: number, event: {...} } → kind: "envelope"
+ *
+ * Returns kind: "unknown" for valid JSON that doesn't match any known shape
+ * (forward-compat: drop silently instead of crashing).
+ *
+ * Throws Error("Invalid event envelope") only for the legacy {cursor,event}
+ * shape that is structurally malformed — preserving the existing contract for
+ * callers that rely on the throw for truly bad data.
+ */
+export function parseFrame(raw: string): ParsedFrame {
   const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed) || typeof parsed.cursor !== "number") {
+  if (!isRecord(parsed)) {
     throw new Error("Invalid event envelope");
   }
 
-  // Lenient: CLI may be older than the DO and see event types it doesn't
-  // know about; we still want a tagged object so render code can branch.
+  // --- snapshot frame ---
+  if (parsed.type === "snapshot") {
+    const result = SnapshotFrameSchema.safeParse(parsed);
+    if (!result.success) {
+      // Malformed snapshot frame — silently drop rather than throw.
+      return { kind: "unknown" };
+    }
+    // The CLI is streaming-oriented; for a snapshot frame we just consume it
+    // and advance the cursor. Subsequent replay_batch delivers the event tail.
+    return { kind: "snapshot", cursor: result.data.cursor };
+  }
+
+  // --- replay_batch frame ---
+  if (parsed.type === "replay_batch") {
+    const result = ReplayBatchFrameSchema.safeParse(parsed);
+    if (!result.success) {
+      return { kind: "unknown" };
+    }
+    // Each item is validated leniently (same as the legacy per-envelope path).
+    const events: Array<{ cursor: number; event: DOToCLIEvent }> = [];
+    for (const item of result.data.events) {
+      const event = parseInbound(PersistedDOToCLIEventSchema, item.event, "do_to_cli");
+      if (event) {
+        events.push({ cursor: item.cursor, event: event as unknown as DOToCLIEvent });
+      }
+    }
+    return { kind: "replay_batch", events };
+  }
+
+  // --- legacy {cursor, event} envelope ---
+  if (typeof parsed.cursor !== "number") {
+    throw new Error("Invalid event envelope");
+  }
+
   const event = parseInbound(PersistedDOToCLIEventSchema, parsed.event, "do_to_cli");
-  if (!event) return null;
+  if (!event) return { kind: "unknown" };
 
   return {
+    kind: "envelope",
     cursor: parsed.cursor,
     event: event as unknown as DOToCLIEvent,
   };

@@ -440,6 +440,16 @@ export class Orchestrator extends DurableObject<Env> {
       return this.acceptSandboxWebSocket();
     }
 
+    // Hydrate snapshot and session meta from SQLite on cold-start BEFORE reading
+    // this.snapshotCursor or this.snapshot.  Without this call both fields are
+    // at their constructor defaults (0 / emptySessionSnapshot()), which causes:
+    //   1. sendSnapshotIfBehind to skip the snapshot frame (joinCursor >= 0 is always true)
+    //   2. replayEvents to replay ALL events instead of only the tail
+    //   3. appendAndBroadcast(participant_joined) to dirty the in-memory snapshot
+    //      and schedule an alarm that eventually overwrites the persisted snapshot
+    //      with an empty-plus-one-participant copy — permanent data loss.
+    this.loadMeta();
+
     const cursorParam = url.searchParams.get("cursor");
     const cursor = cursorParam ? parseInt(cursorParam, 10) : 0;
 

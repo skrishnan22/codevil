@@ -4,7 +4,7 @@ import type { CLIToDOMessage } from "@codevil/shared";
 
 import type { RunCommand } from "./args.js";
 import type { readConfig } from "./config.js";
-import { isCompletionEvent, parseEnvelope, renderEvent } from "./events.js";
+import { isCompletionEvent, parseFrame, renderEvent } from "./events.js";
 import {
   buildSessionPayload,
   buildWebSocketUrl,
@@ -95,21 +95,52 @@ async function handleMessage(
   io: RunnerIO,
   setCursor: (cursor: number) => void,
 ): Promise<boolean> {
-  const envelope = parseEnvelope(raw);
-  if (!envelope) return false;
-  setCursor(envelope.cursor);
+  const frame = parseFrame(raw);
 
-  for (const line of renderEvent(envelope.event)) {
-    io.write(line);
+  if (frame.kind === "snapshot") {
+    // The CLI was started mid-session; snapshot delivers the current state
+    // as of snapshotCursor. We advance the cursor and let the following
+    // replay_batch frame render the tail events.
+    setCursor(frame.cursor);
+    return false;
   }
 
-  if (envelope.event.type === "plan_ready") {
-    const approval = await io.promptApproval();
-    io.debug(`ws → ${JSON.stringify(approval)}`);
-    ws.send(JSON.stringify(approval));
+  if (frame.kind === "replay_batch") {
+    // Process each event in order exactly as if they had arrived as separate
+    // envelopes. Return true only if the last event signals completion.
+    let completed = false;
+    for (const item of frame.events) {
+      setCursor(item.cursor);
+      for (const line of renderEvent(item.event)) {
+        io.write(line);
+      }
+      if (item.event.type === "plan_ready") {
+        const approval = await io.promptApproval();
+        io.debug(`ws → ${JSON.stringify(approval)}`);
+        ws.send(JSON.stringify(approval));
+      }
+      if (isCompletionEvent(item.event)) {
+        completed = true;
+      }
+    }
+    return completed;
   }
 
-  return isCompletionEvent(envelope.event);
+  if (frame.kind === "envelope") {
+    setCursor(frame.cursor);
+    for (const line of renderEvent(frame.event)) {
+      io.write(line);
+    }
+    if (frame.event.type === "plan_ready") {
+      const approval = await io.promptApproval();
+      io.debug(`ws → ${JSON.stringify(approval)}`);
+      ws.send(JSON.stringify(approval));
+    }
+    return isCompletionEvent(frame.event);
+  }
+
+  // kind === "unknown": forward-compat drop — silently ignore
+  return false;
 }
 
 function buildDefaultIO(debug?: boolean): RunnerIO {

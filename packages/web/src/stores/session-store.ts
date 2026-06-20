@@ -31,6 +31,8 @@ import type {
   PreviewState,
   PlanRevisionState,
   QuestionViewModel,
+  ProjectionContext,
+  SessionSnapshot,
 } from "@codevil/shared";
 
 export {
@@ -273,10 +275,16 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             questions: state.questions,
             selectedAnnotationId: state.selectedAnnotationId,
           };
-          for (const item of frame.events) {
+          for (let i = 0; i < frame.events.length; i++) {
+            const item = frame.events[i];
             const ctx: ProjectionContext = {
               uid: () => `msg_${++localCounter}`,
-              now: batchNow,
+              // +i gives each event a monotonically-increasing timestamp within
+              // the batch (1 ms ticks) so timeline ordering is preserved for
+              // events that are ordered purely by ctx.now (e.g. session_created,
+              // status).  This avoids identical timestamps without introducing
+              // per-iteration Date.now() calls.
+              now: batchNow + i,
             };
             snap = applyToSessionSnapshot(snap, item.cursor, item.event as DOToCLIEvent, ctx);
           }

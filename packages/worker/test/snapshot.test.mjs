@@ -217,3 +217,42 @@ test("join: snapshot frame cursor value matches snapshotCursor, not the joiner's
   const frame = JSON.parse(sent[0]);
   assert.equal(frame.cursor, 99, "frame.cursor must equal snapshotCursor");
 });
+
+// ---------------------------------------------------------------------------
+// C2: fetch() must call loadMeta() before reading snapshotCursor (test gap note)
+//
+// The Orchestrator class cannot be instantiated in Node.js without the
+// cloudflare:workers runtime.  The fix (adding this.loadMeta() at the top of
+// fetch(), before the snapshotCursor read) is a one-line change in production
+// code that cannot be exercised by a pure-helper test.
+//
+// The symptom without the fix: on DO cold-start, snapshotCursor is 0 (default),
+// so sendSnapshotIfBehind is a no-op for any joiner (joinCursor >= 0 is always
+// true), causing:
+//   - full event replay instead of snapshot + tail-only replay (perf regression)
+//   - appendAndBroadcast(participant_joined) dirtying the empty in-memory snapshot
+//   - alarm() persisting the empty snapshot — overwriting the correct DB row
+//   - next cold-start loading a broken snapshot (permanent data loss)
+//
+// The pure-helper coverage below confirms sendSnapshotIfBehind IS called
+// correctly when snapshotCursor > 0 (i.e., after a correct loadMeta() hydrates
+// the field to its real value).
+//
+// Full integration coverage requires wrangler's Miniflare harness
+// (vitest + @cloudflare/vitest-pool-workers) — tracked for the next sprint.
+// ---------------------------------------------------------------------------
+
+test("C2 regression: sendSnapshotIfBehind sends frame when snapshotCursor is non-zero after hydration", () => {
+  // Simulates the state AFTER a correct loadMeta() call has hydrated snapshotCursor.
+  // Without loadMeta(), snapshotCursor is 0 and this send never happens.
+  const sent = [];
+  const hydratedSnapshotCursor = 25; // what loadMeta() would populate from the DB
+  const joinerCursor = 0;            // fresh joiner
+
+  sendSnapshotIfBehind((msg) => sent.push(msg), joinerCursor, hydratedSnapshotCursor, { sessionPhase: "ready" });
+
+  assert.equal(sent.length, 1, "snapshot frame must be sent when snapshotCursor > joinerCursor");
+  const frame = JSON.parse(sent[0]);
+  assert.equal(frame.cursor, hydratedSnapshotCursor);
+  assert.equal(frame.type, "snapshot");
+});

@@ -3199,13 +3199,19 @@ button.current-activity:hover { background: var(--surface-3); }
   gap: 8px;
   align-items: center;
   padding: 4px 8px;
-  background: var(--amber);
-  color: var(--amber-ink);
-  border: 0;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
   cursor: pointer;
   font-family: var(--mono);
   font-size: 11px;
+}
+
+.activity-tool-row.warn {
+  background: var(--amber);
+  color: var(--amber-ink);
+  border-color: transparent;
 }
 
 .activity-tool-row:hover {
@@ -4909,7 +4915,7 @@ mark.annotation-highlight {
   padding: 4px 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  background: #fff;
+  background: var(--surface);
   color: var(--err);
   font-family: var(--sans);
   font-size: 11px;
@@ -4921,6 +4927,7 @@ mark.annotation-highlight {
 
 .session-rail-stop:hover:not(:disabled) {
   background: var(--danger-bg);
+  border-color: var(--err);
 }
 
 .session-rail-stop:disabled {

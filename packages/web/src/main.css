@@ -125,6 +125,23 @@
     @apply bg-background text-foreground;
     font-family: var(--sans);
   }
+
+  /* Chrome paints autofilled inputs with its own background — override it. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0 1000px var(--surface) inset;
+    -webkit-text-fill-color: var(--fg);
+    caret-color: var(--fg);
+    transition: background-color 5000s ease-in-out 0s;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.35);
+    color: var(--fg);
+  }
 }
 
 @layer components {

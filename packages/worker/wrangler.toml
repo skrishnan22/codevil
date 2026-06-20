@@ -7,6 +7,7 @@ upload_source_maps = true
 
 [vars]
 EMAIL_PROVIDER = "none"
+CODEVIL_WEB_ORIGIN = "https://codevil-ui.pages.dev,http://localhost:5173,http://localhost:8787"
 
 [assets]
 directory = "../web/dist"

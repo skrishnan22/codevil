@@ -40,6 +40,13 @@ import {
   readSandboxDiagnostics,
   setCodevilSandboxKeepAlive,
 } from "./sandbox.js";
+import {
+  SANDBOX_RECONNECT_GRACE_MS,
+  sandboxConnectionMode,
+  sandboxReconnectDeadline,
+  sandboxReconnectExpired,
+  type SandboxConnectionMode,
+} from "./sandbox-connection.js";
 import { createDraftPullRequest, credentialRequestAllowed } from "./github.js";
 import {
   collectProviderCredentialSecrets,
@@ -108,6 +115,7 @@ interface SessionMeta {
   preview_active?: boolean;
   created_at: string;
   expected_close?: boolean;
+  sandbox_disconnected_at?: string;
   // Most recent plan decision (approve/refine), for attributing late/rejected
   // decisions to whoever already acted. See multiplayer.ts.
   last_decision?: LastDecision;
@@ -406,6 +414,14 @@ export class Orchestrator extends DurableObject<Env> {
       return;
     }
 
+    if (
+      this.meta.sandbox_disconnected_at
+      && sandboxReconnectExpired(this.meta.sandbox_disconnected_at, now)
+    ) {
+      await this.failExpiredSandboxReconnect();
+      return;
+    }
+
     if (this.meta.state === "provisioning_sandbox" && now >= createdAt + 60_000) {
       const logs = await readProcessLogs(this.workerEnv.Sandbox, this.meta.session_id, "codevil-agent");
       this.getTracer()?.log("ERROR", "sandbox.timeout", {
@@ -481,14 +497,36 @@ export class Orchestrator extends DurableObject<Env> {
 
   private acceptSandboxWebSocket(): Response {
     this.loadMeta();
+    if (!this.meta) {
+      return new Response("Session not initialized", { status: 409 });
+    }
+
+    const mode = sandboxConnectionMode(this.meta.state, this.meta.sandbox_disconnected_at);
+    if (mode === "reject") {
+      this.getTracer()?.log("WARN", "sandbox.ws.rejected", {
+        state: this.meta.state,
+        disconnected_at: this.meta.sandbox_disconnected_at,
+      });
+      return new Response("Sandbox connection is not expected", { status: 409 });
+    }
+
     this.getTracer()?.log("INFO", "sandbox.ws.connected", {
-      state: this.meta?.state,
+      state: this.meta.state,
+      mode,
     });
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server, ["sandbox"]);
-    this.initializeSandboxConnection(server);
+    this.initializeSandboxConnection(server, mode);
+
+    if (mode === "resume") {
+      this.meta.sandbox_disconnected_at = undefined;
+      this.saveMeta();
+      this.appendAndBroadcast({ type: "status", message: "Sandbox reconnected." });
+      this.updateDirectory({ sandbox_state: "ready" });
+      void this.armNextAlarm();
+    }
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -595,41 +633,27 @@ export class Orchestrator extends DurableObject<Env> {
     });
 
     if (isSandbox && this.meta) {
-      this.revokePreview();
       if (
         !this.meta.expected_close
         && !isTerminalState(this.meta.state)
-        && this.meta.state !== "awaiting_approval"
       ) {
-        const activeRunId = this.meta.active_run?.id;
         const state = this.meta.state;
-        const message = `Sandbox disconnected unexpectedly (code: ${code}, reason: ${reason || "none"}).`;
-        this.transition("failed");
-        if (activeRunId) {
-          this.meta.active_run = { ...this.meta.active_run!, state: "failed" };
+        if (!this.meta.sandbox_disconnected_at) {
+          this.meta.sandbox_disconnected_at = new Date().toISOString();
           this.saveMeta();
-          this.cancelOpenQuestions(activeRunId, "sandbox disconnected");
           this.appendAndBroadcast({
-            type: "agent_run_failed",
-            run_id: activeRunId,
-            message,
+            type: "status",
+            message: "Sandbox connection interrupted. Reconnecting…",
           });
+          this.updateDirectory({});
         }
-        this.appendAndBroadcast({
-          type: "error",
-          message,
-        });
-        this.updateDirectory({
-          room_state: "failed",
-          sandbox_state: "failed",
-          active_run_state: activeRunId ? "failed" : null,
-        });
         this.ctx.waitUntil(this.logSandboxDisconnectDiagnostics({
           sessionId: this.meta.session_id,
           closeCode: code,
           closeReason: reason,
           state,
         }));
+        this.ctx.waitUntil(this.armNextAlarm());
       }
       return;
     }
@@ -1490,7 +1514,7 @@ export class Orchestrator extends DurableObject<Env> {
     }
   }
 
-  private initializeSandboxConnection(ws: WebSocket): void {
+  private initializeSandboxConnection(ws: WebSocket, mode: SandboxConnectionMode): void {
     this.loadMeta();
     if (!this.meta) {
       console.error("codevil.initializeSandboxConnection.no_meta");
@@ -1504,15 +1528,8 @@ export class Orchestrator extends DurableObject<Env> {
       plan_model: this.meta.plan_model,
     });
 
-    if (this.meta.state !== "provisioning_sandbox") {
-      tracer?.log("ERROR", "sandbox_init.unexpected_state", {
-        state: this.meta.state,
-        expected: "provisioning_sandbox",
-      });
-      this.appendAndBroadcast({
-        type: "error",
-        message: `Sandbox connected in unexpected state: ${this.meta.state}`,
-      });
+    if (mode === "resume") {
+      tracer?.log("INFO", "sandbox.ws.resumed", { state: this.meta.state });
       return;
     }
 
@@ -2035,6 +2052,31 @@ export class Orchestrator extends DurableObject<Env> {
     }
   }
 
+  private async failExpiredSandboxReconnect(): Promise<void> {
+    if (!this.meta?.sandbox_disconnected_at) return;
+
+    const activeRunId = this.meta.active_run?.id;
+    const message = `Sandbox did not reconnect within ${SANDBOX_RECONNECT_GRACE_MS / 1_000} seconds.`;
+    this.transition("failed");
+    if (activeRunId) {
+      this.meta.active_run = { ...this.meta.active_run!, state: "failed" };
+      this.saveMeta();
+      this.cancelOpenQuestions(activeRunId, "sandbox reconnect timed out");
+      this.appendAndBroadcast({
+        type: "agent_run_failed",
+        run_id: activeRunId,
+        message,
+      });
+    }
+    this.appendAndBroadcast({ type: "error", message });
+    this.updateDirectory({
+      room_state: "failed",
+      sandbox_state: "failed",
+      active_run_state: activeRunId ? "failed" : null,
+    });
+    await this.terminateSandbox("sandbox reconnect timed out");
+  }
+
   private async armNextAlarm(now = Date.now()): Promise<void> {
     if (!this.meta || isTerminalState(this.meta.state)) return;
 
@@ -2042,6 +2084,9 @@ export class Orchestrator extends DurableObject<Env> {
     const deadlines = [createdAt + 60_000];
     const maxTimeMs = parseMaxTimeMs(this.meta.max_time);
     if (maxTimeMs !== null) deadlines.push(createdAt + maxTimeMs);
+    if (this.meta.sandbox_disconnected_at) {
+      deadlines.push(sandboxReconnectDeadline(this.meta.sandbox_disconnected_at));
+    }
 
     const nextDeadline = Math.min(...deadlines.filter((deadline) => deadline > now));
     if (Number.isFinite(nextDeadline)) {

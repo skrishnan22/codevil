@@ -9,6 +9,7 @@ import { configureDefaultGitIdentity, ShellGitDriver } from "./git-driver.js";
 import { PiAgentDriver } from "./pi-driver.js";
 import { SandboxRuntime } from "./runtime.js";
 import { readAndUnlinkSecret } from "./secrets.js";
+import { ReconnectingWebSocketClient } from "./socket-client.js";
 
 export interface EntrypointEnv {
   CODEVIL_DO_WS_URL?: string;
@@ -75,51 +76,49 @@ export async function startEntrypoint(env: EntrypointEnv = process.env): Promise
 
   await configureDefaultGitIdentity();
 
-  console.log("codevil-sandbox: connecting to", env.CODEVIL_DO_WS_URL);
   const llmKey = await readAndUnlinkSecret(env.CODEVIL_LLM_KEY_FILE ?? "/run/secrets/llm_key");
-  const ws = new WebSocket(env.CODEVIL_DO_WS_URL, {
-    headers: env.CODEVIL_API_KEY ? { Authorization: `Bearer ${env.CODEVIL_API_KEY}` } : undefined,
-  });
-
-  const send = (message: SandboxToDOMessage): void => {
-    ws.send(JSON.stringify(message));
-  };
+  let connection: ReconnectingWebSocketClient;
 
   const runtime = new SandboxRuntime({
     workspace: env.CODEVIL_WORKSPACE ?? "/workspace",
     provider: env.CODEVIL_PROVIDER ?? "anthropic",
     llmKey,
-    send,
+    send: (message: SandboxToDOMessage) => connection.send(JSON.stringify(message)),
     agentFactory: () => new PiAgentDriver(),
     git: new ShellGitDriver(),
   });
   const dispatch = createSandboxMessageDispatcher(runtime);
 
-  ws.on("open", () => {
-    console.log("codevil-sandbox: websocket connected");
-    send({ type: "status", message: "Sandbox connected." });
+  connection = new ReconnectingWebSocketClient({
+    createSocket: () => {
+      console.log("codevil-sandbox: connecting to", env.CODEVIL_DO_WS_URL);
+      return new WebSocket(env.CODEVIL_DO_WS_URL!, {
+        headers: env.CODEVIL_API_KEY ? { Authorization: `Bearer ${env.CODEVIL_API_KEY}` } : undefined,
+      });
+    },
+    onOpen: () => {
+      console.log("codevil-sandbox: websocket connected");
+      connection.send(JSON.stringify({ type: "status", message: "Sandbox connected." } satisfies SandboxToDOMessage));
+    },
+    onError: (error) => {
+      console.error("codevil-sandbox: websocket error", error.message);
+    },
+    onClose: (code, reason) => {
+      console.log("codevil-sandbox: websocket closed; reconnecting", code, reason);
+    },
+    onMessage: (data) => {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(String(data));
+      } catch {
+        console.error("codevil-sandbox: malformed JSON from DO");
+        return;
+      }
+      const message = parseInbound(DOToSandboxMessageSchema, raw, "do_to_sandbox");
+      if (!message) return;
+      console.log("codevil-sandbox: received message", message.type);
+      dispatch(message);
+    },
   });
-
-  ws.on("error", (error) => {
-    console.error("codevil-sandbox: websocket error", error.message);
-  });
-
-  ws.on("message", (data) => {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(data.toString());
-    } catch {
-      console.error("codevil-sandbox: malformed JSON from DO");
-      return;
-    }
-    const message = parseInbound(DOToSandboxMessageSchema, raw, "do_to_sandbox");
-    if (!message) return;
-    console.log("codevil-sandbox: received message", message.type);
-    dispatch(message);
-  });
-
-  ws.on("close", (code, reason) => {
-    console.log("codevil-sandbox: websocket closed", code, reason.toString());
-    void runtime.dispose();
-  });
+  connection.start();
 }

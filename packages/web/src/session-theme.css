@@ -43,31 +43,31 @@
 }
 
 .dark {
-  /* Linear-inspired dark — near-black with subtle blue, indigo accent */
-  --bg: #0F0F11;
-  --surface: #16161A;
-  --surface-2: #1C1C21;
-  --surface-3: #232329;
-  --line: #2A2A31;
-  --line-2: #1F1F25;
-  --fg: #E3E4E6;
-  --fg-2: #C8CACD;
-  --fg-3: #8E9095;
-  --fg-4: #6B6D72;
+  /* Neutral-dark, brand-consistent: true grays + brighter sage accent. */
+  --bg: #0A0A0A;
+  --surface: #141414;
+  --surface-2: #1C1C1C;
+  --surface-3: #262626;
+  --line: #2A2A2A;
+  --line-2: #1F1F1F;
+  --fg: #EDEDED;
+  --fg-2: #D4D4D4;
+  --fg-3: #A1A1A1;
+  --fg-4: #737373;
 
-  --accent: #606ACC;
-  --accent-soft: #1A1B3A;
-  --accent-fg: #FFFFFF;
+  --accent: #6FA88A;
+  --accent-soft: #16241C;
+  --accent-fg: #0A0A0A;
 
-  --ok: #69C967;
-  --warn: #F5C97A;
-  --err: #FF7E78;
-  --info: #606ACC;
+  --ok: #6FA88A;
+  --warn: #E6B85A;
+  --err: #E5635A;
+  --info: #6FA88A;
 
-  --amber: #2A230F;
-  --amber-ink: #F5C97A;
-  --danger-bg: #2A1414;
-  --moss: #8E9095;
+  --amber: #2A2310;
+  --amber-ink: #E6B85A;
+  --danger-bg: #2A1717;
+  --moss: #A1A1A1;
 }
 
 [data-density="compact"] {

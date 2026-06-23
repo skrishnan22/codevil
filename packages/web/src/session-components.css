@@ -768,8 +768,8 @@ button.current-activity:hover { background: var(--surface-3); }
   background: var(--fg-4);
 }
 .current-activity-dot.running {
-  background: var(--info);
-  box-shadow: 0 0 0 4px oklch(0.62 0.13 235 / 0.14);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 .current-activity-dot.ok { background: var(--ok); }
 .current-activity-dot.error {
@@ -1007,8 +1007,8 @@ button.current-activity:hover { background: var(--surface-3); }
   margin-top: 4px;
 }
 .status-strip-dot.running {
-  background: var(--info);
-  box-shadow: 0 0 0 3px oklch(0.62 0.13 235 / 0.18);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .status-strip-dot.ok { background: var(--ok); }
 .status-strip-dot.error {
@@ -1240,7 +1240,7 @@ button.current-activity:hover { background: var(--surface-3); }
   border-radius: 3px;
   background: var(--surface-3);
 }
-.trace-call-status.running { background: oklch(0.62 0.13 235 / 0.14); color: var(--info); }
+.trace-call-status.running { background: var(--accent-soft); color: var(--accent); }
 .trace-call-status.error { background: oklch(0.62 0.18 25 / 0.14); color: var(--err); }
 .trace-call-status.ok { background: oklch(0.62 0.16 145 / 0.1); color: var(--ok); }
 .timeline-jump-latest {
@@ -1571,7 +1571,7 @@ button.current-activity:hover { background: var(--surface-3); }
 }
 
 .current-agent-card.current-agent-running {
-  background: oklch(0.62 0.13 235 / 0.08);
+  background: var(--accent-soft);
 }
 
 .current-agent-head {
@@ -2233,47 +2233,60 @@ button.current-activity:hover { background: var(--surface-3); }
 }
 
 .brand-lockup {
-  gap: 9px;
+  gap: 8px;
   color: var(--fg);
   font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  letter-spacing: -0.018em;
 }
 
+/* Brand mark: a deliberate monogram that does NOT read as a status dot.
+   Solid foreground square with a corner-notch — distinctive at 22px. */
 .brand-mark {
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
+  position: relative;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--fg);
+  box-shadow: none;
+}
+.brand-mark::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
   background: var(--accent);
-  box-shadow: inset 0 0 0 7px var(--bg), inset 0 0 0 9px var(--accent), 0 0 0 3px var(--accent-soft);
 }
 
 /* ─── Brand logo (shared) ─────────────────────────────────────────────────── */
 .cv-logo {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   color: var(--fg);
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.018em;
 }
 .cv-logo-mark {
   position: relative;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
-  border-radius: 8px;
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px oklch(0.58 0.18 var(--accent-h) / 0.28);
-  display: grid;
-  place-items: center;
+  border-radius: 5px;
+  background: var(--fg);
 }
 .cv-logo-mark::after {
   content: "";
-  width: 11px;
-  height: 11px;
-  border-radius: 3.5px;
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
   background: var(--accent);
 }
 .cv-logo-word { line-height: 1; }
@@ -2283,9 +2296,7 @@ button.current-activity:hover { background: var(--surface-3); }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  background:
-    radial-gradient(120% 80% at 50% -10%, var(--accent-soft), transparent 60%),
-    var(--bg);
+  background: var(--bg);
 }
 .home-page-inner {
   max-width: 720px;
@@ -2488,20 +2499,22 @@ button.current-activity:hover { background: var(--surface-3); }
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
-  padding: 0 18px;
+  height: 36px;
+  padding: 0 14px;
   border: 0;
-  border-radius: var(--r-lg);
+  border-radius: var(--r-md);
   background: var(--fg);
   color: var(--bg);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
+  letter-spacing: -0.005em;
   cursor: pointer;
-  transition: background 0.14s, opacity 0.14s, transform 0.06s;
+  transition: background var(--t-fast) ease, opacity var(--t-fast) ease,
+              transform var(--t-fast) var(--ease-out);
 }
-.home-launcher-create:hover:not(:disabled) { background: var(--accent); }
-.home-launcher-create:active:not(:disabled) { transform: translateY(1px); }
-.home-launcher-create:disabled { opacity: 0.4; cursor: not-allowed; }
+.home-launcher-create:hover:not(:disabled) { background: var(--fg-2); }
+.home-launcher-create:active:not(:disabled) { transform: scale(0.98); }
+.home-launcher-create:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* team invites */
 .home-team {
@@ -2725,13 +2738,19 @@ button.current-activity:hover { background: var(--surface-3); }
   color: var(--fg-3);
 }
 .home-status-dot { width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
-.home-status-pill.running { background: oklch(0.62 0.13 235 / 0.12); color: oklch(0.48 0.13 235); }
-.home-status-pill.review { background: oklch(0.72 0.14 75 / 0.16); color: oklch(0.5 0.13 75); }
-.home-status-pill.done { background: oklch(0.66 0.14 150 / 0.14); color: oklch(0.45 0.14 150); }
-.home-status-pill.failed { background: oklch(0.62 0.18 25 / 0.12); color: var(--err); }
-.dark .home-status-pill.running { color: oklch(0.74 0.13 235); }
-.dark .home-status-pill.review { color: oklch(0.78 0.13 75); }
-.dark .home-status-pill.done { color: oklch(0.74 0.14 150); }
+/* One status system across the app:
+   running = sage accent + pulse, review = amber, done = neutral, failed = red. */
+.home-status-pill.running { background: var(--accent-soft); color: var(--accent); }
+.home-status-pill.running .home-status-dot { animation: pulse-soft 1.6s ease-in-out infinite; }
+.home-status-pill.review { background: var(--amber); color: var(--amber-ink); }
+.home-status-pill.done { background: var(--surface-3); color: var(--fg-3); }
+.home-status-pill.failed { background: var(--danger-bg); color: var(--err); }
+.home-status-pill.idle { background: var(--surface-3); color: var(--fg-4); }
+.dark .home-status-pill.running { background: var(--accent-soft); }
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 .home-session-card-foot {
   display: inline-flex;
   align-items: center;

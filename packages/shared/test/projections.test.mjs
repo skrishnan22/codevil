@@ -49,7 +49,14 @@ test("mapEventToChat: maps status to a system message", () => {
   assert.equal(messages[0].content, "Provisioning sandbox...");
 });
 
-test("mapEventToChat: carries the actor from an attributed status event", () => {
+test("mapEventToChat: carries the actor from plan_execution_started", () => {
+  const event = { type: "plan_execution_started", run_id: "run_abc", actor: "Alice" };
+  const messages = mapEventToChat(event, makeCtx());
+  assert.equal(messages[0].content, "Plan approved. Starting execution.");
+  assert.equal(messages[0].actor, "Alice");
+});
+
+test("mapEventToChat: carries the actor from a legacy approval status event", () => {
   const event = { type: "status", message: "Plan approved. Starting execution.", actor: "Alice" };
   const messages = mapEventToChat(event, makeCtx());
   assert.equal(messages[0].actor, "Alice");
@@ -273,10 +280,24 @@ test("inferPhase: starts general agent requests in the executing phase", () => {
 // inferPlanApproved
 // ---------------------------------------------------------------------------
 
-test("inferPlanApproved: marks a plan approved from the worker approval status", () => {
+test("inferPlanApproved: marks a plan approved from plan_execution_started", () => {
+  assert.equal(
+    inferPlanApproved({ type: "plan_execution_started", run_id: "run_abc", actor: "Alice" }, false),
+    true,
+  );
+});
+
+test("inferPlanApproved: still accepts legacy approval status events on replay", () => {
   assert.equal(
     inferPlanApproved({ type: "status", message: "Plan approved. Starting execution." }, false),
     true,
+  );
+});
+
+test("inferPhase: moves into executing from plan_execution_started", () => {
+  assert.equal(
+    inferPhase({ type: "plan_execution_started", run_id: "run_abc" }, "awaiting_approval"),
+    "executing",
   );
 });
 

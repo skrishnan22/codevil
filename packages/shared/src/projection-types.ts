@@ -141,5 +141,11 @@ export interface QuestionViewModel {
   answer?: QuestionAnswer;
 }
 
+/** Context passed to projection mappers (uid generator + clock). */
+export interface ProjectionContext {
+  uid: () => string;
+  now: number;
+}
+
 // Re-export so consumers don't need to import from room.ts directly.
 export type { ParticipantIdentity };

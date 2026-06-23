@@ -7,6 +7,8 @@ const secretPatterns = [
   /(?:api[_-]?key|token|secret|password)=([^&\s]+)/gi,
 ];
 
+import { isRecord } from "@codevil/shared";
+
 export function redactEvent<T>(event: T, exactSecrets: readonly string[]): T {
   return redactValue(event, normalizeSecrets(exactSecrets)) as T;
 }
@@ -40,8 +42,4 @@ function redactString(value: string, exactSecrets: readonly string[]): string {
 
 function normalizeSecrets(secrets: readonly string[]): string[] {
   return secrets.filter((secret) => secret.length >= 6);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

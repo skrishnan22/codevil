@@ -16,6 +16,7 @@ import { Type } from "@sinclair/typebox";
 
 import {
   type CostInfo,
+  isRecord,
 } from "@codevil/shared";
 
 import type {
@@ -444,8 +445,4 @@ export function askQuestionTool(
       };
     },
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

@@ -2,72 +2,81 @@
 
 :root {
   --accent-h: 145;
-  --accent: #4F7860;
-  --accent-soft: #F0F4F1;
+  --accent: #3F6B53;
+  --accent-soft: #EDF3EE;
   --accent-fg: #FFFFFF;
 
-  /* light theme — cool linen + sage */
-  --bg: #F8F8F5;
+  /* light theme — cool neutral, single sage accent */
+  --bg: #FBFBFA;
   --surface: #FFFFFF;
-  --surface-2: #FCFCFA;
-  --surface-3: #F4F4F0;
-  --line: #E3E6E1;
-  --line-2: #ECECE5;
-  --fg: #0F1419;
-  --fg-2: #1A1F26;
-  --fg-3: #4A5159;
-  --fg-4: #687A6E;
+  --surface-2: #F7F7F6;
+  --surface-3: #F1F1EF;
+  --line: #E6E6E3;
+  --line-2: #EFEFEC;
+  --fg: #15171A;
+  --fg-2: #2A2E34;
+  --fg-3: #5A5F66;
+  --fg-4: #898E94;
 
-  --ok: #4F7860;
-  --warn: #92400E;
-  --err: #B91C1C;
-  --info: #4F7860;
+  --ok: #3F6B53;
+  --warn: #A35F10;
+  --err: #B42318;
+  --info: #3F6B53;
 
   /* component-specific tokens */
-  --amber: #FEF3C7;
-  --amber-ink: #92400E;
-  --danger-bg: #FEF2F2;
-  --moss: #687A6E;
+  --amber: #FEF6E0;
+  --amber-ink: #8A4D08;
+  --danger-bg: #FDF2F2;
+  --moss: #3F6B53;
 
   --r-sm: 4px;
   --r-md: 6px;
   --r-lg: 10px;
   --r-xl: 14px;
 
+  /* Typography: sans for human UI, mono for machine text. */
+  --sans: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --sans: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --serif: "Newsreader", Georgia, "Times New Roman", serif;
+
+  /* Motion: a single curve used across the app. ease-out for entrances. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --t-fast: 120ms;
+  --t-base: 160ms;
+  --t-slow: 220ms;
 
   --pad: 16px;
   --row-h: 28px;
 }
 
 .dark {
-  /* Neutral-dark, brand-consistent: true grays + brighter sage accent. */
-  --bg: #0A0A0A;
-  --surface: #141414;
-  --surface-2: #1C1C1C;
-  --surface-3: #262626;
-  --line: #2A2A2A;
-  --line-2: #1F1F1F;
-  --fg: #EDEDED;
-  --fg-2: #D4D4D4;
-  --fg-3: #A1A1A1;
-  --fg-4: #737373;
+  /* Dark theme — Linear-ish near-black with one sage accent.
+     Slightly cooler line tokens so cards read crisp without grey haze. */
+  --bg: #0A0B0C;
+  --surface: #121315;
+  --surface-2: #18191C;
+  --surface-3: #22242A;
+  --line: #25272C;
+  --line-2: #1B1D20;
+  --fg: #ECEDEE;
+  --fg-2: #C8CACD;
+  --fg-3: #93969B;
+  --fg-4: #6B6E73;
 
   --accent: #6FA88A;
-  --accent-soft: #16241C;
-  --accent-fg: #0A0A0A;
+  --accent-soft: #15201A;
+  --accent-fg: #0A0B0C;
 
   --ok: #6FA88A;
-  --warn: #E6B85A;
+  --warn: #E2B675;
   --err: #E5635A;
   --info: #6FA88A;
 
-  --amber: #2A2310;
-  --amber-ink: #E6B85A;
-  --danger-bg: #2A1717;
-  --moss: #A1A1A1;
+  --amber: #261F0F;
+  --amber-ink: #E2B675;
+  --danger-bg: #271615;
+  --moss: #6FA88A;
 }
 
 [data-density="compact"] {

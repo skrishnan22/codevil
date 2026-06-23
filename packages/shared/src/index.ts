@@ -9,6 +9,8 @@ export {
   MAX_VERIFICATION_ATTEMPTS,
 } from "./session.js";
 
+export { isRecord } from "./records.js";
+
 export type {
   CostInfo,
   GuardLimits,
@@ -75,6 +77,7 @@ export type {
   AgentRequestQueuedEvent,
   AgentRunStartedEvent,
   ApprovalRequestedEvent,
+  PlanExecutionStartedEvent,
   AgentRunCompletedEvent,
   AgentRunFailedEvent,
   AgentResponseEvent,
@@ -132,6 +135,7 @@ export {
   AgentRequestQueuedEventSchema,
   AgentRunStartedEventSchema,
   ApprovalRequestedEventSchema,
+  PlanExecutionStartedEventSchema,
   AgentRunCompletedEventSchema,
   AgentRunFailedEventSchema,
   AgentResponseEventSchema,

@@ -1,26 +1,18 @@
 import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 
 import type {
   CostInfo,
   DOToSandboxMessage,
-  ConsolidationAnnotation,
   PreviewApp,
-  PreviewFramework,
   SandboxToDOMessage,
-  QuestionOption,
-  AnswerableBy,
-  ParticipantIdentity,
 } from "@codevil/shared";
 import {
-  MAX_VERIFICATION_ATTEMPTS,
   PiAgentEventSchema,
   parseInbound,
   createTracer,
   setValidationDropSink,
   tracerValidationDropSink,
-  type Span,
   type SpanContext,
   type Tracer,
 } from "@codevil/shared";
@@ -28,152 +20,70 @@ import {
   PreviewManager,
   appToCommand,
   detectPreviewApps,
-  type PreviewCommand,
 } from "./preview-manager.js";
+import { executePrompt, planPrompt, refinePrompt } from "./prompts.js";
+import { parsePreviewSuggestion } from "./preview-parsers.js";
+export { parsePreviewCommand, parsePreviewDiscovery, parsePreviewSuggestion } from "./preview-parsers.js";
+import {
+  type CommandRunner,
+  type Verifier,
+  RepositoryVerifier,
+  ShellCommandRunner,
+  detectSetupCommand,
+  detectVerificationCommand,
+  runVerificationLoop,
+} from "./verification.js";
+export {
+  RepositoryVerifier,
+  ShellCommandRunner,
+  detectSetupCommand,
+  detectVerificationCommand,
+} from "./verification.js";
 export { detectPreviewApps, detectPreviewCommand } from "./preview-manager.js";
 
-const AGENT_PREVIEW_KEY = "agent";
+export type {
+  AgentStartOptions,
+  CreatePullRequestToolOptions,
+  AskQuestionParams,
+  AskQuestionOutcome,
+  TurnResult,
+  PlanResult,
+  ConsolidationInput,
+  ConsolidationResult,
+  AgentDriver,
+  AgentDriverFactory,
+  GitDriver,
+  GitCredential,
+  PushBranchOptions,
+  SandboxRuntimeOptions,
+} from "./runtime-types.js";
+export { detectLibc } from "./runtime-helpers.js";
 
-export interface AgentStartOptions {
-  cwd: string;
-  mode: "coding";
-  model: string;
-  provider: string;
-  llmKey?: string;
-  onEvent(event: unknown): void;
-  createPullRequest(options: CreatePullRequestToolOptions): Promise<{ url: string }>;
-  askQuestion?: (params: AskQuestionParams) => Promise<AskQuestionOutcome>;
-}
-
-export interface CreatePullRequestToolOptions {
-  title: string;
-  body: string;
-  branch?: string;
-  commit_message?: string;
-  draft?: boolean;
-}
-
-export interface AskQuestionParams {
-  question: string;
-  context?: string;
-  options?: QuestionOption[];
-  allow_freeform: boolean;
-  allow_multiple: boolean;
-  answerable_by: AnswerableBy;
-  assigned_to?: ParticipantIdentity;
-}
-
-export type AskQuestionOutcome =
-  | { cancelled: false; option_ids: string[]; freeform?: string; answered_by: ParticipantIdentity }
-  | { cancelled: true; reason: string };
-
-export interface TurnResult {
-  response: string;
-  cost: CostInfo;
-}
-
-export interface PlanResult {
-  plan: string;
-  cost: CostInfo;
-}
-
-export interface ConsolidationInput {
-  cwd: string;
-  run_id: string;
-  round: number;
-  model: string;
-  provider: string;
-  llmKey?: string;
-  plan: string;
-  annotations: ConsolidationAnnotation[];
-  askQuestion?: (params: AskQuestionParams) => Promise<AskQuestionOutcome>;
-}
-
-export interface ConsolidationResult {
-  /** Prose brief emitted by the ask_question-aware consolidation path. */
-  brief: string;
-  cost: CostInfo;
-}
-
-export interface AgentDriver {
-  start(options: AgentStartOptions): Promise<void>;
-  turn(prompt: string): Promise<TurnResult>;
-  plan(prompt: string): Promise<PlanResult>;
-  refine(feedback: string): Promise<PlanResult>;
-  consolidateAnnotations?(input: ConsolidationInput): Promise<ConsolidationResult>;
-  switchToExecution(model: string, provider?: string): Promise<void>;
-  execute(plan: string): Promise<CostInfo>;
-  dispose?(): Promise<void> | void;
-}
-
-export interface VerificationResult {
-  success: boolean;
-  command: string;
-  output: string;
-}
-
-export interface CommandResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
-
-export interface CommandRunner {
-  run(command: string, options: {
-    cwd: string;
-    timeoutMs: number;
-    onOutput?: (chunk: string) => void;
-  }): Promise<CommandResult>;
-}
-
-export interface Verifier {
-  verify(cwd: string): Promise<VerificationResult>;
-}
-
-export interface AgentDriverFactory {
-  (): AgentDriver;
-}
-
-export interface GitDriver {
-  clone(repo: string, destination: string, onProgress: (line: string) => void, credential?: GitCredential): Promise<void>;
-  defaultBranch(cwd: string): Promise<string>;
-  pushBranch(options: PushBranchOptions): Promise<void>;
-}
-
-export interface GitCredential {
-  username: string;
-  password: string;
-}
-
-export interface PushBranchOptions {
-  cwd: string;
-  branch: string;
-  commitMessage: string;
-  credential?: GitCredential;
-}
-
-type RepoState =
-  | { state: "uninit" }
-  | {
-      state: "ready";
-      dir: string;
-      url: string;
-      defaultBranch: string;
-      apps: PreviewApp[];
-    };
-
-export interface SandboxRuntimeOptions {
-  workspace: string;
-  provider?: string;
-  llmKey?: string;
-  send(message: SandboxToDOMessage): void;
-  agentFactory: AgentDriverFactory;
-  git: GitDriver;
-  verifier?: Verifier;
-  commandRunner?: CommandRunner;
-  credentialTimeoutMs?: number;
-}
-
+import type {
+  AgentDriver,
+  AgentDriverFactory,
+  AskQuestionOutcome,
+  AskQuestionParams,
+  CreatePullRequestToolOptions,
+  GitCredential,
+  GitDriver,
+  RepoState,
+  SandboxRuntimeOptions,
+} from "./runtime-types.js";
+import {
+  AGENT_PREVIEW_KEY,
+  addCost,
+  credentialRequestFromRepo,
+  detectLibc,
+  fallbackConsolidation,
+  formatCommandFailure,
+  inferFrameworkFromCommand,
+  outputLines,
+  resolveAppForStart,
+  slugify,
+  trimOutput,
+  zeroCost,
+} from "./runtime-helpers.js";
 export class SandboxRuntime {
   private readonly workspace: string;
   private readonly provider: string;
@@ -608,7 +518,20 @@ export class SandboxRuntime {
     const verification = await this.maybeSpan(
       "sandbox.verify",
       { parent },
-      () => this.verifyWithRetries(agent),
+      () => runVerificationLoop({
+        repoDir: this.requireRepo().dir,
+        verifier: this.verifier,
+        agent,
+        events: {
+          verification_started: (attempt, max_attempts) => {
+            this.send({ type: "verification_started", attempt, max_attempts });
+          },
+          verification_retrying: (attempt, max_attempts, last_error) => {
+            this.send({ type: "verification_retrying", attempt, max_attempts, last_error });
+          },
+          status: (message) => this.send({ type: "status", message }),
+        },
+      }),
     );
     cost = addCost(cost, verification.cost);
 
@@ -622,44 +545,6 @@ export class SandboxRuntime {
     }
 
     this.send({ type: "execution_complete", cost });
-  }
-
-  private async verifyWithRetries(agent: AgentDriver): Promise<{
-    success: boolean;
-    attempts: number;
-    lastError: string;
-    cost: CostInfo;
-  }> {
-    const maxAttempts = MAX_VERIFICATION_ATTEMPTS;
-    let lastError = "";
-    let repairCost: CostInfo = zeroCost();
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      this.send({ type: "verification_started", attempt, max_attempts: maxAttempts });
-      const result = await this.verifier.verify(this.requireRepo().dir);
-      if (result.success) {
-        this.send({
-          type: "status",
-          message: `Verification passed on attempt ${attempt}/${maxAttempts}.`,
-        });
-        return { success: true, attempts: attempt, lastError: "", cost: repairCost };
-      }
-
-      lastError = formatVerificationFailure(result);
-      if (attempt === maxAttempts) {
-        return { success: false, attempts: attempt, lastError, cost: repairCost };
-      }
-
-      this.send({
-        type: "verification_retrying",
-        attempt,
-        max_attempts: maxAttempts,
-        last_error: lastError,
-      });
-      repairCost = addCost(repairCost, await agent.execute(repairPrompt(attempt, maxAttempts, lastError)));
-    }
-
-    return { success: false, attempts: maxAttempts, lastError, cost: repairCost };
   }
 
   private async handleCreatePullRequest(
@@ -832,399 +717,4 @@ export class SandboxRuntime {
         : `Preview command saved: ${command.command} on port ${command.port}.`,
     });
   }
-}
-
-function credentialRequestFromRepo(repo: string): { protocol: "https"; host: string; path: string } | null {
-  try {
-    const url = new URL(repo);
-    if (url.protocol !== "https:") return null;
-    return {
-      protocol: "https",
-      host: url.hostname,
-      path: url.pathname.replace(/^\/+/, ""),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function planPrompt(prompt: string): string {
-  return [
-    "You are in PLAN MODE.",
-    "Explore this repository and create a detailed implementation plan.",
-    "Also identify the best dev server for live preview. Do not start it.",
-    "If there is a relevant UI dev server, include a JSON object anywhere in your response with this exact shape:",
-    "{\"preview\":{\"cwd\":\"relative/path/or/.\",\"command\":\"command to run\",\"port\":5173}}",
-    "The preview command must bind to 0.0.0.0 and use a non-3000 port.",
-    "Only output the plan as structured markdown.",
-    "",
-    prompt,
-  ].join("\n");
-}
-
-function refinePrompt(feedback: string): string {
-  return [
-    "Revise the existing plan based on this feedback.",
-    "Only output the updated plan as structured markdown.",
-    "",
-    feedback,
-  ].join("\n");
-}
-
-function executePrompt(plan: string): string {
-  return [
-    "Execute this approved plan step by step.",
-    "Make the required code changes, then stop.",
-    "Do not run dependency installation, CI, test, or lint commands unless the user explicitly asked for that command.",
-    "Codevil will run setup and verification after you stop.",
-    "",
-    plan,
-  ].join("\n");
-}
-
-function repairPrompt(attempt: number, maxAttempts: number, failure: string): string {
-  return [
-    `Verification failed after attempt ${attempt}/${maxAttempts}.`,
-    "Fix the failure, keep changes scoped to the approved plan, then stop.",
-    "",
-    failure,
-  ].join("\n");
-}
-
-export function parsePreviewDiscovery(output: string): PreviewCommand | undefined {
-  const json = extractJsonObject(output);
-  if (!json) return undefined;
-
-  try {
-    const parsed = JSON.parse(json) as { cwd?: unknown; command?: unknown; port?: unknown };
-    if (typeof parsed.command !== "string" || !parsed.command.trim()) return undefined;
-    if (typeof parsed.port !== "number" || !Number.isInteger(parsed.port)) return undefined;
-    if (parsed.port < 1024 || parsed.port > 65535 || parsed.port === 3000) return undefined;
-    if (parsed.cwd !== undefined && typeof parsed.cwd !== "string") return undefined;
-    return {
-      cwd: parsed.cwd?.trim() || ".",
-      command: parsed.command.trim(),
-      port: parsed.port,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-export function parsePreviewSuggestion(output: string): PreviewCommand | undefined {
-  for (const json of extractJsonCandidates(output)) {
-    try {
-      const parsed = JSON.parse(json) as { preview?: unknown };
-      if (!isRecord(parsed.preview)) continue;
-      const command = parsePreviewCommandShape(parsed.preview);
-      if (command) return command;
-    } catch {
-      continue;
-    }
-  }
-
-  return undefined;
-}
-
-function parsePreviewCommandShape(value: Record<string, unknown>): PreviewCommand | undefined {
-  if (typeof value.command !== "string" || !value.command.trim()) return undefined;
-  if (typeof value.port !== "number" || !Number.isInteger(value.port)) return undefined;
-  if (value.port < 1024 || value.port > 65535 || value.port === 3000) return undefined;
-  if (value.cwd !== undefined && typeof value.cwd !== "string") return undefined;
-  return {
-    cwd: value.cwd?.trim() || ".",
-    command: value.command.trim(),
-    port: value.port,
-  };
-}
-
-function extractJsonObject(output: string): string | undefined {
-  const fenced = output.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const text = fenced?.[1] ?? output;
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return undefined;
-  return text.slice(start, end + 1);
-}
-
-function extractJsonCandidates(output: string): string[] {
-  const candidates: string[] = [];
-  for (const match of output.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
-    candidates.push(match[1]);
-  }
-
-  const whole = extractJsonObject(output);
-  if (whole) candidates.push(whole);
-  return candidates;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-export function detectLibc(): "gnu" | "musl" | undefined {
-  if (process.platform !== "linux") return undefined;
-  // glibc: /lib/x86_64-linux-gnu/libc.so.6 on Debian/Ubuntu, /lib64/libc.so.6 on RHEL/Fedora.
-  if (
-    existsSync("/lib/x86_64-linux-gnu/libc.so.6") ||
-    existsSync("/lib/aarch64-linux-gnu/libc.so.6") ||
-    existsSync("/lib64/libc.so.6")
-  ) {
-    return "gnu";
-  }
-  // musl: Alpine ships ld-musl-* alongside libc.so.
-  if (
-    existsSync("/lib/ld-musl-x86_64.so.1") ||
-    existsSync("/lib/ld-musl-aarch64.so.1")
-  ) {
-    return "musl";
-  }
-  return undefined;
-}
-
-function inferFrameworkFromCommand(command: string): PreviewFramework {
-  if (/\bnext\b/i.test(command)) return "next";
-  if (/\bvite\b/i.test(command)) return "vite";
-  if (/react-scripts/i.test(command)) return "react-scripts";
-  if (/manage\.py\s+runserver/i.test(command)) return "django";
-  if (/\brails\b/i.test(command)) return "rails";
-  if (/^\s*make\b/i.test(command)) return "make";
-  if (/^\s*just\b/i.test(command)) return "just";
-  return "npm";
-}
-
-function formatVerificationFailure(result: VerificationResult): string {
-  return `${result.command} failed:\n${result.output}`.trim();
-}
-
-function addCost(left: CostInfo, right: CostInfo): CostInfo {
-  return {
-    input_tokens: left.input_tokens + right.input_tokens,
-    output_tokens: left.output_tokens + right.output_tokens,
-    total_cost_usd: Number((left.total_cost_usd + right.total_cost_usd).toFixed(6)),
-  };
-}
-
-function fallbackConsolidation(annotations: ConsolidationAnnotation[]): ConsolidationResult {
-  const brief = annotations.map((annotation) => annotation.comment).join("\n\n");
-  return {
-    brief: brief.length > 0 ? brief : "Refine the plan.",
-    cost: zeroCost(),
-  };
-}
-
-function zeroCost(): CostInfo {
-  return {
-    input_tokens: 0,
-    output_tokens: 0,
-    total_cost_usd: 0,
-  };
-}
-
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "change";
-}
-
-export class RepositoryVerifier implements Verifier {
-  constructor(private readonly commandRunner: CommandRunner = new ShellCommandRunner()) {}
-
-  async verify(cwd: string): Promise<VerificationResult> {
-    const command = detectVerificationCommand(cwd);
-    if (!command) {
-      return {
-        success: true,
-        command: "no verification command",
-        output: "No package.json or known verification command found.",
-      };
-    }
-
-    const result = await this.commandRunner.run(command, {
-      cwd,
-      timeoutMs: 300_000,
-    });
-    return {
-      success: result.code === 0,
-      command,
-      output: trimOutput(`${result.stdout}${result.stderr}`),
-    };
-  }
-}
-
-export function detectSetupCommand(cwd: string): string | undefined {
-  if (existsSync(join(cwd, ".codevil", "setup.sh"))) {
-    return "bash .codevil/setup.sh";
-  }
-
-  const packageManager = detectPackageManager(cwd);
-  switch (packageManager) {
-    case "pnpm":
-      return "pnpm install --frozen-lockfile";
-    case "npm":
-      return "npm install --no-audit --no-fund --prefer-offline";
-    case "yarn":
-      return "yarn install --immutable";
-    case "bun":
-      return "bun install --frozen-lockfile";
-    default:
-      return undefined;
-  }
-}
-
-export function detectVerificationCommand(cwd: string): string | undefined {
-  if (existsSync(join(cwd, ".codevil", "verify.sh"))) {
-    return "bash .codevil/verify.sh";
-  }
-
-  const packageJson = join(cwd, "package.json");
-  if (existsSync(packageJson)) {
-    const scripts = readPackageScripts(packageJson);
-    if (scripts.has("test")) {
-      switch (detectPackageManager(cwd)) {
-        case "pnpm":
-          return "pnpm test";
-        case "yarn":
-          return "yarn test";
-        case "bun":
-          return "bun test";
-        case "npm":
-        default:
-          return "npm test";
-      }
-    }
-  }
-
-  const makefile = join(cwd, "Makefile");
-  if (existsSync(makefile)) {
-    return "make test";
-  }
-
-  return undefined;
-}
-
-function detectPackageManager(cwd: string): "pnpm" | "npm" | "yarn" | "bun" | undefined {
-  const packageJson = join(cwd, "package.json");
-  if (existsSync(packageJson)) {
-    const packageManager = readPackageManager(packageJson);
-    if (packageManager === "pnpm" || packageManager === "npm" || packageManager === "yarn" || packageManager === "bun") {
-      return packageManager;
-    }
-  }
-
-  if (existsSync(join(cwd, "pnpm-lock.yaml"))) return "pnpm";
-  if (existsSync(join(cwd, "package-lock.json")) || existsSync(join(cwd, "npm-shrinkwrap.json"))) return "npm";
-  if (existsSync(join(cwd, "yarn.lock"))) return "yarn";
-  if (existsSync(join(cwd, "bun.lock")) || existsSync(join(cwd, "bun.lockb"))) return "bun";
-  return undefined;
-}
-
-function readPackageManager(packageJson: string): string | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(packageJson, "utf8")) as { packageManager?: unknown };
-    if (typeof parsed.packageManager !== "string") return undefined;
-    return parsed.packageManager.split("@", 1)[0];
-  } catch {
-    return undefined;
-  }
-}
-
-function readPackageScripts(packageJson: string): Set<string> {
-  try {
-    const parsed = JSON.parse(readFileSync(packageJson, "utf8")) as { scripts?: unknown };
-    if (!parsed.scripts || typeof parsed.scripts !== "object") return new Set();
-    return new Set(Object.keys(parsed.scripts));
-  } catch {
-    return new Set();
-  }
-}
-
-function formatCommandFailure(label: string, command: string, result: CommandResult): string {
-  const output = trimOutput(`${result.stdout}${result.stderr}`);
-  return output
-    ? `${label} command failed (${command}):\n${output}`
-    : `${label} command failed (${command}) with exit code ${result.code}`;
-}
-
-export class ShellCommandRunner implements CommandRunner {
-  run(command: string, options: { cwd: string; timeoutMs: number; onOutput?: (chunk: string) => void }): Promise<CommandResult> {
-    return runShell(command, options.cwd, options.timeoutMs, options.onOutput);
-  }
-}
-
-function runShell(
-  command: string,
-  cwd: string,
-  timeoutMs: number,
-  onOutput?: (chunk: string) => void,
-): Promise<CommandResult> {
-  return new Promise((resolve, reject) => {
-    const detached = process.platform !== "win32";
-    const child = spawn(command, {
-      cwd,
-      detached,
-      shell: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      if (detached && child.pid) {
-        try {
-          process.kill(-child.pid, "SIGTERM");
-        } catch {
-          child.kill("SIGTERM");
-        }
-      } else {
-        child.kill("SIGTERM");
-      }
-    }, timeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-      onOutput?.(chunk);
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-      onOutput?.(chunk);
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      resolve({
-        code: timedOut ? 124 : code ?? 1,
-        stdout,
-        stderr: timedOut ? `${stderr}\nCommand timed out after ${timeoutMs}ms.` : stderr,
-      });
-    });
-  });
-}
-
-function outputLines(chunk: string): string[] {
-  return chunk
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.slice(0, 500));
-}
-
-function trimOutput(output: string): string {
-  const maxLength = 32 * 1024;
-  if (output.length <= maxLength) return output.trim();
-  return output.slice(output.length - maxLength).trim();
-}
-
-function resolveAppForStart(apps: PreviewApp[], appKey?: string): PreviewApp | undefined {
-  if (appKey) return apps.find((app) => app.key === appKey);
-  if (apps.length === 1) return apps[0];
-  return apps.find((app) => app.key === AGENT_PREVIEW_KEY);
 }

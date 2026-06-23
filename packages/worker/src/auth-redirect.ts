@@ -1,5 +1,7 @@
 import { splitSetCookieHeader } from "better-auth/cookies";
 
+import { isRecord } from "@codevil/shared";
+
 export const GOOGLE_SOCIAL_SIGN_IN_PATH = "/api/auth/sign-in/google";
 export const BETTER_AUTH_SOCIAL_SIGN_IN_PATH = "/api/auth/sign-in/social";
 
@@ -65,8 +67,4 @@ function copySetCookieHeaders(source: Headers, target: Headers): void {
   for (const cookie of cookies) {
     target.append("Set-Cookie", cookie);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

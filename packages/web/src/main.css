@@ -45,75 +45,76 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
+    /* Cool-neutral light, sage as the single accent. Mirrors session-theme.css. */
+    --background: 60 7% 98%;          /* #FBFBFA */
+    --foreground: 220 8% 9%;          /* #15171A */
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
+    --card-foreground: 220 8% 9%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 240 5.9% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 240 5.9% 10%;
+    --popover-foreground: 220 8% 9%;
+    --primary: 145 26% 33%;           /* sage #3F6B53 */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 30 7% 96%;
+    --secondary-foreground: 220 8% 9%;
+    --muted: 30 7% 96%;
+    --muted-foreground: 215 5% 38%;
+    --accent: 145 18% 94%;            /* sage-soft */
+    --accent-foreground: 145 26% 28%;
+    --destructive: 4 80% 40%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 30 6% 90%;
+    --input: 30 6% 90%;
+    --ring: 145 26% 33%;
     --radius: 0.5rem;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
-    --sidebar: 0 0% 98%;
-    --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 240 5.9% 10%;
-    --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 240 4.8% 95.9%;
-    --sidebar-accent-foreground: 240 5.9% 10%;
-    --sidebar-border: 220 13% 91%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --chart-1: 145 26% 45%;
+    --chart-2: 213 18% 50%;
+    --chart-3: 30 25% 45%;
+    --chart-4: 4 65% 55%;
+    --chart-5: 280 14% 50%;
+    --sidebar: 60 7% 98%;
+    --sidebar-foreground: 220 6% 26%;
+    --sidebar-primary: 145 26% 33%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 30 7% 96%;
+    --sidebar-accent-foreground: 220 8% 9%;
+    --sidebar-border: 30 6% 90%;
+    --sidebar-ring: 145 26% 33%;       /* sage — single accent, no rogue blue */
   }
 
   .dark {
-    /* Neutral dark with brand sage accent — no blue cast, calm contrast. */
-    --background: 0 0% 4%;            /* #0A0A0A */
-    --foreground: 0 0% 93%;           /* #EDEDED */
-    --card: 0 0% 8%;                  /* #141414 */
-    --card-foreground: 0 0% 93%;
-    --popover: 0 0% 9%;
-    --popover-foreground: 0 0% 93%;
+    /* Linear-ish near-black, sage as the single accent. Mirrors session-theme.css. */
+    --background: 220 6% 5%;          /* #0A0B0C */
+    --foreground: 220 6% 93%;         /* #ECEDEE */
+    --card: 220 7% 8%;                /* #121315 */
+    --card-foreground: 220 6% 93%;
+    --popover: 220 7% 9%;
+    --popover-foreground: 220 6% 93%;
     --primary: 145 24% 55%;           /* sage #6FA88A */
-    --primary-foreground: 0 0% 4%;
-    --secondary: 0 0% 11%;            /* #1C1C1C */
-    --secondary-foreground: 0 0% 93%;
-    --muted: 0 0% 11%;
-    --muted-foreground: 0 0% 63%;     /* #A1A1A1 */
-    --accent: 0 0% 15%;               /* #262626 */
-    --accent-foreground: 0 0% 93%;
-    --destructive: 4 71% 63%;         /* #E5635A */
-    --destructive-foreground: 0 0% 4%;
-    --border: 0 0% 16%;               /* #2A2A2A */
-    --input: 0 0% 16%;
+    --primary-foreground: 220 6% 5%;
+    --secondary: 220 6% 10%;          /* #18191C */
+    --secondary-foreground: 220 6% 93%;
+    --muted: 220 6% 10%;
+    --muted-foreground: 218 3% 60%;   /* #93969B */
+    --accent: 222 6% 15%;
+    --accent-foreground: 220 6% 93%;
+    --destructive: 4 71% 63%;
+    --destructive-foreground: 220 6% 5%;
+    --border: 222 6% 16%;             /* #25272C */
+    --input: 222 6% 16%;
     --ring: 145 24% 55%;
     --chart-1: 145 24% 55%;
-    --chart-2: 213 35% 62%;
-    --chart-3: 35 60% 60%;
+    --chart-2: 213 16% 55%;
+    --chart-3: 35 35% 60%;
     --chart-4: 4 65% 62%;
-    --chart-5: 280 30% 65%;
-    --sidebar: 0 0% 3%;
-    --sidebar-foreground: 0 0% 86%;
+    --chart-5: 280 18% 60%;
+    --sidebar: 220 7% 4%;
+    --sidebar-foreground: 220 6% 86%;
     --sidebar-primary: 145 24% 55%;
-    --sidebar-primary-foreground: 0 0% 4%;
-    --sidebar-accent: 0 0% 10%;
-    --sidebar-accent-foreground: 0 0% 93%;
-    --sidebar-border: 0 0% 14%;
-    --sidebar-ring: 145 24% 55%;
+    --sidebar-primary-foreground: 220 6% 5%;
+    --sidebar-accent: 220 6% 10%;
+    --sidebar-accent-foreground: 220 6% 93%;
+    --sidebar-border: 222 6% 14%;
+    --sidebar-ring: 145 24% 55%;       /* sage — same single accent */
   }
 }
 
@@ -121,9 +122,50 @@
   * {
     @apply border-border;
   }
+
+  html {
+    font-feature-settings: "cv11", "ss01", "ss02", "calt", "kern";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    letter-spacing: -0.005em;
+  }
+
+  /* Tighten display headings — sans, weight contrast, balanced wrapping. */
+  h1, h2, h3, h4 {
+    font-family: var(--sans);
+    letter-spacing: -0.018em;
+    text-wrap: balance;
+  }
+  h1 { font-weight: 600; }
+  h2, h3 { font-weight: 600; }
+
+  /* Mono is for machine text only: code, IDs, paths, telemetry. */
+  code, kbd, pre, samp, [data-mono] {
+    font-family: var(--mono);
+    font-feature-settings: "calt", "liga";
+  }
+
+  /* Numbers in tables/lists should not jitter. */
+  [data-tnum], .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Buttons feel responsive on press — Emil's rule. */
+  button {
+    transition: background-color var(--t-fast) ease, color var(--t-fast) ease,
+                border-color var(--t-fast) ease, transform var(--t-fast) var(--ease-out),
+                opacity var(--t-fast) ease;
+  }
+  button:not(:disabled):active {
+    transform: scale(0.98);
   }
 
   /* Chrome paints autofilled inputs with its own background — override it. */
@@ -139,8 +181,23 @@
   }
 
   ::selection {
-    background: hsl(var(--primary) / 0.35);
+    background: hsl(var(--primary) / 0.22);
     color: var(--fg);
+  }
+
+  /* Focus is keyboard-only: visible ring on tab, invisible on click. */
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring) / 0.55);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
@@ -307,8 +364,8 @@
   }
 
   .timeline-dot-progress {
-    @apply bg-blue-500;
-    box-shadow: 0 0 0 1px hsl(221 83% 53% / 0.28), 0 0 0 5px hsl(221 83% 53% / 0.1);
+    background: hsl(var(--primary));
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.32), 0 0 0 5px hsl(var(--primary) / 0.10);
   }
 
   .timeline-item-phase {
@@ -324,7 +381,9 @@
   }
 
   .timeline-progress-label {
-    @apply rounded-md border border-blue-500/20 bg-blue-500/8 px-3 py-1.5 text-sm font-semibold text-foreground shadow-sm;
+    @apply rounded-md border px-3 py-1.5 text-sm font-semibold text-foreground;
+    border-color: hsl(var(--primary) / 0.22);
+    background: hsl(var(--primary) / 0.08);
   }
 
   .timeline-item-text {
@@ -505,7 +564,8 @@
   }
 
   .status-dot-running {
-    @apply animate-pulse bg-blue-500;
+    @apply animate-pulse;
+    background: hsl(var(--primary));
   }
 
   .status-dot-success {

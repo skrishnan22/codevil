@@ -149,6 +149,12 @@ export const ApprovalRequestedEventSchema = z.object({
   refinement_round: z.number(),
 });
 
+export const PlanExecutionStartedEventSchema = z.object({
+  type: z.literal("plan_execution_started"),
+  run_id: z.string(),
+  actor: z.string().optional(),
+});
+
 export const AgentRunCompletedEventSchema = z.object({
   type: z.literal("agent_run_completed"),
   run_id: z.string(),
@@ -271,6 +277,7 @@ export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   AgentRequestQueuedEventSchema,
   AgentRunStartedEventSchema,
   ApprovalRequestedEventSchema,
+  PlanExecutionStartedEventSchema,
   AgentRunCompletedEventSchema,
   AgentRunFailedEventSchema,
   AgentResponseEventSchema,
@@ -314,6 +321,7 @@ export type AgentRequestEvent = z.infer<typeof AgentRequestEventSchema>;
 export type AgentRequestQueuedEvent = z.infer<typeof AgentRequestQueuedEventSchema>;
 export type AgentRunStartedEvent = z.infer<typeof AgentRunStartedEventSchema>;
 export type ApprovalRequestedEvent = z.infer<typeof ApprovalRequestedEventSchema>;
+export type PlanExecutionStartedEvent = z.infer<typeof PlanExecutionStartedEventSchema>;
 export type AgentRunCompletedEvent = z.infer<typeof AgentRunCompletedEventSchema>;
 export type AgentRunFailedEvent = z.infer<typeof AgentRunFailedEventSchema>;
 export type AgentResponseEvent = z.infer<typeof AgentResponseEventSchema>;

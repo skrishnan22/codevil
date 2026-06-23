@@ -6,6 +6,7 @@ import {
   type CLIToDOMessage,
 } from "@codevil/shared";
 import type { MembershipRow } from "./memberships.js";
+import { verifySocketAuthToken } from "./ws-token.js";
 
 export interface SocketAuthContext {
   userId: string;
@@ -57,18 +58,17 @@ export function authActionForClientMessage(message: CLIToDOMessage): AuthAction 
   }
 }
 
-export function socketAuthFromRequest(request: Request): SocketAuthContext | null {
-  const url = new URL(request.url);
-  return normalizeSocketAuth({
-    userId: url.searchParams.get("auth_user_id"),
-    email: url.searchParams.get("auth_email"),
-    name: url.searchParams.get("auth_name"),
-    role: url.searchParams.get("auth_role"),
-  });
-}
-
 export function socketAuthFromAttachment(attachment: SocketAttachment | null | undefined): SocketAuthContext | null {
   return normalizeSocketAuth(attachment?.auth);
+}
+
+export async function socketAuthFromUpgradeRequest(
+  request: Request,
+  sessionId: string,
+  secret: string,
+): Promise<SocketAuthContext | null> {
+  const url = new URL(request.url);
+  return verifySocketAuthToken(url.searchParams.get("ws_token"), sessionId, secret);
 }
 
 export async function authorizeSocketMessage(input: {

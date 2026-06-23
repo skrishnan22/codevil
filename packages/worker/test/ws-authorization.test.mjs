@@ -4,8 +4,22 @@ import test from "node:test";
 import {
   authActionForClientMessage,
   authorizeSocketMessage,
-  socketAuthFromRequest,
+  socketAuthFromUpgradeRequest,
 } from "../dist/ws-authorization.js";
+import {
+  createSocketAuthToken,
+  sessionIdFromWebSocketPath,
+  SOCKET_AUTH_TOKEN_TTL_MS,
+  verifySocketAuthToken,
+} from "../dist/ws-token.js";
+
+const SECRET = "test-api-key";
+const AUTH = {
+  userId: "usr_1",
+  email: "a@example.com",
+  name: "Alice",
+  role: "developer",
+};
 
 test("authActionForClientMessage maps approvals to run approval permission", () => {
   assert.equal(authActionForClientMessage({ type: "approve" }), "runs:approve");
@@ -24,20 +38,34 @@ test("authActionForClientMessage treats user-driven socket mutations as session 
   assert.equal(authActionForClientMessage({ type: "preview_stop" }), "sessions:control");
 });
 
-test("socketAuthFromRequest extracts trusted auth context from worker-internal query params", () => {
-  const request = new Request("https://worker.example.com/sessions/ses_1/ws?auth_user_id=usr_1&auth_email=a%40example.com&auth_name=Alice&auth_role=developer");
-
-  assert.deepEqual(socketAuthFromRequest(request), {
-    userId: "usr_1",
-    email: "a@example.com",
-    name: "Alice",
-    role: "developer",
-  });
+test("createSocketAuthToken round-trips through verifySocketAuthToken", async () => {
+  const token = await createSocketAuthToken(AUTH, "ses_1", SECRET);
+  assert.deepEqual(await verifySocketAuthToken(token, "ses_1", SECRET), AUTH);
 });
 
-test("socketAuthFromRequest rejects missing or invalid auth query params", () => {
-  assert.equal(socketAuthFromRequest(new Request("https://worker.example.com/sessions/ses_1/ws?auth_user_id=usr_1&auth_email=a%40example.com")), null);
-  assert.equal(socketAuthFromRequest(new Request("https://worker.example.com/sessions/ses_1/ws?auth_user_id=usr_1&auth_email=a%40example.com&auth_role=root")), null);
+test("verifySocketAuthToken rejects forged, expired, and session-mismatched tokens", async () => {
+  const now = 1_700_000_000_000;
+  const token = await createSocketAuthToken(AUTH, "ses_1", SECRET, now);
+
+  assert.equal(await verifySocketAuthToken(token, "ses_2", SECRET, now), null);
+  assert.equal(await verifySocketAuthToken(token, "ses_1", "wrong-secret", now), null);
+  assert.equal(
+    await verifySocketAuthToken(token, "ses_1", SECRET, now + SOCKET_AUTH_TOKEN_TTL_MS + 1),
+    null,
+  );
+  assert.equal(await verifySocketAuthToken("not-a-token", "ses_1", SECRET, now), null);
+});
+
+test("socketAuthFromUpgradeRequest reads ws_token from the upgrade request", async () => {
+  const token = await createSocketAuthToken(AUTH, "ses_1", SECRET);
+  const request = new Request(`https://worker.example.com/sessions/ses_1/ws?ws_token=${encodeURIComponent(token)}`);
+
+  assert.deepEqual(await socketAuthFromUpgradeRequest(request, "ses_1", SECRET), AUTH);
+});
+
+test("sessionIdFromWebSocketPath extracts the session id", () => {
+  assert.equal(sessionIdFromWebSocketPath("/sessions/ses_abc/ws"), "ses_abc");
+  assert.equal(sessionIdFromWebSocketPath("/other"), null);
 });
 
 test("authorizeSocketMessage allows active members with sufficient role permission", async () => {

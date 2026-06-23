@@ -37,6 +37,7 @@ import {
   QuestionAnsweredEventSchema,
   QuestionAssignMessageSchema,
   QuestionAnswerMessageSchema,
+  PlanExecutionStartedEventSchema,
   DOToCLIEventSchema,
   CLIToDOMessageSchema,
   PersistedDOToCLIEventSchema,
@@ -56,10 +57,21 @@ const validAnchor = {
 test("StatusEventSchema preserves an optional actor field", () => {
   const parsed = StatusEventSchema.parse({
     type: "status",
-    message: "Plan approved. Starting execution.",
+    message: "Refining plan.",
     actor: "Alice",
   });
   assert.equal(parsed.actor, "Alice");
+});
+
+test("PlanExecutionStartedEventSchema carries run_id and optional actor", () => {
+  const parsed = PlanExecutionStartedEventSchema.parse({
+    type: "plan_execution_started",
+    run_id: "run_abc",
+    actor: "Alice",
+  });
+  assert.equal(parsed.run_id, "run_abc");
+  assert.equal(parsed.actor, "Alice");
+  assert.equal(DOToCLIEventSchema.parse(parsed).type, "plan_execution_started");
 });
 
 test("ErrorEventSchema preserves an optional actor field", () => {

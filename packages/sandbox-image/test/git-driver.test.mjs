@@ -47,6 +47,7 @@ test("shallowCloneArgs defaults clone operations to depth 1", () => {
     "--progress",
     "--depth",
     "1",
+    "--no-tags",
     "https://github.com/example/app.git",
     "/workspace/repo",
   ]);

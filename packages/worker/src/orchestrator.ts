@@ -125,6 +125,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       env.CODEVIL_API_KEY,
       ...collectProviderCredentialSecrets(env),
       env.GITHUB_PAT,
+      env.R2_ACCESS_KEY_ID,
+      env.R2_SECRET_ACCESS_KEY,
     ].filter((secret): secret is string => Boolean(secret));
     this.sql = ctx.storage.sql;
     this.eventLog = new SessionEventLog(

@@ -87,6 +87,16 @@ test("DO→Sandbox: agent turn parses with optional provider", () => {
   assert.equal(result?.type, "agent_turn");
 });
 
+test("DO→Sandbox: init can indicate a restored workspace cache", () => {
+  const result = parseInbound(
+    DOToSandboxMessageSchema,
+    { type: "init", repo: "https://github.com/example/app.git", restored_from_cache: true },
+    "do_to_sandbox",
+  );
+  assert.equal(result?.type, "init");
+  assert.equal(result.restored_from_cache, true);
+});
+
 test("DO→Sandbox and Sandbox→DO: consolidation messages parse", () => {
   const request = parseInbound(
     DOToSandboxMessageSchema,

@@ -24,6 +24,7 @@ export interface CommandRunner {
     cwd: string;
     timeoutMs: number;
     onOutput?: (chunk: string) => void;
+    env?: Record<string, string>;
   }): Promise<CommandResult>;
 }
 
@@ -103,8 +104,13 @@ export class RepositoryVerifier implements Verifier {
 }
 
 export class ShellCommandRunner implements CommandRunner {
-  run(command: string, options: { cwd: string; timeoutMs: number; onOutput?: (chunk: string) => void }): Promise<CommandResult> {
-    return runShell(command, options.cwd, options.timeoutMs, options.onOutput);
+  run(command: string, options: {
+    cwd: string;
+    timeoutMs: number;
+    onOutput?: (chunk: string) => void;
+    env?: Record<string, string>;
+  }): Promise<CommandResult> {
+    return runShell(command, options.cwd, options.timeoutMs, options.onOutput, options.env);
   }
 }
 
@@ -204,12 +210,14 @@ function runShell(
   cwd: string,
   timeoutMs: number,
   onOutput?: (chunk: string) => void,
+  env?: Record<string, string>,
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const detached = process.platform !== "win32";
     const child = spawn(command, {
       cwd,
       detached,
+      env: env ? { ...process.env, ...env } : process.env,
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

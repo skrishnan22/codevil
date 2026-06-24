@@ -8,6 +8,13 @@ upload_source_maps = true
 [vars]
 EMAIL_PROVIDER = "none"
 CODEVIL_WEB_ORIGIN = "https://codevil-ui.pages.dev,http://localhost:5173,http://localhost:8787"
+# Preview subdomains: {token}.lexmora.app → worker (Next.js/Vite use root-absolute asset paths).
+CODEVIL_PREVIEW_ORIGIN = "https://lexmora.app"
+BACKUP_BUCKET_NAME = "codevil-sandbox-backups"
+
+[[routes]]
+pattern = "*.lexmora.app/*"
+zone_name = "lexmora.app"
 
 [assets]
 directory = "../web/dist"
@@ -40,6 +47,10 @@ class_name = "Sandbox"
 [[d1_databases]]
 binding = "DB"
 migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BACKUP_BUCKET"
+bucket_name = "codevil-sandbox-backups"
 
 [[migrations]]
 tag = "v1"

@@ -28,6 +28,29 @@ export class ShellGitDriver implements GitDriver {
     }
   }
 
+  async refresh(
+    repo: string,
+    cwd: string,
+    onProgress: (line: string) => void,
+    credential?: GitCredential,
+  ): Promise<void> {
+    const fetchUrl = credential ? withCredential(repo, credential) : repo;
+    await run("git", ["remote", "set-url", "origin", fetchUrl], { cwd });
+    try {
+      await run("git", ["fetch", "--progress", "--depth", "1", "--prune", "--no-tags", "origin"], {
+        cwd,
+        onStderr: onProgress,
+      });
+      await run("git", ["remote", "set-head", "origin", "--auto"], { cwd, onStderr: onProgress });
+      await run("git", ["reset", "--hard", "refs/remotes/origin/HEAD"], { cwd, onStdout: onProgress });
+      await run("git", ["clean", "-fdx"], { cwd, onStdout: onProgress });
+    } finally {
+      if (credential) {
+        await run("git", ["remote", "set-url", "origin", repo], { cwd });
+      }
+    }
+  }
+
   async defaultBranch(cwd: string): Promise<string> {
     const result = await run("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd });
     return result.stdout.trim().replace(/^origin\//, "") || "main";
@@ -48,7 +71,7 @@ export class ShellGitDriver implements GitDriver {
 }
 
 export function shallowCloneArgs(repo: string, destination: string): string[] {
-  return ["clone", "--progress", "--depth", "1", repo, destination];
+  return ["clone", "--progress", "--depth", "1", "--no-tags", repo, destination];
 }
 
 function withCredential(repo: string, credential: GitCredential): string {

@@ -9,6 +9,11 @@ import {
   mapSandboxMessageToCLIEvents,
   provisionSandbox,
 } from "../sandbox.js";
+import {
+  createWorkspaceCacheSnapshotForSandbox,
+  restoreLatestWorkspaceCache,
+  type WorkspaceCacheSandbox,
+} from "../workspace-cache.js";
 import type { SandboxConnectionMode } from "../sandbox-connection.js";
 import { createDraftPullRequest, credentialRequestAllowed } from "../github.js";
 import { getProvisioningCredentialContext } from "../provider-credentials.js";
@@ -59,6 +64,13 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
           apiKey: host.workerEnv.CODEVIL_API_KEY,
           provider: host.meta!.provider,
           llmKey: provisioningContext.llmKey,
+          beforeStart: async (sandbox) => {
+            const restored = await restoreWorkspaceCacheBeforeStart(host, sandbox as WorkspaceCacheSandbox);
+            if (host.meta) {
+              host.meta.workspace_cache_restored = restored;
+              host.saveMeta();
+            }
+          },
         }),
     });
     host.appendAndBroadcast({ type: "status", message: "Sandbox process started." });
@@ -97,6 +109,7 @@ export function initializeSandboxConnection(
   ws.send(JSON.stringify({
     type: "init",
     repo: host.meta.repo,
+    ...(host.meta.workspace_cache_restored ? { restored_from_cache: true } : {}),
     ...(tracer ? { trace_id: tracer.trace_id } : {}),
   } satisfies DOToSandboxMessage));
 }
@@ -218,10 +231,64 @@ export function handleSandboxCloneComplete(host: OrchestratorHost): void {
     host.updateDirectory({ room_state: "ready", sandbox_state: "ready" });
     host.appendAndBroadcast({ type: "status", message: "Repository cloned. Room is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
+    scheduleWorkspaceCacheSnapshot(host);
     if (!host.meta.active_run && host.meta.queued_runs.length > 0) {
       finishRunAndDrainQueue(host, "completed");
     }
   }
+}
+
+async function restoreWorkspaceCacheBeforeStart(
+  host: OrchestratorHost,
+  sandbox: WorkspaceCacheSandbox,
+): Promise<boolean> {
+  if (!host.meta) return false;
+  const result = await restoreLatestWorkspaceCache({
+    db: host.workerEnv.DB,
+    sandbox,
+    repo: host.meta.repo,
+  });
+
+  if (result.restored) {
+    host.getTracer()?.log("INFO", "workspace_cache.restore.hit", {
+      snapshot_id: result.snapshotId,
+      repo: host.meta.repo,
+    });
+    host.appendAndBroadcast({ type: "status", message: "Restored cached workspace. Updating repository." });
+    return true;
+  }
+
+  host.getTracer()?.log("INFO", "workspace_cache.restore.miss", {
+    snapshot_id: result.snapshotId,
+    reason: result.reason,
+    repo: host.meta.repo,
+  });
+  return false;
+}
+
+function scheduleWorkspaceCacheSnapshot(host: OrchestratorHost): void {
+  if (!host.meta) return;
+  const sessionId = host.meta.session_id;
+  const repo = host.meta.repo;
+  host.ctx.waitUntil((async () => {
+    const result = await createWorkspaceCacheSnapshotForSandbox({
+      db: host.workerEnv.DB,
+      binding: host.workerEnv.Sandbox,
+      sessionId,
+      repo,
+    });
+    if (result.created) {
+      host.getTracer()?.log("INFO", "workspace_cache.create.ready", {
+        snapshot_id: result.snapshotId,
+        repo,
+      });
+      return;
+    }
+    host.getTracer()?.log("WARN", "workspace_cache.create.skipped", {
+      reason: result.reason,
+      repo,
+    });
+  })());
 }
 
 export function handleSandboxPlanReady(host: OrchestratorHost, plan: string, cost: CostInfo): void {

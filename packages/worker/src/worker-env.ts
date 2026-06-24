@@ -4,8 +4,14 @@ export interface Env {
   ORCHESTRATOR: DurableObjectNamespace<Orchestrator>;
   Sandbox: DurableObjectNamespace;
   DB: D1Database;
+  BACKUP_BUCKET?: R2Bucket;
   ASSETS: Fetcher;
   CODEVIL_API_KEY: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_R2_ACCOUNT_ID?: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+  BACKUP_BUCKET_NAME?: string;
   OPENCODE_API_KEY?: string;
   OPENROUTER_API_KEY?: string;
   OPENAI_API_KEY?: string;

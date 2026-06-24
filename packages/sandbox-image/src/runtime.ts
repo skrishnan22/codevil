@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 
 import type {
   CostInfo,
@@ -140,7 +141,7 @@ export class SandboxRuntime {
 
       switch (message.type) {
         case "init":
-          await this.handleInit(message.repo);
+          await this.handleInit(message.repo, message.restored_from_cache ?? false);
           return;
         case "agent_turn":
           await this.handleAgentTurn(message.run_id, message.prompt, message.model, message.provider, parent);
@@ -199,16 +200,25 @@ export class SandboxRuntime {
     await this.agent?.dispose?.();
   }
 
-  private async handleInit(repo: string): Promise<void> {
+  private async handleInit(repo: string, restoredFromCache: boolean): Promise<void> {
     const repoDir = join(this.workspace, "repo");
 
     this.send({ type: "clone_started" });
     const credential = await this.requestCredential(repo);
-    await this.maybeSpan("sandbox.clone", { attributes: { repo } }, () =>
-      this.git.clone(repo, repoDir, (line) => {
-        this.send({ type: "clone_progress", line });
-      }, credential),
-    );
+    if (restoredFromCache && existsSync(join(repoDir, ".git"))) {
+      await this.maybeSpan("sandbox.repo_refresh", { attributes: { repo } }, async () => {
+        this.send({ type: "clone_progress", line: `Refreshing cached repository in ${repoDir}` });
+        await this.git.refresh(repo, repoDir, (line) => {
+          this.send({ type: "clone_progress", line });
+        }, credential);
+      });
+    } else {
+      await this.maybeSpan("sandbox.clone", { attributes: { repo } }, () =>
+        this.git.clone(repo, repoDir, (line) => {
+          this.send({ type: "clone_progress", line });
+        }, credential),
+      );
+    }
 
     await this.maybeSpan("sandbox.setup", {}, () => this.setupRepository(repoDir));
 
@@ -240,10 +250,12 @@ export class SandboxRuntime {
     const command = detectSetupCommand(repoDir);
     if (!command) return;
 
+    await this.ensureDependencyCacheDirs();
     this.send({ type: "status", message: `Running setup command: ${command}` });
     const result = await this.commandRunner.run(command, {
       cwd: repoDir,
       timeoutMs: 300_000,
+      env: dependencyCacheEnv(this.workspace),
       onOutput: (chunk) => {
         for (const line of outputLines(chunk)) {
           this.send({ type: "status", message: `Setup output: ${line}` });
@@ -256,6 +268,12 @@ export class SandboxRuntime {
     }
 
     this.send({ type: "status", message: "Setup completed." });
+  }
+
+  private async ensureDependencyCacheDirs(): Promise<void> {
+    await Promise.all(Object.values(dependencyCacheEnv(this.workspace)).map((value) =>
+      value.startsWith(this.workspace) ? mkdir(value, { recursive: true }) : Promise.resolve(),
+    ));
   }
 
   private async handlePlan(
@@ -717,4 +735,13 @@ export class SandboxRuntime {
         : `Preview command saved: ${command.command} on port ${command.port}.`,
     });
   }
+}
+
+export function dependencyCacheEnv(workspace: string): Record<string, string> {
+  return {
+    npm_config_cache: join(workspace, "cache", "npm"),
+    npm_config_store_dir: join(workspace, "cache", "pnpm-store"),
+    YARN_CACHE_FOLDER: join(workspace, "cache", "yarn"),
+    BUN_INSTALL_CACHE_DIR: join(workspace, "cache", "bun"),
+  };
 }

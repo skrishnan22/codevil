@@ -73,7 +73,8 @@ export async function proxyPreviewRequest(
 
   const originalUrl = new URL(request.url);
   const prefix = `/sessions/${meta.session_id}/preview/${token}`;
-  const path = originalUrl.pathname.startsWith(prefix)
+  const isPathBasedPreview = originalUrl.pathname.startsWith(prefix);
+  const path = isPathBasedPreview
     ? originalUrl.pathname.slice(prefix.length) || "/"
     : originalUrl.pathname;
   const proxyUrl = new URL(path, "http://localhost");
@@ -90,9 +91,42 @@ export async function proxyPreviewRequest(
 
   if (response.status === 101) return response;
 
+  const contentType = response.headers.get("content-type") ?? "";
+  if (isPathBasedPreview && contentType.includes("text/html")) {
+    const html = await response.text();
+    const headers = new Headers(response.headers);
+    headers.set("Cache-Control", "no-store");
+    headers.delete("content-length");
+    return new Response(injectPreviewBaseHref(html, `${prefix}/`), {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
   const patched = new Response(response.body, response);
   patched.headers.set("Cache-Control", "no-store");
   return patched;
+}
+
+/** Prefix for path-based preview URLs (`/sessions/.../preview/.../`). */
+export function previewPathPrefix(sessionId: string, token: string): string {
+  return `/sessions/${sessionId}/preview/${token}/`;
+}
+
+/**
+ * Inject `<base href>` so dev servers that emit root-absolute assets (`/_next/...`,
+ * `/@vite/...`) resolve under the preview path instead of the worker root.
+ */
+export function injectPreviewBaseHref(html: string, baseHref: string): string {
+  const normalizedBase = baseHref.endsWith("/") ? baseHref : `${baseHref}/`;
+  if (/<base\s[\s\S]*?\bhref\s*=/i.test(html)) return html;
+
+  const tag = `<base href="${normalizedBase}">`;
+  if (/<head[^>]*>/i.test(html)) {
+    return html.replace(/<head([^>]*)>/i, `<head$1>${tag}`);
+  }
+  return `${tag}${html}`;
 }
 
 function normalizeOrigin(origin: string): string {

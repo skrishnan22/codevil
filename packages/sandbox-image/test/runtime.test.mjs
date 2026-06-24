@@ -116,6 +116,47 @@ test("init uses credential_response for authenticated GitHub clone", async () =>
   ]);
 });
 
+test("init refreshes a restored cached repository instead of cloning", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-restored-runtime-"));
+  const sent = [];
+  const git = new FakeGitDriver({ createCodevilSetup: true });
+  const commandRunner = new FakeCommandRunner();
+  const repoDir = join(workspace, "repo");
+  await mkdir(join(repoDir, ".git"), { recursive: true });
+  const runtime = new SandboxRuntime({
+    workspace,
+    send: (message) => sent.push(message),
+    agentFactory: () => new FakeAgentDriver(),
+    git,
+    commandRunner,
+    credentialTimeoutMs: 0,
+  });
+
+  try {
+    await runtime.handleMessage({
+      type: "init",
+      repo: "https://github.com/example/app.git",
+      restored_from_cache: true,
+    });
+
+    assert.deepEqual(git.calls.slice(0, 2), [
+      ["refresh", "https://github.com/example/app.git", repoDir],
+      ["defaultBranch", repoDir],
+    ]);
+    assert.ok(!git.calls.some((call) => call[0] === "clone"));
+    assert.deepEqual(commandRunner.calls, [[
+      "bash .codevil/setup.sh",
+      repoDir,
+      300_000,
+    ]]);
+    assert.deepEqual(sent.filter((message) => message.type === "clone_progress"), [
+      { type: "clone_progress", line: `Refreshing cached repository in ${repoDir}` },
+    ]);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("consolidate_annotations emits brief (not brief_items) when agent returns the prose path", async () => {
   const sent = [];
   const git = new FakeGitDriver();
@@ -947,6 +988,14 @@ class FakeGitDriver {
       await writeFile(join(destination, ".codevil", "setup.sh"), "#!/bin/bash\n");
     }
     onProgress(`Cloning ${repo} into ${destination}`);
+  }
+
+  async refresh(repo, destination, onProgress, credential) {
+    this.calls.push(credential ? ["refresh", repo, destination, credential] : ["refresh", repo, destination]);
+    if (this.options.createCodevilSetup) {
+      await mkdir(join(destination, ".codevil"), { recursive: true });
+      await writeFile(join(destination, ".codevil", "setup.sh"), "#!/bin/bash\n");
+    }
   }
 
   async defaultBranch(cwd) {

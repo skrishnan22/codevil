@@ -15,6 +15,7 @@ export interface ProvisionSandboxOptions extends SandboxProcessEnvOptions {
   binding: DurableObjectNamespace<Sandbox>;
   sessionId: string;
   llmKey?: string;
+  beforeStart?: (sandbox: Sandbox) => Promise<void>;
 }
 
 export interface SandboxRetryOptions {
@@ -186,6 +187,8 @@ export async function provisionSandbox(options: ProvisionSandboxOptions): Promis
     "/run/secrets/env.json",
     JSON.stringify(env),
   ));
+
+  await options.beforeStart?.(sandbox);
 
   await retrySandboxOperation(() => sandbox.startProcess(
     "node /app/packages/sandbox-image/dist/index.js",

@@ -24,6 +24,7 @@ export const ConsolidationAnnotationSchema = z.object({
 export const InitMessageSchema = z.object({
   type: z.literal("init"),
   repo: z.string(),
+  restored_from_cache: z.boolean().optional(),
   trace_id: z.string().optional(),
 });
 

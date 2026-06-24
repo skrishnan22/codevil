@@ -50,6 +50,7 @@ import {
 import type { Env } from "./worker-env.js";
 import type { SocketAuthContext } from "./ws-authorization.js";
 import { createSocketAuthToken } from "./ws-token.js";
+import { listProviderModelOptions } from "./provider-models.js";
 
 export function authenticate(request: Request, apiKey: string): boolean {
   const auth = request.headers.get("Authorization");
@@ -554,6 +555,22 @@ export async function handleListSessions(
   return json({
     sessions: (result.results ?? []).map(buildSessionSummary),
   }, 200);
+}
+
+export async function handleListProviderModels(providerId: string): Promise<Response> {
+  try {
+    const models = await listProviderModelOptions(providerId);
+    return json({ provider: providerId, models }, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("Unknown provider:")) {
+      return json({ error: message }, 404);
+    }
+    if (message.startsWith("Provider model catalog is not supported:")) {
+      return json({ error: message }, 400);
+    }
+    return json({ error: "Failed to load provider models" }, 502);
+  }
 }
 
 export async function handleGetSession(

@@ -5,12 +5,14 @@ import {
   claimSetup,
   createSession,
   getAuthMe,
+  listProviderModels,
   listSessions,
   signInWithGoogle,
   signOut,
   type AuthMeResponse,
 } from "@/lib/api-client";
-import { DEFAULT_CONFIG } from "@codevil/shared";
+import { DEFAULT_CONFIG, LLM_PROVIDERS, PROVIDERS_WITH_MODEL_CATALOG } from "@codevil/shared";
+import type { ProviderModelOption } from "@codevil/shared";
 import type { SessionSummary } from "@/types";
 import {
   assignParticipantAvatarColors,
@@ -24,19 +26,11 @@ export const Route = createFileRoute("/")({
 
 const MODEL_PREFS_KEY = "codevil_model_prefs";
 
-const MODEL_OPTIONS = [
-  "kimi-k2.6",
-  "kimi-k2.5",
-  "kimi-for-coding",
-  "kimi-k2-thinking",
-  "glm-5.1",
-  "gpt-5.4",
-  "gpt-5.4-mini",
-  "gpt-5.3-codex",
-  "gpt-5.2",
-  "claude-sonnet-4-6",
-  "claude-opus-4-6",
-];
+const SUPPORTED_PROVIDERS = LLM_PROVIDERS.filter((entry) =>
+  PROVIDERS_WITH_MODEL_CATALOG.includes(entry.id),
+);
+
+const SUPPORTED_PROVIDER_IDS = new Set(SUPPORTED_PROVIDERS.map((entry) => entry.id));
 
 interface ModelPrefs {
   provider: string;
@@ -47,8 +41,11 @@ interface ModelPrefs {
 function loadModelPrefs(): ModelPrefs {
   try {
     const parsed = JSON.parse(localStorage.getItem(MODEL_PREFS_KEY) ?? "{}");
+    const provider = typeof parsed.provider === "string" && SUPPORTED_PROVIDER_IDS.has(parsed.provider)
+      ? parsed.provider
+      : DEFAULT_CONFIG.provider;
     return {
-      provider: typeof parsed.provider === "string" ? parsed.provider : DEFAULT_CONFIG.provider,
+      provider,
       planModel: typeof parsed.planModel === "string" ? parsed.planModel : DEFAULT_CONFIG.plan_model,
       execModel: typeof parsed.execModel === "string" ? parsed.execModel : DEFAULT_CONFIG.exec_model,
     };
@@ -144,6 +141,9 @@ function HomePage() {
   const [signingOut, setSigningOut] = useState(false);
   const [setupToken, setSetupToken] = useState("");
   const [setupSubmitting, setSetupSubmitting] = useState(false);
+  const [modelOptions, setModelOptions] = useState<ProviderModelOption[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
 
   useEffect(() => {
     const prefs = loadModelPrefs();
@@ -152,6 +152,48 @@ function HomePage() {
     setExecModel(prefs.execModel);
     void refreshHome();
   }, []);
+
+  useEffect(() => {
+    const config = loadConfig();
+    if (!config || !authState?.membership || authState.membership.status !== "active") {
+      return;
+    }
+
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError(null);
+
+    void listProviderModels(config, provider)
+      .then((result) => {
+        if (cancelled) return;
+        setModelOptions(result.models);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setModelOptions([]);
+        setModelsError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, authState?.membership]);
+
+  useEffect(() => {
+    if (modelOptions.length === 0) return;
+
+    const ids = new Set(modelOptions.map((model) => model.id));
+    const fallbackPlan = modelOptions.find((model) => model.id === DEFAULT_CONFIG.plan_model)?.id
+      ?? modelOptions[0].id;
+    const fallbackExec = modelOptions.find((model) => model.id === DEFAULT_CONFIG.exec_model)?.id
+      ?? modelOptions[0].id;
+
+    if (!ids.has(planModel)) setPlanModel(fallbackPlan);
+    if (!ids.has(execModel)) setExecModel(fallbackExec);
+  }, [modelOptions, planModel, execModel]);
 
   async function refreshHome() {
     const config = loadConfig();
@@ -268,6 +310,8 @@ function HomePage() {
 
   const canCreate =
     !loading &&
+    !modelsLoading &&
+    modelOptions.length > 0 &&
     Boolean(repo.trim() && provider.trim() && planModel.trim() && execModel.trim());
 
   const counts = useMemo(() => {
@@ -409,36 +453,48 @@ function HomePage() {
             <label className="home-launcher-field">
               <span>Provider</span>
               <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-                <option value="opencode-go">OpenCode Go</option>
-                <option value="kimi-coding">Kimi For Coding</option>
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic</option>
+                {SUPPORTED_PROVIDERS.map((entry) => (
+                  <option key={entry.id} value={entry.id}>{entry.displayName}</option>
+                ))}
               </select>
             </label>
             <label className="home-launcher-field">
               <span>Plan model</span>
-              <input
-                list="model-options"
+              <select
                 value={planModel}
                 onChange={(e) => setPlanModel(e.target.value)}
+                disabled={modelsLoading || modelOptions.length === 0}
                 required
-              />
+              >
+                {modelsLoading ? (
+                  <option value={planModel}>Loading models…</option>
+                ) : (
+                  modelOptions.map((model) => (
+                    <option key={model.id} value={model.id}>{model.name}</option>
+                  ))
+                )}
+              </select>
             </label>
             <label className="home-launcher-field">
               <span>Exec model</span>
-              <input
-                list="model-options"
+              <select
                 value={execModel}
                 onChange={(e) => setExecModel(e.target.value)}
+                disabled={modelsLoading || modelOptions.length === 0}
                 required
-              />
+              >
+                {modelsLoading ? (
+                  <option value={execModel}>Loading models…</option>
+                ) : (
+                  modelOptions.map((model) => (
+                    <option key={model.id} value={model.id}>{model.name}</option>
+                  ))
+                )}
+              </select>
             </label>
-            <datalist id="model-options">
-              {MODEL_OPTIONS.map((model) => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
           </div>
+
+          {modelsError && <p className="home-error">{modelsError}</p>}
 
           {error && <p className="home-error">{error}</p>}
 

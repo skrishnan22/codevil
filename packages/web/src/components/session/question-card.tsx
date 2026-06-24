@@ -223,6 +223,7 @@ function formatAskMeta(question: QuestionViewModel): string {
 // ─── Generic answered question ─────────────────────────────────────────────
 
 function GenericAnsweredQuestionItem({ question }: { question: QuestionViewModel }) {
+  const [expanded, setExpanded] = useState(false);
   const { answer, options } = question;
   if (!answer) return null;
 
@@ -232,6 +233,8 @@ function GenericAnsweredQuestionItem({ question }: { question: QuestionViewModel
           .map((id) => options.find((o) => o.id === id)?.label ?? id)
           .join(", ")
       : null;
+  const answerSummary = chosenLabels ?? answer.freeform ?? "—";
+  const answeredBy = answer.answeredBy.name ?? answer.answeredBy.id;
 
   return (
     <article className="ask-msg ask-msg--answered">
@@ -243,13 +246,35 @@ function GenericAnsweredQuestionItem({ question }: { question: QuestionViewModel
             <span aria-hidden="true">✦</span> asks
           </span>
         </div>
-        <h3 className="ask-msg-question">{question.question}</h3>
-        {question.context && <p className="ask-msg-context">{question.context}</p>}
-        {chosenLabels && <p className="ask-msg-note">Chosen: {chosenLabels}</p>}
-        {answer.freeform && <p className="ask-msg-context">{answer.freeform}</p>}
-        <p className="ask-msg-note">
-          Answered by {answer.answeredBy.name ?? answer.answeredBy.id}
-        </p>
+        <div className={`ask-answered${expanded ? " is-expanded" : ""}`}>
+          <div className="ask-answered-row">
+            <span className="ask-answered-tag">
+              <span className="ask-answered-check" aria-hidden="true">✓</span>
+              Answered
+            </span>
+            <span className="ask-answered-summary">
+              <strong>{answerSummary}</strong>
+              <span className="ask-answered-by"> · {answeredBy}</span>
+            </span>
+            <button
+              type="button"
+              className="ask-answered-toggle"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+            >
+              {expanded ? "Hide" : "Show"}
+            </button>
+          </div>
+          {expanded && (
+            <div className="ask-answered-detail">
+              <h3 className="ask-answered-question">{question.question}</h3>
+              {question.context && <p className="ask-msg-context">{question.context}</p>}
+              {chosenLabels && answer.freeform && (
+                <p className="ask-answered-note">{answer.freeform}</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </article>
   );

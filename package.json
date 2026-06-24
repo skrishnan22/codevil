@@ -11,7 +11,7 @@
     "typecheck": "pnpm -r --filter '@codevil/*' --if-present typecheck",
     "test": "pnpm -r --filter '@codevil/*' --workspace-concurrency=1 --if-present test",
     "verify": "pnpm typecheck && pnpm test",
-    "deploy": "pnpm --filter @codevil/worker deploy",
+    "deploy": "pnpm --filter @codevil/worker run deploy",
     "providers": "pnpm --filter '@codevil/admin-cli...' build && node packages/admin-cli/dist/index.js providers"
   },
   "pnpm": {

@@ -12,6 +12,7 @@ import {
   handleGetSession,
   handleGoogleSocialSignInRedirect,
   handleListInvitations,
+  handleListProviderModels,
   handleListSessions,
   handleLogs,
   handleRevokeInvitation,
@@ -113,6 +114,13 @@ export async function dispatchHttpRequest(
     const auth = await requireAuthContext(request, env, "sessions:read");
     if (auth instanceof Response) return withCors(request, env, auth);
     return withCors(request, env, await handleListSessions(request, env));
+  }
+
+  const providerModelsMatch = path.match(/^\/providers\/([^/]+)\/models$/);
+  if (providerModelsMatch && request.method === "GET") {
+    const auth = await requireAuthContext(request, env, "sessions:create");
+    if (auth instanceof Response) return withCors(request, env, auth);
+    return withCors(request, env, await handleListProviderModels(providerModelsMatch[1]));
   }
 
   const sessionInfoMatch = path.match(/^\/sessions\/([^/]+)$/);

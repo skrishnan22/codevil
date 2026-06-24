@@ -5535,3 +5535,101 @@ mark.annotation-highlight {
 .ask-msg--conflict .conflict-card {
   display: contents;
 }
+
+/* ─── Answered question summary ─────────────────────────────────────────── */
+.ask-answered {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.ask-answered-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ask-answered-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: oklch(0.4 0.14 150);
+  background: oklch(0.66 0.14 150 / 0.16);
+  padding: 4px 8px;
+  border-radius: 99px;
+}
+
+.dark .ask-answered-tag {
+  color: oklch(0.82 0.14 150);
+}
+
+.ask-answered-check {
+  font-weight: 700;
+}
+
+.ask-answered-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--fg-2);
+  line-height: 1.45;
+}
+
+.ask-answered-summary strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.ask-answered-by {
+  color: var(--fg-4);
+  font-weight: 400;
+}
+
+.ask-answered-toggle {
+  font: inherit;
+  font-size: 11.5px;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+
+.ask-answered-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.ask-answered-question {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 15px;
+  line-height: 1.35;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+
+.ask-answered-detail .ask-msg-context {
+  margin: 0;
+}
+
+.ask-answered-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-3);
+  font-style: italic;
+}

@@ -2,6 +2,7 @@ import type {
   CreateSessionResponse,
   GetSessionResponse,
   ListSessionsResponse,
+  ProviderModelOption,
 } from "@codevil/shared";
 import type { SessionConfig, NewSessionParams } from "../types";
 
@@ -73,6 +74,36 @@ export interface AcceptInviteResponse {
 
 export interface RevokeInvitationResponse {
   status: "revoked";
+}
+
+export interface ListProviderModelsResponse {
+  provider: string;
+  models: ProviderModelOption[];
+}
+
+export async function listProviderModels(
+  config: SessionConfig,
+  provider: string,
+  fetcher: FetchFn = globalThis.fetch,
+): Promise<ListProviderModelsResponse> {
+  const endpoint = config.endpoint.replace(/\/$/, "");
+
+  const response = await fetcher(`${endpoint}/providers/${encodeURIComponent(provider)}/models`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = (await response.json()) as Record<string, unknown>;
+      detail = String(body.error ?? body.detail ?? "");
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`Failed to load models: ${response.status}${detail ? ` — ${detail}` : ""}`);
+  }
+
+  return (await response.json()) as ListProviderModelsResponse;
 }
 
 export async function createSession(

@@ -55,6 +55,19 @@ export {
 } from "./providers.js";
 
 export type {
+  ProviderModelOption,
+  ModelsDevProviderEntry,
+  ModelsDevCatalog,
+} from "./provider-models.js";
+export {
+  MODELS_DEV_CATALOG_URL,
+  PROVIDERS_WITH_MODEL_CATALOG,
+  buildProviderModelOptions,
+  formatModelId,
+  modelsDevProviderKey,
+} from "./provider-models.js";
+
+export type {
   SessionCreatedEvent,
   StatusEvent,
   CloneProgressEvent,

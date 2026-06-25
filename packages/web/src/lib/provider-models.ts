@@ -1,4 +1,5 @@
 import {
+  agentRunnableModelIds,
   buildProviderModelOptions,
   getProviderDefinition,
   MODELS_DEV_CATALOG_URL,
@@ -10,7 +11,7 @@ const OPENCODE_GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models";
 
 type FetchFn = typeof globalThis.fetch;
 
-export async function listProviderModelOptions(
+export async function listProviderModels(
   providerId: string,
   fetcher: FetchFn = globalThis.fetch,
 ): Promise<ProviderModelOption[]> {
@@ -23,8 +24,9 @@ export async function listProviderModelOptions(
   const availableIds = definition.id === "opencode-go"
     ? await fetchOpenCodeGoModelIds(fetcher)
     : undefined;
+  const runnableIds = agentRunnableModelIds(providerId);
 
-  return buildProviderModelOptions(providerId, catalog, availableIds);
+  return buildProviderModelOptions(providerId, catalog, availableIds, runnableIds);
 }
 
 async function fetchModelsDevCatalog(fetcher: FetchFn): Promise<ModelsDevCatalog> {

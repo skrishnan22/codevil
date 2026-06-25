@@ -24,7 +24,18 @@ export interface HelpCommand {
   type: "help";
 }
 
-export type Command = InitCommand | RunCommand | HelpCommand;
+export interface ModelsListCommand {
+  type: "models-list";
+  provider: string;
+}
+
+export interface ModelsCheckCommand {
+  type: "models-check";
+  provider: string;
+  modelId: string;
+}
+
+export type Command = InitCommand | RunCommand | HelpCommand | ModelsListCommand | ModelsCheckCommand;
 
 const runFlags = new Set(["--debug"]);
 
@@ -49,8 +60,45 @@ export function parseCommand(argv: string[]): Command {
 
   if (command === "init") return parseInit(rest);
   if (command === "run") return parseRun(rest);
+  if (command === "models") return parseModels(rest);
 
   throw new Error(`Unknown command: ${command}`);
+}
+
+function parseModels(argv: string[]): ModelsListCommand | ModelsCheckCommand {
+  const [subcommand, ...rest] = argv;
+
+  if (subcommand === "list") {
+    let provider = "opencode-go";
+    for (let index = 0; index < rest.length; index++) {
+      const arg = rest[index];
+      if (arg === "--provider") {
+        provider = readOptionValue(rest, index, arg);
+        index++;
+        continue;
+      }
+      throw new Error(`Unknown option: ${arg}`);
+    }
+    return { type: "models-list", provider };
+  }
+
+  if (subcommand === "check") {
+    const ref = rest[0];
+    if (!ref || ref.startsWith("--")) {
+      throw new Error("Usage: codevil models check <provider>/<model>");
+    }
+    const slash = ref.indexOf("/");
+    if (slash <= 0 || slash === ref.length - 1) {
+      throw new Error(`Expected provider/model, got: ${ref}`);
+    }
+    return {
+      type: "models-check",
+      provider: ref.slice(0, slash),
+      modelId: ref.slice(slash + 1),
+    };
+  }
+
+  throw new Error(`Unknown models subcommand: ${subcommand ?? "(missing)"}`);
 }
 
 function parseInit(argv: string[]): InitCommand {
@@ -159,5 +207,7 @@ export function usage(): string {
     "Usage:",
     "  codevil init [--endpoint URL] [--api-key KEY] [--provider PROVIDER] [--plan-model MODEL] [--exec-model MODEL]",
     "  codevil run --repo REPO_URL [--provider PROVIDER] [--plan-model MODEL] [--exec-model MODEL] [--max-cost COST] [--max-time TIME] [--max-steps N] [--debug] <prompt>",
+    "  codevil models list [--provider PROVIDER]",
+    "  codevil models check <provider>/<model>",
   ].join("\n");
 }

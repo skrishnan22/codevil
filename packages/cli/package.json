@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@codevil/shared": "workspace:*",
+    "@mariozechner/pi-ai": "^0.73.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

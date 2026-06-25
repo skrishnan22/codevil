@@ -32,6 +32,7 @@ export function buildProviderModelOptions(
   providerId: string,
   catalog: ModelsDevCatalog,
   availableIds?: ReadonlySet<string>,
+  runnableIds?: ReadonlySet<string>,
 ): ProviderModelOption[] {
   const modelsDevKey = modelsDevProviderKey(providerId);
   if (!modelsDevKey) {
@@ -44,12 +45,22 @@ export function buildProviderModelOptions(
   }
 
   const catalogIds = Object.keys(providerEntry.models);
-  const ids = availableIds && availableIds.size > 0
-    ? catalogIds.filter((id) => availableIds.has(id))
-    : catalogIds;
+  let ids = catalogIds;
+
+  if (availableIds && availableIds.size > 0) {
+    ids = ids.filter((id) => availableIds.has(id));
+  }
+
+  if (runnableIds && runnableIds.size > 0) {
+    ids = ids.filter((id) => runnableIds.has(id));
+  }
 
   const extras = availableIds
-    ? [...availableIds].filter((id) => !catalogIds.includes(id))
+    ? [...availableIds].filter((id) => {
+      if (catalogIds.includes(id)) return false;
+      if (runnableIds && runnableIds.size > 0 && !runnableIds.has(id)) return false;
+      return true;
+    })
     : [];
 
   return [...ids, ...extras]

@@ -5,12 +5,12 @@ import {
   claimSetup,
   createSession,
   getAuthMe,
-  listProviderModels,
   listSessions,
   signInWithGoogle,
   signOut,
   type AuthMeResponse,
 } from "@/lib/api-client";
+import { listProviderModels } from "@/lib/provider-models";
 import { DEFAULT_CONFIG, LLM_PROVIDERS, PROVIDERS_WITH_MODEL_CATALOG } from "@codevil/shared";
 import type { ProviderModelOption } from "@codevil/shared";
 import type { SessionSummary } from "@/types";
@@ -154,19 +154,14 @@ function HomePage() {
   }, []);
 
   useEffect(() => {
-    const config = loadConfig();
-    if (!config || !authState?.membership || authState.membership.status !== "active") {
-      return;
-    }
-
     let cancelled = false;
     setModelsLoading(true);
     setModelsError(null);
 
-    void listProviderModels(config, provider)
-      .then((result) => {
+    void listProviderModels(provider)
+      .then((models) => {
         if (cancelled) return;
-        setModelOptions(result.models);
+        setModelOptions(models);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -180,7 +175,7 @@ function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [provider, authState?.membership]);
+  }, [provider]);
 
   useEffect(() => {
     if (modelOptions.length === 0) return;

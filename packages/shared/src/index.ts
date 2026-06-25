@@ -67,6 +67,11 @@ export {
   modelsDevProviderKey,
 } from "./provider-models.js";
 
+export {
+  AGENT_RUNNABLE_MODEL_IDS,
+  agentRunnableModelIds,
+} from "./agent-models.js";
+
 export type {
   SessionCreatedEvent,
   StatusEvent,

@@ -6,6 +6,7 @@ import {
   formatModelId,
   modelsDevProviderKey,
 } from "../dist/provider-models.js";
+import { agentRunnableModelIds } from "../dist/agent-models.js";
 
 const catalog = {
   "opencode-go": {
@@ -28,6 +29,7 @@ test("buildProviderModelOptions filters to live model ids and keeps display name
   const models = buildProviderModelOptions(
     "opencode-go",
     catalog,
+    new Set(["kimi-k2.6", "glm-5.1", "deepseek-v4-flash"]),
     new Set(["kimi-k2.6", "glm-5.1"]),
   );
 
@@ -52,4 +54,12 @@ test("buildProviderModelOptions falls back to formatted ids for live-only models
 
 test("formatModelId title-cases hyphenated model ids", () => {
   assert.equal(formatModelId("gpt-5.4-mini"), "Gpt 5 4 Mini");
+});
+
+test("agentRunnableModelIds excludes unsupported sandbox models", () => {
+  const runnable = agentRunnableModelIds("opencode-go");
+  assert.equal(runnable?.has("kimi-k2.6"), true);
+  assert.equal(runnable?.has("deepseek-v4-flash"), true);
+  assert.equal(runnable?.has("mimo-v2-omni"), false);
+  assert.equal(runnable?.has("glm-5.2"), false);
 });

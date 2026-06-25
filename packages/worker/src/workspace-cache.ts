@@ -5,7 +5,7 @@ import {
   retrySandboxOperation,
 } from "./sandbox.js";
 
-export const WORKSPACE_CACHE_VERSION = "workspace-cache-v1";
+export const WORKSPACE_CACHE_VERSION = "workspace-cache-v2";
 export const WORKSPACE_CACHE_DIR = "/workspace";
 export const WORKSPACE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -225,10 +225,7 @@ export async function createWorkspaceCacheSnapshotForSandbox(input: {
 }
 
 export function workspaceBackupExcludes(): string[] {
-  return [
-    "repo/node_modules",
-    "repo/**/node_modules",
-  ];
+  return [];
 }
 
 function errorMessage(error: unknown): string {

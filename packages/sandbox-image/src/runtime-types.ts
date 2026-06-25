@@ -87,7 +87,13 @@ export interface AgentDriverFactory {
 
 export interface GitDriver {
   clone(repo: string, destination: string, onProgress: (line: string) => void, credential?: GitCredential): Promise<void>;
-  refresh(repo: string, cwd: string, onProgress: (line: string) => void, credential?: GitCredential): Promise<void>;
+  refresh(
+    repo: string,
+    cwd: string,
+    onProgress: (line: string) => void,
+    credential?: GitCredential,
+    cleanExcludes?: string[],
+  ): Promise<void>;
   defaultBranch(cwd: string): Promise<string>;
   pushBranch(options: PushBranchOptions): Promise<void>;
 }

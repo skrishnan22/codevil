@@ -119,11 +119,14 @@ For JavaScript repositories, the manifest includes:
 - Node version.
 - Node ABI (`process.versions.modules`).
 - Operating system and architecture.
+- Linux libc implementation.
 - Dependency marker format version.
 
 Including workspace `package.json` files catches dependency declarations, workspace layout changes, lifecycle-script changes, and local package changes that may not alter a lockfile. Including the actual tool and runtime versions prevents native modules or package-manager layouts from being reused across incompatible sandbox images.
 
 Repositories without a recognized lockfile are not eligible for installed-artifact reuse. Their existing setup behavior remains unchanged.
+
+Repositories with root or workspace install lifecycle scripts (`preinstall`, `install`, `postinstall`, `prepare`, and related npm install hooks) are also ineligible for install skipping. Those scripts can depend on arbitrary repository files or generate outputs outside dependency directories, so a dependency-only fingerprint cannot prove their side effects remain valid. Their installs still use the restored package-manager download stores.
 
 ## Installed Artifacts
 

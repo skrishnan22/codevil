@@ -22,6 +22,22 @@ import {
   appToCommand,
   detectPreviewApps,
 } from "./preview-manager.js";
+import {
+  DEPENDENCY_ARTIFACT_FORMAT_VERSION,
+  computeDependencyFingerprint,
+  dependencyArtifactsPresent,
+  dependencyCleanExcludesForMarker,
+  dependencyMarkerMatches,
+  detectJavaScriptDependencyStrategy,
+  readDependencyArtifactMarker,
+  removeDependencyArtifactMarker,
+  removeJavaScriptDependencyArtifacts,
+  repositoryHasInstallLifecycleScripts,
+  writeDependencyArtifactMarker,
+  type DependencyArtifactMarker,
+  type DependencyFingerprint,
+  type JavaScriptDependencyStrategy,
+} from "./dependency-cache.js";
 import { executePrompt, planPrompt, refinePrompt } from "./prompts.js";
 import { parsePreviewSuggestion } from "./preview-parsers.js";
 export { parsePreviewCommand, parsePreviewDiscovery, parsePreviewSuggestion } from "./preview-parsers.js";
@@ -202,6 +218,9 @@ export class SandboxRuntime {
 
   private async handleInit(repo: string, restoredFromCache: boolean): Promise<void> {
     const repoDir = join(this.workspace, "repo");
+    const restoredDependencyMarker = restoredFromCache
+      ? await readDependencyArtifactMarker(this.workspace)
+      : undefined;
 
     this.send({ type: "clone_started" });
     const credential = await this.requestCredential(repo);
@@ -210,7 +229,7 @@ export class SandboxRuntime {
         this.send({ type: "clone_progress", line: `Refreshing cached repository in ${repoDir}` });
         await this.git.refresh(repo, repoDir, (line) => {
           this.send({ type: "clone_progress", line });
-        }, credential);
+        }, credential, dependencyCleanExcludesForMarker(restoredDependencyMarker));
       });
     } else {
       await this.maybeSpan("sandbox.clone", { attributes: { repo } }, () =>
@@ -220,7 +239,11 @@ export class SandboxRuntime {
       );
     }
 
-    await this.maybeSpan("sandbox.setup", {}, () => this.setupRepository(repoDir));
+    await this.maybeSpan(
+      "sandbox.setup",
+      {},
+      () => this.setupRepository(repoDir, restoredFromCache, restoredDependencyMarker),
+    );
 
     const defaultBranch = await this.git.defaultBranch(repoDir);
     this.send({ type: "clone_complete" });
@@ -246,12 +269,103 @@ export class SandboxRuntime {
     return this.tracer.span(name, options, fn);
   }
 
-  private async setupRepository(repoDir: string): Promise<void> {
-    const command = detectSetupCommand(repoDir);
-    if (!command) return;
+  private async setupRepository(
+    repoDir: string,
+    restoredFromCache: boolean,
+    restoredMarker?: DependencyArtifactMarker,
+  ): Promise<void> {
+    const explicitSetup = existsSync(join(repoDir, ".codevil", "setup.sh"));
+    if (explicitSetup) {
+      await removeDependencyArtifactMarker(this.workspace);
+      await this.runSetupCommand(repoDir, "bash .codevil/setup.sh", "Running explicit setup command");
+      return;
+    }
 
+    const strategy = detectJavaScriptDependencyStrategy(repoDir);
+    if (!strategy) {
+      await removeDependencyArtifactMarker(this.workspace);
+      return;
+    }
+
+    if (repositoryHasInstallLifecycleScripts(repoDir)) {
+      this.send({
+        type: "status",
+        message: "Repository install lifecycle scripts require installation.",
+      });
+      await removeDependencyArtifactMarker(this.workspace);
+      if (restoredFromCache) {
+        await removeJavaScriptDependencyArtifacts(repoDir);
+      }
+      await this.runSetupCommand(repoDir, strategy.installCommand, "Running setup command");
+      return;
+    }
+
+    const fingerprint = await this.tryDependencyFingerprint(repoDir, strategy);
+    if (
+      fingerprint
+      && dependencyMarkerMatches(restoredMarker, strategy, fingerprint)
+      && dependencyArtifactsPresent(repoDir, strategy)
+    ) {
+      this.send({
+        type: "status",
+        message: "Reused cached dependencies; install skipped.",
+      });
+      return;
+    }
+
+    this.send({
+      type: "status",
+      message: "Dependency cache unavailable or incompatible; running install.",
+    });
+    await removeDependencyArtifactMarker(this.workspace);
+    if (restoredFromCache) {
+      await removeJavaScriptDependencyArtifacts(repoDir);
+    }
+    await this.runSetupCommand(repoDir, strategy.installCommand, "Running setup command");
+
+    const installedFingerprint = fingerprint
+      ?? await this.tryDependencyFingerprint(repoDir, strategy);
+    if (installedFingerprint) {
+      await writeDependencyArtifactMarker(this.workspace, {
+        formatVersion: DEPENDENCY_ARTIFACT_FORMAT_VERSION,
+        ecosystem: strategy.ecosystem,
+        packageManager: strategy.packageManager,
+        installMode: strategy.installMode,
+        fingerprint: installedFingerprint.fingerprint,
+        inputs: installedFingerprint.inputs,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  private async tryDependencyFingerprint(
+    repoDir: string,
+    strategy: JavaScriptDependencyStrategy,
+  ): Promise<DependencyFingerprint | undefined> {
+    try {
+      return await this.maybeSpan(
+        "sandbox.dependency_fingerprint",
+        { attributes: { package_manager: strategy.packageManager } },
+        () => computeDependencyFingerprint(repoDir, strategy),
+      );
+    } catch (error) {
+      this.send({
+        type: "status",
+        message: `Dependency fingerprint unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+      return undefined;
+    }
+  }
+
+  private async runSetupCommand(
+    repoDir: string,
+    command: string,
+    statusPrefix: string,
+  ): Promise<void> {
     await this.ensureDependencyCacheDirs();
-    this.send({ type: "status", message: `Running setup command: ${command}` });
+    this.send({ type: "status", message: `${statusPrefix}: ${command}` });
     const result = await this.commandRunner.run(command, {
       cwd: repoDir,
       timeoutMs: 300_000,

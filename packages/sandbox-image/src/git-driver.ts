@@ -33,6 +33,7 @@ export class ShellGitDriver implements GitDriver {
     cwd: string,
     onProgress: (line: string) => void,
     credential?: GitCredential,
+    cleanExcludes: string[] = [],
   ): Promise<void> {
     const fetchUrl = credential ? withCredential(repo, credential) : repo;
     await run("git", ["remote", "set-url", "origin", fetchUrl], { cwd });
@@ -43,7 +44,7 @@ export class ShellGitDriver implements GitDriver {
       });
       await run("git", ["remote", "set-head", "origin", "--auto"], { cwd, onStderr: onProgress });
       await run("git", ["reset", "--hard", "refs/remotes/origin/HEAD"], { cwd, onStdout: onProgress });
-      await run("git", ["clean", "-fdx"], { cwd, onStdout: onProgress });
+      await run("git", gitCleanArgs(cleanExcludes), { cwd, onStdout: onProgress });
     } finally {
       if (credential) {
         await run("git", ["remote", "set-url", "origin", repo], { cwd });
@@ -72,6 +73,14 @@ export class ShellGitDriver implements GitDriver {
 
 export function shallowCloneArgs(repo: string, destination: string): string[] {
   return ["clone", "--progress", "--depth", "1", "--no-tags", repo, destination];
+}
+
+export function gitCleanArgs(excludes: string[] = []): string[] {
+  return [
+    "clean",
+    "-fdx",
+    ...excludes.flatMap((pattern) => ["-e", pattern]),
+  ];
 }
 
 function withCredential(repo: string, credential: GitCredential): string {

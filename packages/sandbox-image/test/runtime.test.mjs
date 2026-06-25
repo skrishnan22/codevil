@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +17,13 @@ import {
 } from "../dist/runtime.js";
 import { createSandboxMessageDispatcher } from "../dist/entrypoint.js";
 import { PreviewManager } from "../dist/preview-manager.js";
+import {
+  DEPENDENCY_ARTIFACT_FORMAT_VERSION,
+  computeDependencyFingerprint,
+  dependencyArtifactMarkerPath,
+  detectJavaScriptDependencyStrategy,
+  writeDependencyArtifactMarker,
+} from "../dist/dependency-cache.js";
 
 const zeroCost = {
   input_tokens: 0,
@@ -72,7 +80,7 @@ test("init runs repository setup after clone", async () => {
       300_000,
     ]]);
     assert.deepEqual(sent.slice(-5), [
-      { type: "status", message: "Running setup command: bash .codevil/setup.sh" },
+      { type: "status", message: "Running explicit setup command: bash .codevil/setup.sh" },
       { type: "status", message: "Setup completed." },
       { type: "clone_complete" },
       { type: "status", message: "Repository ready on main." },
@@ -152,6 +160,241 @@ test("init refreshes a restored cached repository instead of cloning", async () 
     assert.deepEqual(sent.filter((message) => message.type === "clone_progress"), [
       { type: "clone_progress", line: `Refreshing cached repository in ${repoDir}` },
     ]);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("restored matching dependencies skip automatic install", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-runtime-cache-hit-"));
+  const repoDir = join(workspace, "repo");
+  const sent = [];
+  const git = new FakeGitDriver();
+  const commandRunner = new FakeCommandRunner();
+
+  try {
+    await createNpmRepo(repoDir, { withNodeModules: true });
+    await writeMatchingDependencyMarker(workspace, repoDir);
+    const runtime = new SandboxRuntime({
+      workspace,
+      send: (message) => sent.push(message),
+      agentFactory: () => new FakeAgentDriver(),
+      git,
+      commandRunner,
+      credentialTimeoutMs: 0,
+    });
+
+    await runtime.handleMessage({
+      type: "init",
+      repo: "https://github.com/example/app",
+      restored_from_cache: true,
+    });
+
+    assert.equal(commandRunner.calls.length, 0);
+    assert.ok(sent.some((message) =>
+      message.type === "status"
+      && message.message === "Reused cached dependencies; install skipped."
+    ));
+    assert.deepEqual(git.calls[0].slice(0, 3), [
+      "refresh",
+      "https://github.com/example/app",
+      repoDir,
+    ]);
+    assert.ok(git.calls[0][3].includes("node_modules/"));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("restored dependency fingerprint mismatch removes artifacts and runs install", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-runtime-cache-miss-"));
+  const repoDir = join(workspace, "repo");
+  const sent = [];
+  let nodeModulesPresentDuringInstall = true;
+  const commandRunner = new FakeCommandRunner({
+    onRun: () => {
+      nodeModulesPresentDuringInstall = existsSync(join(repoDir, "node_modules"));
+    },
+  });
+
+  try {
+    await createNpmRepo(repoDir, { withNodeModules: true });
+    await writeDependencyArtifactMarker(workspace, {
+      formatVersion: DEPENDENCY_ARTIFACT_FORMAT_VERSION,
+      ecosystem: "javascript",
+      packageManager: "npm",
+      installMode: "node-modules",
+      fingerprint: "stale",
+      inputs: ["package-lock.json", "package.json"],
+      createdAt: "2026-06-25T00:00:00.000Z",
+    });
+    const runtime = new SandboxRuntime({
+      workspace,
+      send: (message) => sent.push(message),
+      agentFactory: () => new FakeAgentDriver(),
+      git: new FakeGitDriver(),
+      commandRunner,
+      credentialTimeoutMs: 0,
+    });
+
+    await runtime.handleMessage({
+      type: "init",
+      repo: "https://github.com/example/app",
+      restored_from_cache: true,
+    });
+
+    assert.equal(nodeModulesPresentDuringInstall, false);
+    assert.equal(commandRunner.calls[0][0], "npm install --no-audit --no-fund --prefer-offline");
+    assert.ok(sent.some((message) =>
+      message.type === "status"
+      && message.message === "Dependency cache unavailable or incompatible; running install."
+    ));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("matching dependency marker with missing artifacts runs install", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-runtime-cache-missing-"));
+  const repoDir = join(workspace, "repo");
+  const commandRunner = new FakeCommandRunner();
+
+  try {
+    await createNpmRepo(repoDir);
+    await writeMatchingDependencyMarker(workspace, repoDir);
+    const runtime = new SandboxRuntime({
+      workspace,
+      send: () => {},
+      agentFactory: () => new FakeAgentDriver(),
+      git: new FakeGitDriver(),
+      commandRunner,
+      credentialTimeoutMs: 0,
+    });
+
+    await runtime.handleMessage({
+      type: "init",
+      repo: "https://github.com/example/app",
+      restored_from_cache: true,
+    });
+
+    assert.equal(commandRunner.calls[0][0], "npm install --no-audit --no-fund --prefer-offline");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("successful cold install writes a dependency marker", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-runtime-cache-write-"));
+  const repoDir = join(workspace, "repo");
+  const git = new FakeGitDriver({ createNpmRepo: true });
+
+  try {
+    const runtime = new SandboxRuntime({
+      workspace,
+      send: () => {},
+      agentFactory: () => new FakeAgentDriver(),
+      git,
+      commandRunner: new FakeCommandRunner(),
+      credentialTimeoutMs: 0,
+    });
+
+    await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+
+    const marker = JSON.parse(await readFile(dependencyArtifactMarkerPath(workspace), "utf8"));
+    assert.equal(marker.packageManager, "npm");
+    assert.equal(marker.formatVersion, DEPENDENCY_ARTIFACT_FORMAT_VERSION);
+    assert.ok(marker.fingerprint);
+    assert.deepEqual(marker.inputs, ["package-lock.json", "package.json"]);
+    assert.equal(existsSync(repoDir), true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("failed automatic install does not leave a dependency marker", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-runtime-cache-failure-"));
+  const git = new FakeGitDriver({ createNpmRepo: true });
+
+  try {
+    const runtime = new SandboxRuntime({
+      workspace,
+      send: () => {},
+      agentFactory: () => new FakeAgentDriver(),
+      git,
+      commandRunner: new FakeCommandRunner({
+        result: { code: 1, stdout: "", stderr: "install failed" },
+      }),
+      credentialTimeoutMs: 0,
+    });
+
+    await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+
+    assert.equal(existsSync(dependencyArtifactMarkerPath(workspace)), false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("explicit setup script always runs and removes an automatic dependency marker", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-runtime-explicit-setup-"));
+  const repoDir = join(workspace, "repo");
+  const commandRunner = new FakeCommandRunner();
+
+  try {
+    await createNpmRepo(repoDir, { withNodeModules: true, withSetupScript: true });
+    await writeMatchingDependencyMarker(workspace, repoDir);
+    const runtime = new SandboxRuntime({
+      workspace,
+      send: () => {},
+      agentFactory: () => new FakeAgentDriver(),
+      git: new FakeGitDriver({ createCodevilSetup: true }),
+      commandRunner,
+      credentialTimeoutMs: 0,
+    });
+
+    await runtime.handleMessage({
+      type: "init",
+      repo: "https://github.com/example/app",
+      restored_from_cache: true,
+    });
+
+    assert.equal(commandRunner.calls[0][0], "bash .codevil/setup.sh");
+    assert.equal(existsSync(dependencyArtifactMarkerPath(workspace)), false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("repository install lifecycle scripts always run installation and do not write a marker", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-runtime-lifecycle-"));
+  const repoDir = join(workspace, "repo");
+  const commandRunner = new FakeCommandRunner();
+
+  try {
+    await createNpmRepo(repoDir, { withNodeModules: true });
+    await writeFile(join(repoDir, "package.json"), JSON.stringify({
+      name: "app",
+      packageManager: "npm@10.0.0",
+      scripts: { postinstall: "node scripts/generate.js" },
+    }));
+    await writeMatchingDependencyMarker(workspace, repoDir);
+    const runtime = new SandboxRuntime({
+      workspace,
+      send: () => {},
+      agentFactory: () => new FakeAgentDriver(),
+      git: new FakeGitDriver(),
+      commandRunner,
+      credentialTimeoutMs: 0,
+    });
+
+    await runtime.handleMessage({
+      type: "init",
+      repo: "https://github.com/example/app",
+      restored_from_cache: true,
+    });
+
+    assert.equal(commandRunner.calls[0][0], "npm install --no-audit --no-fund --prefer-offline");
+    assert.equal(existsSync(dependencyArtifactMarkerPath(workspace)), false);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -972,6 +1215,44 @@ test("create_pr pushes a branch and reports branch_pushed for DO-owned PR creati
   });
 });
 
+async function createNpmRepo(
+  repoDir,
+  options = {},
+) {
+  await mkdir(join(repoDir, ".git"), { recursive: true });
+  await writeFile(join(repoDir, "package.json"), JSON.stringify({
+    name: "app",
+    packageManager: "npm@10.0.0",
+  }));
+  await writeFile(join(repoDir, "package-lock.json"), JSON.stringify({
+    name: "app",
+    lockfileVersion: 3,
+    packages: {},
+  }));
+  if (options.withNodeModules) {
+    await mkdir(join(repoDir, "node_modules", "left-pad"), { recursive: true });
+    await writeFile(join(repoDir, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n");
+  }
+  if (options.withSetupScript) {
+    await mkdir(join(repoDir, ".codevil"), { recursive: true });
+    await writeFile(join(repoDir, ".codevil", "setup.sh"), "#!/bin/bash\n");
+  }
+}
+
+async function writeMatchingDependencyMarker(workspace, repoDir) {
+  const strategy = detectJavaScriptDependencyStrategy(repoDir);
+  const fingerprint = await computeDependencyFingerprint(repoDir, strategy);
+  await writeDependencyArtifactMarker(workspace, {
+    formatVersion: DEPENDENCY_ARTIFACT_FORMAT_VERSION,
+    ecosystem: strategy.ecosystem,
+    packageManager: strategy.packageManager,
+    installMode: strategy.installMode,
+    fingerprint: fingerprint.fingerprint,
+    inputs: fingerprint.inputs,
+    createdAt: "2026-06-25T00:00:00.000Z",
+  });
+}
+
 class FakeGitDriver {
   calls = [];
   options;
@@ -983,6 +1264,9 @@ class FakeGitDriver {
   async clone(repo, destination, onProgress, credential) {
     this.calls.push(credential ? ["clone", repo, destination, credential] : ["clone", repo, destination]);
     await mkdir(destination, { recursive: true }).catch(() => {});
+    if (this.options.createNpmRepo) {
+      await createNpmRepo(destination);
+    }
     if (this.options.createCodevilSetup) {
       await mkdir(join(destination, ".codevil"), { recursive: true });
       await writeFile(join(destination, ".codevil", "setup.sh"), "#!/bin/bash\n");
@@ -990,8 +1274,14 @@ class FakeGitDriver {
     onProgress(`Cloning ${repo} into ${destination}`);
   }
 
-  async refresh(repo, destination, onProgress, credential) {
-    this.calls.push(credential ? ["refresh", repo, destination, credential] : ["refresh", repo, destination]);
+  async refresh(repo, destination, onProgress, credential, cleanExcludes = []) {
+    this.calls.push(
+      credential
+        ? ["refresh", repo, destination, credential, cleanExcludes]
+        : cleanExcludes.length > 0
+          ? ["refresh", repo, destination, cleanExcludes]
+          : ["refresh", repo, destination],
+    );
     if (this.options.createCodevilSetup) {
       await mkdir(join(destination, ".codevil"), { recursive: true });
       await writeFile(join(destination, ".codevil", "setup.sh"), "#!/bin/bash\n");
@@ -1019,7 +1309,7 @@ class FakeCommandRunner {
   async run(command, options) {
     this.calls.push([command, options.cwd, options.timeoutMs]);
     this.options.onRun?.(command, options);
-    return { code: 0, stdout: "ok", stderr: "" };
+    return this.options.result ?? { code: 0, stdout: "ok", stderr: "" };
   }
 }
 

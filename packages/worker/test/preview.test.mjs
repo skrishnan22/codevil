@@ -5,6 +5,7 @@ import {
   buildPreviewUrl,
   injectPreviewBaseHref,
   previewPathPrefix,
+  rewriteHeadersForSandboxDevServer,
 } from "../dist/orchestrator/preview.js";
 
 test("buildPreviewUrl uses subdomain mode when CODEVIL_PREVIEW_ORIGIN is set", () => {
@@ -43,4 +44,35 @@ test("injectPreviewBaseHref adds base tag under head for root-absolute assets", 
 test("injectPreviewBaseHref is a no-op when base already exists", () => {
   const html = '<html><head><base href="/"></head><body></body></html>';
   assert.equal(injectPreviewBaseHref(html, "/sessions/ses_abc/preview/tok/"), html);
+});
+
+test("rewriteHeadersForSandboxDevServer points Host at the container port", () => {
+  const headers = new Headers({
+    host: "ses-abc-deadbeef.lexmora.app",
+    cookie: "session=abc",
+  });
+
+  const rewritten = rewriteHeadersForSandboxDevServer(headers, {
+    port: 3001,
+    publicHost: "ses-abc-deadbeef.lexmora.app",
+    publicProto: "https",
+  });
+
+  assert.equal(rewritten.get("host"), "localhost:3001");
+  assert.equal(rewritten.get("x-forwarded-host"), "ses-abc-deadbeef.lexmora.app");
+  assert.equal(rewritten.get("x-forwarded-proto"), "https");
+  assert.equal(rewritten.get("cookie"), "session=abc");
+});
+
+test("rewriteHeadersForSandboxDevServer leaves localhost Host unchanged", () => {
+  const headers = new Headers({ host: "localhost:3001" });
+
+  const rewritten = rewriteHeadersForSandboxDevServer(headers, {
+    port: 3001,
+    publicHost: "localhost:3001",
+    publicProto: "http",
+  });
+
+  assert.equal(rewritten.get("host"), "localhost:3001");
+  assert.equal(rewritten.get("x-forwarded-host"), null);
 });

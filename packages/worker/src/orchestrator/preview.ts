@@ -84,8 +84,13 @@ export async function proxyPreviewRequest(
 
   const { getSandbox } = await import("@cloudflare/sandbox");
   const sandbox = getSandbox(sandboxNamespace, meta.session_id);
-  const portedHeaders = new Headers(proxyRequest.headers);
-  portedHeaders.set("cf-container-target-port", String(meta.preview_port));
+  const previewPort = meta.preview_port!;
+  const portedHeaders = rewriteHeadersForSandboxDevServer(proxyRequest.headers, {
+    port: previewPort,
+    publicHost: originalUrl.host,
+    publicProto: originalUrl.protocol.replace(/:$/, ""),
+  });
+  portedHeaders.set("cf-container-target-port", String(previewPort));
   const portedRequest = new Request(proxyRequest, { headers: portedHeaders });
   const response = await sandbox.fetch(portedRequest);
 
@@ -112,6 +117,28 @@ export async function proxyPreviewRequest(
 /** Prefix for path-based preview URLs (`/sessions/.../preview/.../`). */
 export function previewPathPrefix(sessionId: string, token: string): string {
   return `/sessions/${sessionId}/preview/${token}/`;
+}
+
+/**
+ * Dev servers (notably Next.js 16) reject proxied requests whose Host is the
+ * public preview domain. Point Host at the container port and preserve the
+ * browser-facing host for frameworks that read X-Forwarded-*.
+ */
+export function rewriteHeadersForSandboxDevServer(
+  headers: Headers,
+  options: { port: number; publicHost: string; publicProto: string },
+): Headers {
+  const out = new Headers(headers);
+  const localHost = `localhost:${options.port}`;
+  const originalHost = headers.get("host");
+  if (originalHost && originalHost !== localHost) {
+    out.set("x-forwarded-host", originalHost);
+  }
+  if (options.publicProto) {
+    out.set("x-forwarded-proto", options.publicProto);
+  }
+  out.set("host", localHost);
+  return out;
 }
 
 /**

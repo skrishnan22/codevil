@@ -93,10 +93,8 @@ export async function createSession(
       provider: params.provider,
       plan_model: params.planModel,
       exec_model: params.execModel,
-      max_cost: params.maxCost,
       max_session_time: params.maxSessionTime,
       max_idle_time: params.maxIdleTime,
-      max_steps: params.maxSteps,
     }),
   });
 

@@ -1,10 +1,5 @@
 import type { Sandbox } from "@cloudflare/sandbox";
 
-import type {
-  DOToCLIEvent,
-  SandboxToDOMessage,
-} from "@codevil/shared";
-
 export interface SandboxProcessEnvOptions {
   wsUrl: string;
   apiKey: string;
@@ -336,54 +331,4 @@ function boundedTail(value: string | undefined, maxChars: number): {
     tail: value.slice(value.length - maxChars),
     truncated: true,
   };
-}
-
-export function mapSandboxMessageToCLIEvents(message: SandboxToDOMessage): DOToCLIEvent[] {
-  switch (message.type) {
-    case "clone_started":
-    case "clone_complete":
-    case "verification_started":
-    case "verification_retrying":
-      return [];
-    case "status":
-      return [{ type: "status", message: message.message }];
-    case "clone_progress":
-      return [{ type: "clone_progress", line: message.line }];
-    case "agent_event":
-      return [{ type: "agent_event", event: message.event }];
-    case "agent_turn_complete":
-    case "create_pr_request":
-    case "plan_ready":
-    case "consolidation_complete":
-    case "consolidation_failed":
-      return [];
-    case "execution_complete":
-      return [{ type: "status", message: "Execution completed. Creating pull request." }];
-    case "verification_failed":
-      return [{
-        type: "verification_failed",
-        attempts: message.attempts,
-        last_error: message.last_error,
-      }];
-    case "credential_request":
-      return [{ type: "status", message: `Credential requested for ${message.host}.` }];
-    case "branch_pushed":
-      return [{ type: "status", message: `Branch pushed: ${message.branch}.` }];
-    case "pr_created":
-      return [{ type: "complete", pr_url: message.url }];
-    case "preview_starting":
-      return [{ type: "preview_starting", command: message.command, port: message.port }];
-    case "preview_ready":
-      return [{ type: "status", message: `Preview ready on port ${message.port}.` }];
-    case "preview_error":
-      return [{ type: "preview_error", message: message.message }];
-    case "preview_stopped":
-      return [{ type: "preview_stopped" }];
-    case "preview_apps":
-      return [{ type: "preview_apps", apps: message.apps }];
-    case "error":
-      return [{ type: "error", message: message.message }];
-    default:
-      return [];
-  }
 }

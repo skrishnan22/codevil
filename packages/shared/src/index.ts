@@ -3,6 +3,7 @@ export type {
   TerminalState,
 } from "./session.js";
 export {
+  SessionStateSchema,
   isValidTransition,
   isTerminalState,
   MAX_REFINEMENT_ROUNDS,
@@ -11,14 +12,11 @@ export {
 
 export { isRecord } from "./records.js";
 
-export type {
-  CostInfo,
-  GuardLimits,
-} from "./cost.js";
+export type { CostInfo } from "./cost.js";
 export {
   CostInfoSchema,
-  GuardLimitsSchema,
-  DEFAULT_GUARD_LIMITS,
+  zeroCost,
+  addCost,
 } from "./cost.js";
 
 export type {
@@ -99,6 +97,7 @@ export type {
   AgentRunCompletedEvent,
   AgentRunFailedEvent,
   AgentResponseEvent,
+  CostUpdatedEvent,
   PlanRevisionFrozenEvent,
   AnnotationCreatedEvent,
   AnnotationRepliedEvent,
@@ -157,6 +156,7 @@ export {
   AgentRunCompletedEventSchema,
   AgentRunFailedEventSchema,
   AgentResponseEventSchema,
+  CostUpdatedEventSchema,
   PlanRevisionFrozenEventSchema,
   AnnotationCreatedEventSchema,
   AnnotationRepliedEventSchema,
@@ -304,6 +304,7 @@ export type {
   RoomState,
   SandboxState,
   AgentRunState,
+  AgentRun,
   ParticipantIdentity,
   SessionSummary,
   CreateSessionRequest,
@@ -315,6 +316,7 @@ export {
   RoomStateSchema,
   SandboxStateSchema,
   AgentRunStateSchema,
+  AgentRunSchema,
   ParticipantIdentitySchema,
   SessionSummarySchema,
   CreateSessionRequestSchema,
@@ -389,6 +391,54 @@ export {
   projectEvent,
   projectEvents,
 } from "./projections.js";
+
+export {
+  ChatMessageRoleSchema,
+  ChatMessageVariantSchema,
+  ChatMessageMetaSchema,
+  ChatMessageSchema,
+  ActivityEntrySchema,
+  PreviewStatusSchema,
+  PreviewStateSchema,
+  PlanRevisionStateSchema,
+  QuestionAnswerSchema,
+  QuestionViewModelSchema,
+  SessionSnapshotSchema,
+} from "./session-snapshot-schema.js";
+
+export type { SessionMeta, LastDecision } from "./session-meta-schema.js";
+export {
+  LastDecisionSchema,
+  SessionMetaSchema,
+} from "./session-meta-schema.js";
+
+export type { ParseFailure } from "./wire-parsing.js";
+export {
+  parseReplayEvent,
+  parseSessionSnapshot,
+  setParseFailureSink,
+} from "./wire-parsing.js";
+
+export type { QuestionRow } from "./sqlite-rows.js";
+export {
+  QuestionRowSchema,
+  PlanRevisionLockedRowSchema,
+  PlanRevisionFullRowSchema,
+  AnnotationReplyDbRowSchema,
+  OpenAnnotationDbRowSchema,
+  AnnotationLookupRowSchema,
+  RequestIdRowSchema,
+  parseSqliteRow,
+  parseAnnotationAnchorJson,
+  annotationReplyFromDbRow,
+} from "./sqlite-rows.js";
+
+export type { EntrypointEnv } from "./entrypoint-env.js";
+export {
+  EntrypointEnvSchema,
+  parseEntrypointEnv,
+  pickEntrypointEnvFields,
+} from "./entrypoint-env.js";
 
 export type { Boundary, ValidationDrop } from "./validation.js";
 export {

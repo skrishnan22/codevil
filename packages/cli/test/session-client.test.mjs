@@ -15,9 +15,7 @@ test("builds session payload from run command and config defaults", () => {
     provider: undefined,
     planModel: undefined,
     execModel: "executor",
-    maxCost: undefined,
     maxTime: "20m",
-    maxSteps: undefined,
   }, {
     endpoint: "https://codevil.example.com",
     api_key: "secret",
@@ -25,9 +23,7 @@ test("builds session payload from run command and config defaults", () => {
       plan_model: "planner",
       exec_model: "default-executor",
       provider: "anthropic",
-      max_cost: "$2",
       max_time: "15m",
-      max_steps: 50,
     },
   }), {
     prompt: "add rate limits",
@@ -35,9 +31,7 @@ test("builds session payload from run command and config defaults", () => {
     provider: "anthropic",
     plan_model: "planner",
     exec_model: "executor",
-    max_cost: "$2",
-    max_time: "20m",
-    max_steps: 50,
+    max_session_time: "20m",
   });
 });
 
@@ -51,9 +45,7 @@ test("creates sessions with bearer auth", async () => {
         plan_model: "planner",
         exec_model: "executor",
         provider: "anthropic",
-        max_cost: "$2",
         max_time: "15m",
-        max_steps: 50,
       },
     },
     {
@@ -63,9 +55,7 @@ test("creates sessions with bearer auth", async () => {
       provider: "openai",
       planModel: undefined,
       execModel: undefined,
-      maxCost: undefined,
       maxTime: undefined,
-      maxSteps: undefined,
     },
     async (url, init) => {
       calls.push({ url, init });
@@ -95,9 +85,7 @@ test("includes error detail from JSON error responses", async () => {
           plan_model: "planner",
           exec_model: "executor",
           provider: "anthropic",
-          max_cost: "$2",
           max_time: "15m",
-          max_steps: 50,
         },
       },
       {
@@ -107,9 +95,7 @@ test("includes error detail from JSON error responses", async () => {
         provider: undefined,
         planModel: undefined,
         execModel: undefined,
-        maxCost: undefined,
         maxTime: undefined,
-        maxSteps: undefined,
       },
       async () => new Response(JSON.stringify({
         error: "Failed to initialize session",

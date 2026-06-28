@@ -6,7 +6,6 @@ import type {
 import { SandboxToDOMessageSchema, parseInbound } from "@codevil/shared";
 import {
   buildSandboxWebSocketUrl,
-  mapSandboxMessageToCLIEvents,
   provisionSandbox,
 } from "../sandbox.js";
 import {
@@ -208,10 +207,19 @@ export async function dispatchSandboxSocketMessage(
         host.appendAndBroadcast({ type: "error", message: parsed.message });
       }
       return;
-    default:
-      for (const event of mapSandboxMessageToCLIEvents(parsed)) {
-        host.appendAndBroadcast(event);
-      }
+    case "status":
+      host.appendAndBroadcast({ type: "status", message: parsed.message });
+      return;
+    case "clone_progress":
+      host.appendAndBroadcast({ type: "clone_progress", line: parsed.line });
+      return;
+    case "agent_event":
+      host.appendAndBroadcast({ type: "agent_event", event: parsed.event });
+      return;
+    default: {
+      const _exhaustive: never = parsed;
+      return _exhaustive;
+    }
   }
 }
 
@@ -297,7 +305,7 @@ export function handleSandboxPlanReady(host: OrchestratorHost, plan: string, cos
   host.meta.latest_plan = plan;
   host.saveMeta();
 
-  if (!host.recordCost(cost)) return;
+  host.trackCost(cost);
 
   if (host.meta.state !== "planning" && host.meta.state !== "refining") return;
 
@@ -326,7 +334,7 @@ export function handleConsolidationComplete(
 ): void {
   if (!host.meta?.active_run || host.meta.state !== "refining") return;
   if (host.meta.active_run.id !== runId || host.meta.refinement_round !== round) return;
-  if (!host.recordCost(cost)) return;
+  host.trackCost(cost);
 
   // The consolidation agent resolved any contradictions inline via ask_question
   // and returned a plain-prose brief.
@@ -356,12 +364,13 @@ export function handleSandboxAgentTurnComplete(
 ): void {
   if (!host.meta?.active_run || host.meta.state !== "executing") return;
   if (host.meta.active_run.id !== runId) return;
-  if (!host.recordCost(cost)) return;
+  host.trackCost(cost);
 
   host.appendAndBroadcast({
     type: "agent_response",
     run_id: host.meta.active_run.id,
     text: response,
+    cost,
   });
   completeActiveRun(host);
 }
@@ -413,7 +422,7 @@ export function handleSandboxVerificationRetrying(
 
 export function handleSandboxExecutionComplete(host: OrchestratorHost, cost: CostInfo): void {
   if (!host.meta) return;
-  if (!host.recordCost(cost)) return;
+  host.trackCost(cost);
   if (host.meta.state !== "verifying") return;
 
   if (host.transition("creating_pr")) {

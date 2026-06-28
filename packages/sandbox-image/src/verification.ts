@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 
 import type { CostInfo } from "@codevil/shared";
-import { MAX_VERIFICATION_ATTEMPTS } from "@codevil/shared";
+import { MAX_VERIFICATION_ATTEMPTS, addCost, zeroCost } from "@codevil/shared";
 
 import { repairPrompt } from "./prompts.js";
 
@@ -266,20 +266,4 @@ function trimOutput(output: string): string {
   const maxLength = 32 * 1024;
   if (output.length <= maxLength) return output.trim();
   return output.slice(output.length - maxLength).trim();
-}
-
-function addCost(left: CostInfo, right: CostInfo): CostInfo {
-  return {
-    input_tokens: left.input_tokens + right.input_tokens,
-    output_tokens: left.output_tokens + right.output_tokens,
-    total_cost_usd: Number((left.total_cost_usd + right.total_cost_usd).toFixed(6)),
-  };
-}
-
-function zeroCost(): CostInfo {
-  return {
-    input_tokens: 0,
-    output_tokens: 0,
-    total_cost_usd: 0,
-  };
 }

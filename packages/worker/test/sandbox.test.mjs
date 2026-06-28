@@ -7,7 +7,6 @@ import {
   CODEVIL_SANDBOX_OPTIONS,
   collectSandboxDiagnostics,
   getCodevilSandbox,
-  mapSandboxMessageToCLIEvents,
   recordSandboxLifecycleEvent,
   retrySandboxOperation,
   SANDBOX_LIFECYCLE_EVENT_KEY,
@@ -318,62 +317,4 @@ test("does not retry non-transient sandbox failures", async () => {
   );
 
   assert.equal(calls, 1);
-});
-
-test("maps sandbox protocol messages to CLI events", () => {
-  assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "clone_started" }), []);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "clone_complete" }), []);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "verification_started", attempt: 1, max_attempts: 5 }), []);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({
-    type: "verification_retrying",
-    attempt: 1,
-    max_attempts: 5,
-    last_error: "failed",
-  }), []);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "status", message: "ready" }), [
-    { type: "status", message: "ready" },
-  ]);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "clone_progress", line: "cloning" }), [
-    { type: "clone_progress", line: "cloning" },
-  ]);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "agent_event", event: { type: "turn_start" } }), [
-    { type: "agent_event", event: { type: "turn_start" } },
-  ]);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({
-    type: "agent_turn_complete",
-    run_id: "run_1",
-    response: "Done",
-    cost: { input_tokens: 1, output_tokens: 1, total_cost_usd: 0.01 },
-  }), []);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({
-    type: "create_pr_request",
-    run_id: "run_1",
-    request_id: "pr_1",
-    branch: "codevil/change",
-    base_branch: "main",
-    title: "Change",
-    body: "Details",
-    draft: true,
-  }), []);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({
-    type: "credential_request",
-    request_id: "cred_1",
-    protocol: "https",
-    host: "github.com",
-    path: "acme/app.git",
-  }), [
-    { type: "status", message: "Credential requested for github.com." },
-  ]);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({
-    type: "branch_pushed",
-    branch: "codevil/change",
-    base_branch: "main",
-    pr_title: "Change",
-    pr_body: "Plan",
-  }), [
-    { type: "status", message: "Branch pushed: codevil/change." },
-  ]);
-  assert.deepEqual(mapSandboxMessageToCLIEvents({ type: "pr_created", url: "https://github.com/acme/app/pull/1" }), [
-    { type: "complete", pr_url: "https://github.com/acme/app/pull/1" },
-  ]);
 });

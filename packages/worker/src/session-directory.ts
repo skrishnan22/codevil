@@ -2,24 +2,24 @@ import {
   CreateSessionRequestSchema,
   DEFAULT_CONFIG,
   type AgentRunState,
-  type CreateSessionRequest,
   type ParticipantIdentity,
   type RoomState,
   type SandboxState,
   type SessionSummary,
 } from "@codevil/shared";
 
-export interface NormalizedCreateSession extends Required<Omit<CreateSessionRequest,
-  "created_by" | "provider" | "plan_model" | "exec_model" | "max_cost" | "max_session_time" | "max_idle_time" | "max_steps"
->> {
+/** Legacy D1 columns kept for schema compatibility; no longer configurable. */
+const LEGACY_DIRECTORY_MAX_COST = "";
+const LEGACY_DIRECTORY_MAX_STEPS = 0;
+
+export interface NormalizedCreateSession {
+  repo: string;
   title: string;
   provider: string;
   plan_model: string;
   exec_model: string;
-  max_cost: string;
   max_session_time: string;
   max_idle_time: string;
-  max_steps: number;
   created_by?: ParticipantIdentity;
 }
 
@@ -60,10 +60,8 @@ export function normalizeCreateSessionBody(body: unknown): NormalizedCreateSessi
     provider: parsed.provider ?? DEFAULT_CONFIG.provider,
     plan_model: parsed.plan_model ?? DEFAULT_CONFIG.plan_model,
     exec_model: parsed.exec_model ?? DEFAULT_CONFIG.exec_model,
-    max_cost: parsed.max_cost ?? DEFAULT_CONFIG.max_cost,
     max_session_time: parsed.max_session_time ?? DEFAULT_CONFIG.max_time,
     max_idle_time: parsed.max_idle_time ?? DEFAULT_MAX_IDLE_TIME,
-    max_steps: parsed.max_steps ?? DEFAULT_CONFIG.max_steps,
     ...(parsed.created_by ? { created_by: parsed.created_by } : {}),
   };
 }
@@ -136,6 +134,13 @@ export function sessionDirectoryInsert(row: SessionDirectoryRow): SqlStatement {
       row.updated_at,
       row.last_event_at,
     ],
+  };
+}
+
+export function legacyDirectoryGuardColumns(): { max_cost: string; max_steps: number } {
+  return {
+    max_cost: LEGACY_DIRECTORY_MAX_COST,
+    max_steps: LEGACY_DIRECTORY_MAX_STEPS,
   };
 }
 

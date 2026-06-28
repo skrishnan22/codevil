@@ -1,8 +1,11 @@
 import { existsSync } from "node:fs";
 
-import type { CostInfo, ConsolidationAnnotation, PreviewApp, PreviewFramework } from "@codevil/shared";
+import type { ConsolidationAnnotation, PreviewApp, PreviewFramework } from "@codevil/shared";
+import { addCost, zeroCost } from "@codevil/shared";
 import type { CommandResult } from "./verification.js";
 import type { ConsolidationResult } from "./runtime-types.js";
+
+export { addCost, zeroCost };
 
 export const AGENT_PREVIEW_KEY = "agent";
 
@@ -22,7 +25,6 @@ export function credentialRequestFromRepo(repo: string): { protocol: "https"; ho
 
 export function detectLibc(): "gnu" | "musl" | undefined {
   if (process.platform !== "linux") return undefined;
-  // glibc: /lib/x86_64-linux-gnu/libc.so.6 on Debian/Ubuntu, /lib64/libc.so.6 on RHEL/Fedora.
   if (
     existsSync("/lib/x86_64-linux-gnu/libc.so.6") ||
     existsSync("/lib/aarch64-linux-gnu/libc.so.6") ||
@@ -30,7 +32,6 @@ export function detectLibc(): "gnu" | "musl" | undefined {
   ) {
     return "gnu";
   }
-  // musl: Alpine ships ld-musl-* alongside libc.so.
   if (
     existsSync("/lib/ld-musl-x86_64.so.1") ||
     existsSync("/lib/ld-musl-aarch64.so.1")
@@ -51,27 +52,11 @@ export function inferFrameworkFromCommand(command: string): PreviewFramework {
   return "npm";
 }
 
-export function addCost(left: CostInfo, right: CostInfo): CostInfo {
-  return {
-    input_tokens: left.input_tokens + right.input_tokens,
-    output_tokens: left.output_tokens + right.output_tokens,
-    total_cost_usd: Number((left.total_cost_usd + right.total_cost_usd).toFixed(6)),
-  };
-}
-
 export function fallbackConsolidation(annotations: ConsolidationAnnotation[]): ConsolidationResult {
   const brief = annotations.map((annotation) => annotation.comment).join("\n\n");
   return {
     brief: brief.length > 0 ? brief : "Refine the plan.",
     cost: zeroCost(),
-  };
-}
-
-export function zeroCost(): CostInfo {
-  return {
-    input_tokens: 0,
-    output_tokens: 0,
-    total_cost_usd: 0,
   };
 }
 

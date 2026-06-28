@@ -1,9 +1,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
 
 import type {
-  CostInfo,
   DOToSandboxMessage,
   PreviewApp,
   SandboxToDOMessage,
@@ -23,24 +21,16 @@ import {
   detectPreviewApps,
 } from "./preview-manager.js";
 import {
-  DEPENDENCY_ARTIFACT_FORMAT_VERSION,
-  computeDependencyFingerprint,
-  dependencyArtifactsPresent,
-  dependencyCleanExcludesForMarker,
-  dependencyMarkerMatches,
-  detectJavaScriptDependencyStrategy,
   readDependencyArtifactMarker,
-  removeDependencyArtifactMarker,
-  removeJavaScriptDependencyArtifacts,
-  repositoryHasInstallLifecycleScripts,
-  writeDependencyArtifactMarker,
+  dependencyCleanExcludesForMarker,
   type DependencyArtifactMarker,
-  type DependencyFingerprint,
-  type JavaScriptDependencyStrategy,
 } from "./dependency-cache.js";
 import { executePrompt, planPrompt, refinePrompt } from "./prompts.js";
 import { parsePreviewSuggestion } from "./preview-parsers.js";
 export { parsePreviewCommand, parsePreviewDiscovery, parsePreviewSuggestion } from "./preview-parsers.js";
+import { SandboxRpcCoordinator } from "./runtime-rpc.js";
+import { setupRepository } from "./repo-setup.js";
+export { dependencyCacheEnv } from "./repo-setup.js";
 import {
   type CommandRunner,
   type Verifier,
@@ -82,7 +72,6 @@ import type {
   AskQuestionOutcome,
   AskQuestionParams,
   CreatePullRequestToolOptions,
-  GitCredential,
   GitDriver,
   RepoState,
   SandboxRuntimeOptions,
@@ -93,9 +82,7 @@ import {
   credentialRequestFromRepo,
   detectLibc,
   fallbackConsolidation,
-  formatCommandFailure,
   inferFrameworkFromCommand,
-  outputLines,
   resolveAppForStart,
   slugify,
   trimOutput,
@@ -116,18 +103,7 @@ export class SandboxRuntime {
   private activeRunId: string | undefined;
   private preview: PreviewManager | undefined;
   private tracer: Tracer | undefined;
-  private credentialRequests = new Map<string, {
-    resolve(credential: GitCredential | undefined): void;
-    timeout: ReturnType<typeof setTimeout>;
-  }>();
-  private pullRequestRequests = new Map<string, {
-    resolve(result: { url: string }): void;
-    reject(error: Error): void;
-    timeout: ReturnType<typeof setTimeout>;
-  }>();
-  private askQuestionRequests = new Map<string, {
-    resolve(outcome: AskQuestionOutcome): void;
-  }>();
+  private readonly rpc: SandboxRpcCoordinator;
 
   constructor(options: SandboxRuntimeOptions) {
     this.workspace = options.workspace;
@@ -139,6 +115,10 @@ export class SandboxRuntime {
     this.commandRunner = options.commandRunner ?? new ShellCommandRunner();
     this.verifier = options.verifier ?? new RepositoryVerifier(this.commandRunner);
     this.credentialTimeoutMs = options.credentialTimeoutMs ?? 10_000;
+    this.rpc = new SandboxRpcCoordinator({
+      send: this.send,
+      credentialTimeoutMs: this.credentialTimeoutMs,
+    });
   }
 
   async handleMessage(message: DOToSandboxMessage): Promise<void> {
@@ -178,16 +158,16 @@ export class SandboxRuntime {
           await this.handleCreatePullRequest(message, parent);
           return;
         case "credential_response":
-          this.handleCredentialResponse(message);
+          this.rpc.handleCredentialResponse(message);
           return;
         case "create_pr_response":
-          this.handleCreatePRResponse(message);
+          this.rpc.handleCreatePRResponse(message);
           return;
         case "ask_question_response":
-          this.handleAskQuestionResponse(message);
+          this.rpc.handleAskQuestionResponse(message);
           return;
         case "ask_question_cancelled":
-          this.handleAskQuestionCancelled(message);
+          this.rpc.handleAskQuestionCancelled(message);
           return;
         case "preview_start":
           await this.handlePreviewStart(message.app_key);
@@ -216,6 +196,14 @@ export class SandboxRuntime {
     await this.agent?.dispose?.();
   }
 
+  askQuestion(runId: string, params: AskQuestionParams): Promise<AskQuestionOutcome> {
+    return this.rpc.askQuestion(runId, params);
+  }
+
+  makeAskQuestion(runId: string): (params: AskQuestionParams) => Promise<AskQuestionOutcome> {
+    return this.rpc.makeAskQuestion(runId);
+  }
+
   private async handleInit(repo: string, restoredFromCache: boolean): Promise<void> {
     const repoDir = join(this.workspace, "repo");
     const restoredDependencyMarker = restoredFromCache
@@ -223,7 +211,10 @@ export class SandboxRuntime {
       : undefined;
 
     this.send({ type: "clone_started" });
-    const credential = await this.requestCredential(repo);
+    const credentialRequest = credentialRequestFromRepo(repo);
+    const credential = credentialRequest
+      ? await this.rpc.requestCredential(credentialRequest)
+      : undefined;
     if (restoredFromCache && existsSync(join(repoDir, ".git"))) {
       await this.maybeSpan("sandbox.repo_refresh", { attributes: { repo } }, async () => {
         this.send({ type: "clone_progress", line: `Refreshing cached repository in ${repoDir}` });
@@ -242,7 +233,15 @@ export class SandboxRuntime {
     await this.maybeSpan(
       "sandbox.setup",
       {},
-      () => this.setupRepository(repoDir, restoredFromCache, restoredDependencyMarker),
+      () => setupRepository({
+        workspace: this.workspace,
+        repoDir,
+        restoredFromCache,
+        restoredDependencyMarker,
+        commandRunner: this.commandRunner,
+        send: this.send,
+        maybeSpan: (name, options, fn) => this.maybeSpan(name, options, fn),
+      }),
     );
 
     const defaultBranch = await this.git.defaultBranch(repoDir);
@@ -267,127 +266,6 @@ export class SandboxRuntime {
   ): Promise<T> {
     if (!this.tracer) return fn();
     return this.tracer.span(name, options, fn);
-  }
-
-  private async setupRepository(
-    repoDir: string,
-    restoredFromCache: boolean,
-    restoredMarker?: DependencyArtifactMarker,
-  ): Promise<void> {
-    const explicitSetup = existsSync(join(repoDir, ".codevil", "setup.sh"));
-    if (explicitSetup) {
-      await removeDependencyArtifactMarker(this.workspace);
-      await this.runSetupCommand(repoDir, "bash .codevil/setup.sh", "Running explicit setup command");
-      return;
-    }
-
-    const strategy = detectJavaScriptDependencyStrategy(repoDir);
-    if (!strategy) {
-      await removeDependencyArtifactMarker(this.workspace);
-      return;
-    }
-
-    if (repositoryHasInstallLifecycleScripts(repoDir)) {
-      this.send({
-        type: "status",
-        message: "Repository install lifecycle scripts require installation.",
-      });
-      await removeDependencyArtifactMarker(this.workspace);
-      if (restoredFromCache) {
-        await removeJavaScriptDependencyArtifacts(repoDir);
-      }
-      await this.runSetupCommand(repoDir, strategy.installCommand, "Running setup command");
-      return;
-    }
-
-    const fingerprint = await this.tryDependencyFingerprint(repoDir, strategy);
-    if (
-      fingerprint
-      && dependencyMarkerMatches(restoredMarker, strategy, fingerprint)
-      && dependencyArtifactsPresent(repoDir, strategy)
-    ) {
-      this.send({
-        type: "status",
-        message: "Reused cached dependencies; install skipped.",
-      });
-      return;
-    }
-
-    this.send({
-      type: "status",
-      message: "Dependency cache unavailable or incompatible; running install.",
-    });
-    await removeDependencyArtifactMarker(this.workspace);
-    if (restoredFromCache) {
-      await removeJavaScriptDependencyArtifacts(repoDir);
-    }
-    await this.runSetupCommand(repoDir, strategy.installCommand, "Running setup command");
-
-    const installedFingerprint = fingerprint
-      ?? await this.tryDependencyFingerprint(repoDir, strategy);
-    if (installedFingerprint) {
-      await writeDependencyArtifactMarker(this.workspace, {
-        formatVersion: DEPENDENCY_ARTIFACT_FORMAT_VERSION,
-        ecosystem: strategy.ecosystem,
-        packageManager: strategy.packageManager,
-        installMode: strategy.installMode,
-        fingerprint: installedFingerprint.fingerprint,
-        inputs: installedFingerprint.inputs,
-        createdAt: new Date().toISOString(),
-      });
-    }
-  }
-
-  private async tryDependencyFingerprint(
-    repoDir: string,
-    strategy: JavaScriptDependencyStrategy,
-  ): Promise<DependencyFingerprint | undefined> {
-    try {
-      return await this.maybeSpan(
-        "sandbox.dependency_fingerprint",
-        { attributes: { package_manager: strategy.packageManager } },
-        () => computeDependencyFingerprint(repoDir, strategy),
-      );
-    } catch (error) {
-      this.send({
-        type: "status",
-        message: `Dependency fingerprint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      });
-      return undefined;
-    }
-  }
-
-  private async runSetupCommand(
-    repoDir: string,
-    command: string,
-    statusPrefix: string,
-  ): Promise<void> {
-    await this.ensureDependencyCacheDirs();
-    this.send({ type: "status", message: `${statusPrefix}: ${command}` });
-    const result = await this.commandRunner.run(command, {
-      cwd: repoDir,
-      timeoutMs: 300_000,
-      env: dependencyCacheEnv(this.workspace),
-      onOutput: (chunk) => {
-        for (const line of outputLines(chunk)) {
-          this.send({ type: "status", message: `Setup output: ${line}` });
-        }
-      },
-    });
-
-    if (result.code !== 0) {
-      throw new Error(formatCommandFailure("Setup", command, result));
-    }
-
-    this.send({ type: "status", message: "Setup completed." });
-  }
-
-  private async ensureDependencyCacheDirs(): Promise<void> {
-    await Promise.all(Object.values(dependencyCacheEnv(this.workspace)).map((value) =>
-      value.startsWith(this.workspace) ? mkdir(value, { recursive: true }) : Promise.resolve(),
-    ));
   }
 
   private async handlePlan(
@@ -416,7 +294,7 @@ export class SandboxRuntime {
         this.send({ type: "agent_event", event: validated });
       },
       createPullRequest: (options) => this.createPullRequest(options),
-      askQuestion: (params) => this.askQuestionForActiveRun(runId, params),
+      askQuestion: (params) => this.rpc.askQuestion(runId, params),
     });
 
     this.activeRunId = runId;
@@ -454,7 +332,7 @@ export class SandboxRuntime {
           if (validated) this.send({ type: "agent_event", event: validated });
         },
         createPullRequest: (options) => this.createPullRequest(options),
-        askQuestion: (params) => this.askQuestionForActiveRun(runId, params),
+        askQuestion: (params) => this.rpc.askQuestion(runId, params),
       });
       this.agent = agent;
     }
@@ -478,103 +356,26 @@ export class SandboxRuntime {
     const runId = this.activeRunId;
     if (!runId) throw new Error("Pull requests can only be created during an active agent turn");
     const branch = options.branch?.trim() || `codevil/${slugify(options.title)}-${Date.now()}`;
-    const credential = await this.requestCredential(repo.url);
-    await this.git.pushBranch({
-      cwd: repo.dir,
+    return this.rpc.createPullRequest({
+      runId,
       branch,
-      commitMessage: options.commit_message?.trim() || options.title,
-      credential,
-    });
-
-    const requestId = `pr_${crypto.randomUUID().replace(/-/g, "")}`;
-    this.send({
-      type: "create_pr_request",
-      run_id: runId,
-      request_id: requestId,
-      branch,
-      base_branch: repo.defaultBranch,
+      baseBranch: repo.defaultBranch,
       title: options.title,
       body: options.body,
       draft: options.draft ?? true,
+      push: async () => {
+        const credentialRequest = credentialRequestFromRepo(repo.url);
+        const credential = credentialRequest
+          ? await this.rpc.requestCredential(credentialRequest)
+          : undefined;
+        await this.git.pushBranch({
+          cwd: repo.dir,
+          branch,
+          commitMessage: options.commit_message?.trim() || options.title,
+          credential,
+        });
+      },
     });
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pullRequestRequests.delete(requestId);
-        reject(new Error("Timed out waiting for pull request creation"));
-      }, 60_000);
-      this.pullRequestRequests.set(requestId, { resolve, reject, timeout });
-    });
-  }
-
-  private handleCreatePRResponse(message: Extract<DOToSandboxMessage, { type: "create_pr_response" }>): void {
-    const pending = this.pullRequestRequests.get(message.request_id);
-    if (!pending) return;
-    clearTimeout(pending.timeout);
-    this.pullRequestRequests.delete(message.request_id);
-    if (message.error || !message.url) {
-      pending.reject(new Error(message.error ?? "Pull request creation did not return a URL"));
-      return;
-    }
-    pending.resolve({ url: message.url });
-  }
-
-  /**
-   * Ask the room a question and block until it is answered or cancelled.
-   * No timeout — conflict questions block until the human responds.
-   */
-  askQuestion(runId: string, params: AskQuestionParams): Promise<AskQuestionOutcome> {
-    const requestId = `q_${crypto.randomUUID().replace(/-/g, "")}`;
-    this.send({
-      type: "ask_question_request",
-      request_id: requestId,
-      run_id: runId,
-      question: params.question,
-      context: params.context,
-      options: params.options,
-      allow_freeform: params.allow_freeform,
-      allow_multiple: params.allow_multiple,
-      answerable_by: params.answerable_by,
-      assigned_to: params.assigned_to,
-    });
-    return new Promise((resolve) => {
-      this.askQuestionRequests.set(requestId, { resolve });
-    });
-  }
-
-  /**
-   * Returns a run-bound callback suitable for passing to askQuestionTool.
-   * The returned function closes over runId so the tool does not need to
-   * know about it directly.
-   */
-  makeAskQuestion(runId: string): (params: AskQuestionParams) => Promise<AskQuestionOutcome> {
-    return (params) => this.askQuestion(runId, params);
-  }
-
-  private askQuestionForActiveRun(
-    fallbackRunId: string,
-    params: AskQuestionParams,
-  ): Promise<AskQuestionOutcome> {
-    return this.askQuestion(this.activeRunId ?? fallbackRunId, params);
-  }
-
-  private handleAskQuestionResponse(message: Extract<DOToSandboxMessage, { type: "ask_question_response" }>): void {
-    const pending = this.askQuestionRequests.get(message.request_id);
-    if (!pending) return;
-    this.askQuestionRequests.delete(message.request_id);
-    pending.resolve({
-      cancelled: false,
-      option_ids: message.option_ids,
-      freeform: message.freeform,
-      answered_by: message.answered_by,
-    });
-  }
-
-  private handleAskQuestionCancelled(message: Extract<DOToSandboxMessage, { type: "ask_question_cancelled" }>): void {
-    const pending = this.askQuestionRequests.get(message.request_id);
-    if (!pending) return;
-    this.askQuestionRequests.delete(message.request_id);
-    pending.resolve({ cancelled: true, reason: message.reason });
   }
 
   private async handleRefine(feedback: string, parent: SpanContext | undefined): Promise<void> {
@@ -591,7 +392,7 @@ export class SandboxRuntime {
   ): Promise<void> {
     const repoDir = this.requireRepo().dir;
     const agent = this.agentFactory();
-    const askQuestion = this.makeAskQuestion(message.run_id);
+    const askQuestion = this.rpc.makeAskQuestion(message.run_id);
 
     try {
       const result = await this.maybeSpan(
@@ -684,7 +485,10 @@ export class SandboxRuntime {
     parent: SpanContext | undefined,
   ): Promise<void> {
     const repo = this.requireRepo();
-    const credential = await this.requestCredential(repo.url);
+    const credentialRequest = credentialRequestFromRepo(repo.url);
+    const credential = credentialRequest
+      ? await this.rpc.requestCredential(credentialRequest)
+      : undefined;
     await this.maybeSpan(
       "sandbox.push_branch",
       { parent, attributes: { branch: message.branch } },
@@ -778,40 +582,6 @@ export class SandboxRuntime {
     this.preview = undefined;
   }
 
-  private async requestCredential(repo: string): Promise<GitCredential | undefined> {
-    if (this.credentialTimeoutMs <= 0) return undefined;
-    const request = credentialRequestFromRepo(repo);
-    if (!request) return undefined;
-
-    const requestId = `cred_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    this.send({ type: "credential_request", request_id: requestId, ...request });
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.credentialRequests.delete(requestId);
-        resolve(undefined);
-      }, this.credentialTimeoutMs);
-
-      this.credentialRequests.set(requestId, { resolve, timeout });
-    });
-  }
-
-  private handleCredentialResponse(message: Extract<DOToSandboxMessage, { type: "credential_response" }>): void {
-    const pending = this.credentialRequests.get(message.request_id);
-    if (!pending) return;
-
-    clearTimeout(pending.timeout);
-    this.credentialRequests.delete(message.request_id);
-
-    if (message.error || !message.username || !message.password) {
-      this.send({ type: "status", message: `Credential request denied: ${message.error ?? "missing credential"}` });
-      pending.resolve(undefined);
-      return;
-    }
-
-    pending.resolve({ username: message.username, password: message.password });
-  }
-
   private requireRepo(): Extract<RepoState, { state: "ready" }> {
     if (this.repo.state !== "ready") {
       throw new Error("Repository has not been initialized");
@@ -849,13 +619,4 @@ export class SandboxRuntime {
         : `Preview command saved: ${command.command} on port ${command.port}.`,
     });
   }
-}
-
-export function dependencyCacheEnv(workspace: string): Record<string, string> {
-  return {
-    npm_config_cache: join(workspace, "cache", "npm"),
-    npm_config_store_dir: join(workspace, "cache", "pnpm-store"),
-    YARN_CACHE_FOLDER: join(workspace, "cache", "yarn"),
-    BUN_INSTALL_CACHE_DIR: join(workspace, "cache", "bun"),
-  };
 }

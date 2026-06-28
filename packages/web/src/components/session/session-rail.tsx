@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { addCost, zeroCost } from "@codevil/shared";
 import { useSessionStore } from "@/stores/session-store";
 import { loadStoredSession } from "@/lib/session-summary";
 import { Logo } from "@/components/brand/logo";
@@ -13,15 +14,32 @@ type StatusVariant =
   | "done"
   | "idle";
 
+function sumMessageCosts(messages: ReturnType<typeof useSessionStore.getState>["messages"]) {
+  let total = zeroCost();
+  let found = false;
+  for (const message of messages) {
+    if (message.meta?.cost) {
+      total = addCost(total, message.meta.cost);
+      found = true;
+    }
+  }
+  return found ? total : null;
+}
+
 export function SessionRail() {
-  const { sessionId, sessionPhase, connectionStatus, messages, stopSession } =
+  const { sessionId, sessionPhase, connectionStatus, messages, sessionCostTotal, stopSession } =
     useSessionStore();
   const storedSession = loadStoredSession(sessionId);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const costInfo = [...messages]
-    .reverse()
-    .find((message) => message.meta?.cost)?.meta?.cost;
+  const messageCost = sumMessageCosts(messages);
+  const costInfo = sessionCostTotal !== null
+    ? {
+        total_cost_usd: sessionCostTotal,
+        input_tokens: messageCost?.input_tokens ?? 0,
+        output_tokens: messageCost?.output_tokens ?? 0,
+      }
+    : messageCost;
   const cost = costInfo ? `$${costInfo.total_cost_usd.toFixed(4)}` : "$0.00";
   const totalTokens = costInfo
     ? costInfo.input_tokens + costInfo.output_tokens

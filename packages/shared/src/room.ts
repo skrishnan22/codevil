@@ -35,6 +35,15 @@ export const ParticipantIdentitySchema = z.object({
   name: z.string(),
 });
 
+export const AgentRunSchema = z.object({
+  id: z.string(),
+  actor: ParticipantIdentitySchema,
+  text: z.string(),
+  plan_first: z.boolean(),
+  state: AgentRunStateSchema,
+  created_at: z.string(),
+});
+
 export const SessionSummarySchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -53,10 +62,8 @@ export const CreateSessionRequestSchema = z.object({
   provider: z.string().trim().min(1).optional(),
   plan_model: z.string().trim().min(1).optional(),
   exec_model: z.string().trim().min(1).optional(),
-  max_cost: z.string().trim().min(1).optional(),
   max_session_time: z.string().trim().min(1).optional(),
   max_idle_time: z.string().trim().min(1).optional(),
-  max_steps: z.number().int().positive().optional(),
   created_by: ParticipantIdentitySchema.optional(),
 }).strict();
 
@@ -78,6 +85,7 @@ export const GetSessionResponseSchema = z.object({
 export type RoomState = z.infer<typeof RoomStateSchema>;
 export type SandboxState = z.infer<typeof SandboxStateSchema>;
 export type AgentRunState = z.infer<typeof AgentRunStateSchema>;
+export type AgentRun = z.infer<typeof AgentRunSchema>;
 export type ParticipantIdentity = z.infer<typeof ParticipantIdentitySchema>;
 export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;

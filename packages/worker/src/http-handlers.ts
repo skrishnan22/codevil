@@ -1,5 +1,6 @@
 import {
   buildSessionSummary,
+  legacyDirectoryGuardColumns,
   normalizeCreateSessionBody,
   recentSessionsSelect,
   sessionByIdSelect,
@@ -478,6 +479,7 @@ export async function handleCreateSession(
 
   const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;
   const now = new Date().toISOString();
+  const legacyGuards = legacyDirectoryGuardColumns();
   const row: SessionDirectoryRow = {
     id: sessionId,
     repo: normalized.repo,
@@ -485,10 +487,10 @@ export async function handleCreateSession(
     provider: normalized.provider,
     plan_model: normalized.plan_model,
     exec_model: normalized.exec_model,
-    max_cost: normalized.max_cost,
+    max_cost: legacyGuards.max_cost,
     max_session_time: normalized.max_session_time,
     max_idle_time: normalized.max_idle_time,
-    max_steps: normalized.max_steps,
+    max_steps: legacyGuards.max_steps,
     room_state: "initializing",
     sandbox_state: "not_started",
     created_by_id: auth.userId,
@@ -510,9 +512,7 @@ export async function handleCreateSession(
       provider: normalized.provider,
       plan_model: normalized.plan_model,
       exec_model: normalized.exec_model,
-      max_cost: normalized.max_cost,
       max_time: normalized.max_session_time,
-      max_steps: normalized.max_steps,
       created_by: { id: auth.userId, name: auth.name },
     });
   } catch (error) {
@@ -674,13 +674,6 @@ export async function handleDiagnostics(env: Env, sessionId: string): Promise<Re
       error: error instanceof Error ? error.message : String(error),
     }, 500);
   }
-}
-
-export async function handleSimulate(env: Env, sessionId: string): Promise<Response> {
-  const doId = env.ORCHESTRATOR.idFromName(sessionId);
-  const stub = env.ORCHESTRATOR.get(doId);
-  await stub.simulateTestEvents();
-  return json({ ok: true }, 200);
 }
 
 export function json(data: unknown, status: number): Response {

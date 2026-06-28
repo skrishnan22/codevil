@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import WebSocket from "ws";
 
 import type { DOToSandboxMessage, SandboxToDOMessage } from "@codevil/shared";
-import { DOToSandboxMessageSchema, parseInbound } from "@codevil/shared";
+import {
+  DOToSandboxMessageSchema,
+  type EntrypointEnv,
+  parseEntrypointEnv,
+  parseInbound,
+} from "@codevil/shared";
 
 import { configureDefaultGitIdentity, ShellGitDriver } from "./git-driver.js";
 import { PiAgentDriver } from "./pi-driver.js";
@@ -11,24 +16,28 @@ import { SandboxRuntime } from "./runtime.js";
 import { readAndUnlinkSecret } from "./secrets.js";
 import { ReconnectingWebSocketClient } from "./socket-client.js";
 
-export interface EntrypointEnv {
-  CODEVIL_DO_WS_URL?: string;
-  CODEVIL_API_KEY?: string;
-  CODEVIL_WORKSPACE?: string;
-  CODEVIL_PROVIDER?: string;
-  CODEVIL_LLM_KEY_FILE?: string;
+export type { EntrypointEnv } from "@codevil/shared";
+
+function isNodeENOENT(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-function loadEnv(processEnv: EntrypointEnv): EntrypointEnv {
-  if (processEnv.CODEVIL_DO_WS_URL) return processEnv;
+function loadEnv(processEnv: Record<string, unknown>): EntrypointEnv {
+  const fromProcess = parseEntrypointEnv(processEnv);
+  if (fromProcess.CODEVIL_DO_WS_URL) return fromProcess;
 
   try {
     const raw = readFileSync("/run/secrets/env.json", "utf8");
-    const fileEnv = JSON.parse(raw) as EntrypointEnv;
+    const fileParsed = JSON.parse(raw) as Record<string, unknown>;
     console.log("codevil-sandbox: loaded env from /run/secrets/env.json");
-    return { ...processEnv, ...fileEnv };
-  } catch {
-    return processEnv;
+    return parseEntrypointEnv({ ...processEnv, ...fileParsed });
+  } catch (error) {
+    if (isNodeENOENT(error)) return fromProcess;
+    if (error instanceof Error && error.message.startsWith("Invalid sandbox env:")) throw error;
+    if (error instanceof SyntaxError) {
+      throw new Error("Invalid JSON in /run/secrets/env.json");
+    }
+    throw error;
   }
 }
 
@@ -67,12 +76,16 @@ export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): 
   };
 }
 
-export async function startEntrypoint(env: EntrypointEnv = process.env): Promise<void> {
+export async function startEntrypoint(
+  rawEnv: Record<string, unknown> = process.env,
+): Promise<void> {
   console.log("codevil-sandbox: starting entrypoint");
 
-  env = loadEnv(env);
+  const env = loadEnv(rawEnv);
 
   if (!env.CODEVIL_DO_WS_URL) throw new Error("CODEVIL_DO_WS_URL is required");
+
+  const wsUrl = env.CODEVIL_DO_WS_URL;
 
   await configureDefaultGitIdentity();
 
@@ -91,8 +104,8 @@ export async function startEntrypoint(env: EntrypointEnv = process.env): Promise
 
   connection = new ReconnectingWebSocketClient({
     createSocket: () => {
-      console.log("codevil-sandbox: connecting to", env.CODEVIL_DO_WS_URL);
-      return new WebSocket(env.CODEVIL_DO_WS_URL!, {
+      console.log("codevil-sandbox: connecting to", wsUrl);
+      return new WebSocket(wsUrl, {
         headers: env.CODEVIL_API_KEY ? { Authorization: `Bearer ${env.CODEVIL_API_KEY}` } : undefined,
       });
     },

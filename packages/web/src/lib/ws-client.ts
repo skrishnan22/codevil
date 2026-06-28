@@ -1,5 +1,9 @@
 import type { DOToCLIEvent, CLIToDOMessage, SnapshotFrame, ReplayBatchFrame } from "@codevil/shared";
-import { SnapshotFrameSchema, ReplayBatchFrameSchema } from "@codevil/shared";
+import {
+  parseReplayEvent,
+  SnapshotFrameSchema,
+  ReplayBatchFrameSchema,
+} from "@codevil/shared";
 
 export interface EventEnvelope {
   cursor: number;
@@ -33,11 +37,17 @@ export function buildWebSocketUrl(
 }
 
 export function parseEnvelope(raw: string): EventEnvelope {
-  const parsed = JSON.parse(raw);
-  if (typeof parsed.cursor !== "number" || !parsed.event || typeof parsed.event.type !== "string") {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== "object") {
     throw new Error("Invalid event envelope");
   }
-  return { cursor: parsed.cursor, event: parsed.event as DOToCLIEvent };
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.cursor !== "number") {
+    throw new Error("Invalid event envelope");
+  }
+  const event = parseReplayEvent(record.event);
+  if (!event) throw new Error("Invalid event envelope");
+  return { cursor: record.cursor, event };
 }
 
 export function connectWebSocket(options: WSClientOptions): {
@@ -97,10 +107,12 @@ export function connectWebSocket(options: WSClientOptions): {
 
       // Re-use the already-parsed value to avoid a second JSON.parse.
       // Silently drop malformed envelopes — symmetric with the snapshot frame path above.
-      if (typeof raw.cursor !== "number" || !raw.event || typeof (raw.event as Record<string, unknown>).type !== "string") {
+      if (typeof raw.cursor !== "number" || raw.event === undefined) {
         return;
       }
-      const envelope: EventEnvelope = { cursor: raw.cursor as number, event: raw.event as DOToCLIEvent };
+      const cliEvent = parseReplayEvent(raw.event);
+      if (!cliEvent) return;
+      const envelope: EventEnvelope = { cursor: raw.cursor as number, event: cliEvent };
       cursor = Math.max(cursor, envelope.cursor);
       options.onEvent(envelope);
     };

@@ -1,15 +1,14 @@
-import type { AnswerableBy } from "@codevil/shared";
+import {
+  parseSqliteRow,
+  QuestionRowSchema,
+  RequestIdRowSchema,
+  type QuestionRow,
+} from "@codevil/shared";
 
-export interface QuestionRow {
-  run_id: string;
-  status: string;
-  answerable_by: AnswerableBy;
-  assigned_to_id: string | null;
-  assigned_to_name: string | null;
-}
+export type { QuestionRow };
 
 export function questionAnswerDeniedMessage(question: {
-  answerable_by: AnswerableBy;
+  answerable_by: QuestionRow["answerable_by"];
   assigned_to_name: string | null;
 }): string {
   if (question.answerable_by === "assigned") {
@@ -30,13 +29,11 @@ export function loadQuestionRow(sql: SqlStorage, requestId: string): QuestionRow
      WHERE request_id = ?`,
     requestId,
   )) {
-    return {
-      run_id: row["run_id"] as string,
-      status: row["status"] as string,
-      answerable_by: row["answerable_by"] as AnswerableBy,
-      assigned_to_id: (row["assigned_to_id"] as string | null) ?? null,
-      assigned_to_name: (row["assigned_to_name"] as string | null) ?? null,
-    };
+    return parseSqliteRow(
+      QuestionRowSchema,
+      row as Record<string, unknown>,
+      "sqlite_question",
+    );
   }
   return null;
 }
@@ -47,7 +44,12 @@ export function listOpenQuestionIds(sql: SqlStorage, runId: string): string[] {
     `SELECT request_id FROM questions WHERE run_id = ? AND status = 'open'`,
     runId,
   )) {
-    ids.push(row["request_id"] as string);
+    const parsed = parseSqliteRow(
+      RequestIdRowSchema,
+      row as Record<string, unknown>,
+      "sqlite_question_id",
+    );
+    if (parsed) ids.push(parsed.request_id);
   }
   return ids;
 }

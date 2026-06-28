@@ -211,7 +211,10 @@ export function mapEventToChat(event: DOToCLIEvent, ctx: ProjectionContext): Cha
           variant: "text",
           content: event.text,
           timestamp: ts,
-          meta: { run_id: event.run_id },
+          meta: {
+            run_id: event.run_id,
+            ...(event.cost ? { cost: event.cost } : {}),
+          },
         },
       ];
 
@@ -303,6 +306,9 @@ export function mapEventToChat(event: DOToCLIEvent, ctx: ProjectionContext): Cha
     case "question_raised":
     case "question_assigned":
     case "question_answered":
+      return [];
+
+    case "cost_updated":
       return [];
   }
 }

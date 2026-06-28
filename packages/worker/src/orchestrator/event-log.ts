@@ -1,7 +1,9 @@
 import type { DOToCLIEvent } from "@codevil/shared";
 import {
   applyToSessionSnapshot,
+  DOToCLIEventSchema,
   emptySessionSnapshot,
+  parseSessionSnapshot,
   type ProjectionContext,
   type SessionSnapshot,
   type Tracer,
@@ -43,7 +45,18 @@ export class SessionEventLog {
   }
 
   appendAndBroadcast(event: DOToCLIEvent): void {
-    const redacted = redactEvent(event, this.redactionSecrets);
+    const validated = DOToCLIEventSchema.safeParse(event);
+    if (!validated.success) {
+      this.getTracer()?.log("ERROR", "event.append.rejected", {
+        raw_type: typeof event === "object" && event && "type" in event
+          ? String((event as { type: unknown }).type)
+          : null,
+        issues: validated.error.issues,
+      });
+      return;
+    }
+
+    const redacted = redactEvent(validated.data, this.redactionSecrets);
     const json = JSON.stringify(redacted);
     this.sql.exec("INSERT INTO events (event_json) VALUES (?)", json);
 
@@ -128,8 +141,15 @@ export class SessionEventLog {
     ).one() as { cursor: number; state_json: string } | undefined;
     if (snapRow) {
       try {
-        this.snapshot = JSON.parse(snapRow.state_json) as SessionSnapshot;
-        this.snapshotCursor = snapRow.cursor;
+        const parsed = parseSessionSnapshot(JSON.parse(snapRow.state_json));
+        if (parsed) {
+          this.snapshot = parsed;
+          this.snapshotCursor = snapRow.cursor;
+        } else {
+          this.getTracer()?.log("ERROR", "snapshot.hydrate.failed", {
+            error: "SessionSnapshot validation failed",
+          });
+        }
       } catch (error) {
         this.getTracer()?.log("ERROR", "snapshot.hydrate.failed", {
           error: error instanceof Error ? error.message : String(error),

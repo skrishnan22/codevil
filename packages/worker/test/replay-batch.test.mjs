@@ -47,6 +47,20 @@ test("replay-batch: rows with invalid JSON are silently skipped", () => {
   assert.equal(events[1].cursor, 3);
 });
 
+test("replay-batch: rows without event type are silently skipped", () => {
+  const rows = [
+    { id: 1, event_json: JSON.stringify({ type: "session_created", session_id: "ses_1" }) },
+    { id: 2, event_json: JSON.stringify({ message: "missing type" }) },
+    { id: 3, event_json: JSON.stringify({ type: "status", message: "done" }) },
+  ];
+
+  const events = buildReplayBatch(rows);
+
+  assert.equal(events.length, 2, "event without type should be skipped");
+  assert.equal(events[0].cursor, 1);
+  assert.equal(events[1].cursor, 3);
+});
+
 test("replay-batch: result is a JSON-serializable replay_batch frame", () => {
   const rows = [
     { id: 10, event_json: JSON.stringify({ type: "status", message: "Hello" }) },

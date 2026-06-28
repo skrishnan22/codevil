@@ -1,11 +1,8 @@
-import type {
-  ParticipantIdentity,
-  SessionState,
-} from "@codevil/shared";
+import type { ParticipantIdentity, SessionState } from "@codevil/shared";
 
-import type { AgentRun } from "../agent-runs.js";
-import type { LastDecision } from "../multiplayer.js";
 import type { Sandbox } from "@cloudflare/sandbox";
+
+export type { SessionMeta } from "@codevil/shared";
 
 export interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
@@ -25,44 +22,12 @@ export interface Env {
   CODEVIL_PREVIEW_ORIGIN?: string;
 }
 
-export interface SessionMeta {
-  session_id: string;
-  prompt: string;
-  repo: string;
-  worker_url: string;
-  provider: string;
-  plan_model: string;
-  exec_model: string;
-  max_cost: string;
-  max_time: string;
-  max_steps: number;
-  state: SessionState;
-  refinement_round: number;
-  verification_attempts: number;
-  cost_total_usd: number;
-  latest_plan?: string;
-  active_run?: AgentRun | null;
-  queued_runs: AgentRun[];
-  created_by?: ParticipantIdentity;
-  preview_token_hash?: string;
-  preview_url?: string;
-  preview_port?: number;
-  preview_active?: boolean;
-  created_at: string;
-  expected_close?: boolean;
-  sandbox_disconnected_at?: string;
-  workspace_cache_restored?: boolean;
-  last_decision?: LastDecision;
-}
-
 export interface InitOptions {
   worker_url: string;
   provider?: string;
   plan_model?: string;
   exec_model?: string;
-  max_cost?: string;
   max_time?: string;
-  max_steps?: number;
   created_by?: ParticipantIdentity;
 }
 

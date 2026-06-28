@@ -60,11 +60,11 @@ import { traceSandboxProvisioning } from "./orchestrator/provisioning.js";
 export { traceSandboxProvisioning } from "./orchestrator/provisioning.js";
 import { proxyPreviewRequest } from "./orchestrator/preview.js";
 import {
-  parseMaxCostUsd,
   parseMaxTimeMs,
   traceIdFromSessionId,
 } from "./orchestrator/session-guards.js";
 export { traceIdFromSessionId } from "./orchestrator/session-guards.js";
+import { runOrchestratorSchemaMigrations } from "./orchestrator/schema-migrations.js";
 import type { OrchestratorHost } from "./orchestrator/host.js";
 import { SessionEventLog } from "./orchestrator/event-log.js";
 import { loadSessionMeta, saveSessionMeta } from "./orchestrator/session-meta.js";
@@ -202,37 +202,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
         updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
       );
     `);
-    this.ensureEventPathColumn();
-    this.ensureQuestionAssignmentColumns();
-  }
-
-  private ensureEventPathColumn(): void {
-    // ALTER TABLE cannot use IF NOT EXISTS in SQLite; wrap in try/catch to
-    // gracefully handle re-initialization on already-migrated DOs.
-    try {
-      this.sql.exec("ALTER TABLE events ADD COLUMN path TEXT NOT NULL DEFAULT 'session'");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.toLowerCase().includes("duplicate column")) throw error;
-    }
-    // Index runs after the column is guaranteed to exist (either added above or pre-existing).
-    this.sql.exec(
-      "CREATE INDEX IF NOT EXISTS idx_events_path_id ON events(path, id)"
-    );
-  }
-
-  private ensureQuestionAssignmentColumns(): void {
-    for (const statement of [
-      "ALTER TABLE questions ADD COLUMN assigned_to_id TEXT",
-      "ALTER TABLE questions ADD COLUMN assigned_to_name TEXT",
-    ]) {
-      try {
-        this.sql.exec(statement);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.toLowerCase().includes("duplicate column")) throw error;
-      }
-    }
+    runOrchestratorSchemaMigrations(this.sql);
   }
 
   async init(sessionId: string, prompt: string, repo: string, options: InitOptions): Promise<void> {
@@ -244,9 +214,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       provider: options.provider ?? DEFAULT_CONFIG.provider,
       plan_model: options.plan_model ?? DEFAULT_CONFIG.plan_model,
       exec_model: options.exec_model ?? DEFAULT_CONFIG.exec_model,
-      max_cost: options.max_cost ?? DEFAULT_CONFIG.max_cost,
       max_time: options.max_time ?? DEFAULT_CONFIG.max_time,
-      max_steps: options.max_steps ?? DEFAULT_CONFIG.max_steps,
       state: "initializing",
       refinement_round: 0,
       verification_attempts: 0,
@@ -749,22 +717,16 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     };
   }
 
-  recordCost(cost: CostInfo): boolean {
-    if (!this.meta) return false;
+  trackCost(cost: CostInfo): void {
+    if (!this.meta) return;
 
     this.meta.cost_total_usd = (this.meta.cost_total_usd ?? 0) + cost.total_cost_usd;
     this.saveMeta();
-
-    const maxCost = parseMaxCostUsd(this.meta.max_cost);
-    if (maxCost === null || this.meta.cost_total_usd <= maxCost) return true;
-
-    if (this.transition("cost_exceeded")) {
-      this.appendAndBroadcast({
-        type: "error",
-        message: `Cost limit exceeded: $${this.meta.cost_total_usd.toFixed(4)} used, limit $${maxCost.toFixed(2)}.`,
-      });
-    }
-    return false;
+    this.appendAndBroadcast({
+      type: "cost_updated",
+      cost_total_usd: this.meta.cost_total_usd,
+      turn_cost: cost,
+    });
   }
 
   updateDirectory(patch: {
@@ -941,27 +903,6 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       active_run_state: activeRunId ? "failed" : null,
     });
     await this.terminateSandbox("sandbox reconnect timed out");
-  }
-
-  // --- Test simulation ---
-
-  async simulateTestEvents(): Promise<void> {
-    this.loadMeta();
-    if (!this.meta) return;
-
-    const steps: { state: SessionState; event: DOToCLIEvent }[] = [
-      { state: "provisioning_sandbox", event: { type: "status", message: "Provisioning sandbox..." } },
-      { state: "cloning_repo", event: { type: "clone_progress", line: "Cloning into '/workspace'..." } },
-      { state: "ready", event: { type: "room_ready", repo: this.meta.repo } },
-      { state: "executing", event: { type: "phase", phase: "executing", model: "claude-sonnet-4-6" } },
-      { state: "ready", event: { type: "agent_response", run_id: "run_test", text: "The repository is ready. Ask me a question or request a code change." } },
-    ];
-
-    for (const step of steps) {
-      if (this.transition(step.state)) {
-        this.appendAndBroadcast(step.event);
-      }
-    }
   }
 
   async fetchPreview(request: Request, token: string): Promise<Response> {

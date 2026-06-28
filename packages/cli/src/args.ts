@@ -14,9 +14,7 @@ export interface RunCommand {
   provider?: string;
   planModel?: string;
   execModel?: string;
-  maxCost?: string;
   maxTime?: string;
-  maxSteps?: number;
   debug?: boolean;
 }
 
@@ -44,9 +42,7 @@ const runOptions = new Set([
   "--provider",
   "--plan-model",
   "--exec-model",
-  "--max-cost",
   "--max-time",
-  "--max-steps",
 ]);
 
 const initOptions = new Set(["--endpoint", "--api-key", "--provider", "--plan-model", "--exec-model"]);
@@ -152,14 +148,8 @@ function parseRun(argv: string[]): RunCommand {
         case "--exec-model":
           parsed.execModel = value;
           break;
-        case "--max-cost":
-          parsed.maxCost = value;
-          break;
         case "--max-time":
           parsed.maxTime = value;
-          break;
-        case "--max-steps":
-          parsed.maxSteps = parsePositiveInteger(value, "--max-steps");
           break;
       }
     } else {
@@ -179,9 +169,7 @@ function parseRun(argv: string[]): RunCommand {
     provider: parsed.provider,
     planModel: parsed.planModel,
     execModel: parsed.execModel,
-    maxCost: parsed.maxCost,
     maxTime: parsed.maxTime,
-    maxSteps: parsed.maxSteps,
     debug: parsed.debug,
   };
 }

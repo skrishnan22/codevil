@@ -15,7 +15,6 @@ test("CreateSessionRequestSchema accepts repo-only session creation", () => {
     exec_model: "gpt-5.4-mini",
     max_idle_time: "10m",
     max_session_time: "30m",
-    max_steps: 200,
   });
 
   assert.equal(parsed.repo, "github.com/acme/app");

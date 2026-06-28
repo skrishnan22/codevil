@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { parseCommand } from "../dist/args.js";
 
-test("parses run command with repo, prompt, models, and guard options", () => {
+test("parses run command with repo, prompt, models, and time guard options", () => {
   const command = parseCommand([
     "run",
     "--repo",
@@ -14,12 +14,8 @@ test("parses run command with repo, prompt, models, and guard options", () => {
     "planner",
     "--exec-model",
     "executor",
-    "--max-cost",
-    "$5",
     "--max-time",
     "30m",
-    "--max-steps",
-    "75",
     "add",
     "rate",
     "limits",
@@ -32,9 +28,7 @@ test("parses run command with repo, prompt, models, and guard options", () => {
     provider: "anthropic",
     planModel: "planner",
     execModel: "executor",
-    maxCost: "$5",
     maxTime: "30m",
-    maxSteps: 75,
     debug: undefined,
   });
 });
@@ -71,9 +65,9 @@ test("rejects run without a repo", () => {
   );
 });
 
-test("rejects unknown options", () => {
+test("rejects removed guard options", () => {
   assert.throws(
-    () => parseCommand(["run", "--repo", "repo", "--wat", "do", "work"]),
-    /Unknown option: --wat/,
+    () => parseCommand(["run", "--repo", "repo", "--max-cost", "$5", "work"]),
+    /Unknown option: --max-cost/,
   );
 });

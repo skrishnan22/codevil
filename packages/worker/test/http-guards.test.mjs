@@ -103,7 +103,6 @@ test("isOriginGuardedPath covers state-changing browser routes", () => {
   assert.equal(isOriginGuardedPath("POST", "/invitations/inv_123/revoke"), true);
   assert.equal(isOriginGuardedPath("POST", "/invite/inv_token/accept"), true);
   assert.equal(isOriginGuardedPath("POST", "/sessions"), true);
-  assert.equal(isOriginGuardedPath("POST", "/sessions/ses_123/simulate"), true);
   assert.equal(isOriginGuardedPath("POST", "/api/auth/sign-out"), true);
 });
 

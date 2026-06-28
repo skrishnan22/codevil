@@ -13,9 +13,7 @@ export interface SessionPayload {
   provider: string;
   plan_model: string;
   exec_model: string;
-  max_cost: string;
-  max_time: string;
-  max_steps: number;
+  max_session_time: string;
 }
 
 export type FetchLike = (
@@ -34,9 +32,7 @@ export function buildSessionPayload(command: RunCommand, config: Config): Sessio
     provider: command.provider ?? config.defaults.provider,
     plan_model: command.planModel ?? config.defaults.plan_model,
     exec_model: command.execModel ?? config.defaults.exec_model,
-    max_cost: command.maxCost ?? config.defaults.max_cost,
-    max_time: command.maxTime ?? config.defaults.max_time,
-    max_steps: command.maxSteps ?? config.defaults.max_steps,
+    max_session_time: command.maxTime ?? config.defaults.max_time,
   };
 }
 

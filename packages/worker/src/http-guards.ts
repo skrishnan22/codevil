@@ -40,7 +40,6 @@ export function isOriginGuardedPath(method: string, path: string): boolean {
   if (path === "/sessions") return true;
   if (/^\/invitations\/[^/]+\/revoke$/.test(path)) return true;
   if (/^\/invite\/[^/]+\/accept$/.test(path)) return true;
-  if (/^\/sessions\/[^/]+\/simulate$/.test(path)) return true;
   return false;
 }
 

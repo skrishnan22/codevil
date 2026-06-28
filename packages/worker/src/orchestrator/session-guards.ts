@@ -1,10 +1,3 @@
-export function parseMaxCostUsd(value: string): number | null {
-  const match = value.trim().match(/^\$?(\d+(?:\.\d+)?)$/);
-  if (!match) return null;
-
-  return Number(match[1]);
-}
-
 export function parseMaxTimeMs(value: string): number | null {
   const match = value.trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/);
   if (!match) return null;

@@ -18,7 +18,6 @@ import {
   handleSandboxWebSocketUpgrade,
   handleSessionPreview,
   handleSetupClaim,
-  handleSimulate,
   handleWebSocketUpgrade,
   json,
   previewTokenFromHost,
@@ -151,14 +150,6 @@ export async function dispatchHttpRequest(
       return withCors(request, env, json({ error: "Unauthorized" }, 401));
     }
     return withCors(request, env, await handleDiagnostics(env, diagnosticsMatch[1]));
-  }
-
-  const simMatch = path.match(/^\/sessions\/([^/]+)\/simulate$/);
-  if (simMatch && request.method === "POST") {
-    if (!authenticate(request, env.CODEVIL_API_KEY)) {
-      return withCors(request, env, json({ error: "Unauthorized" }, 401));
-    }
-    return withCors(request, env, await handleSimulate(env, simMatch[1]));
   }
 
   return null;

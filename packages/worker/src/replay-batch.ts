@@ -5,6 +5,9 @@
  * in Node.js without pulling in the `cloudflare:workers` DurableObject runtime.
  */
 
+import { parseReplayEvent } from "@codevil/shared";
+import type { DOToCLIEvent } from "@codevil/shared";
+
 export interface ReplayRow {
   id: number;
   event_json: string;
@@ -13,20 +16,24 @@ export interface ReplayRow {
 /**
  * Builds the events array for a replay_batch frame from raw DB rows.
  *
- * Schema re-validation is intentionally skipped: rows were validated when
- * written to the events table, so we trust the stored bytes on replay.
- *
- * Rows with unparseable JSON are silently skipped to avoid killing the batch.
+ * Each parsed event is validated with `parseReplayEvent` (strict first, lenient
+ * fallback for legacy rows). Unparseable JSON or invalid events are skipped.
  */
 export function buildReplayBatch(
   rows: Iterable<ReplayRow>,
-): Array<{ cursor: number; event: unknown }> {
-  const events: Array<{ cursor: number; event: unknown }> = [];
+): Array<{ cursor: number; event: DOToCLIEvent }> {
+  const events: Array<{ cursor: number; event: DOToCLIEvent }> = [];
   for (const row of rows) {
+    let raw: unknown;
     try {
-      events.push({ cursor: row.id, event: JSON.parse(row.event_json) });
+      raw = JSON.parse(row.event_json);
     } catch {
-      // skip unparseable row — don't kill the batch
+      continue;
+    }
+
+    const event = parseReplayEvent(raw);
+    if (event) {
+      events.push({ cursor: row.id, event });
     }
   }
   return events;

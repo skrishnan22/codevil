@@ -22,7 +22,7 @@ export interface OrchestratorHost {
   appendAndBroadcast(event: DOToCLIEvent): void;
   transition(to: SessionState): boolean;
   sendToSandbox(message: DOToSandboxMessage): void;
-  recordCost(cost: CostInfo): boolean;
+  trackCost(cost: CostInfo): void;
   updateDirectory(patch: {
     room_state?: string;
     sandbox_state?: string;

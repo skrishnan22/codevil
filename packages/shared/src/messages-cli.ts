@@ -171,6 +171,13 @@ export const AgentResponseEventSchema = z.object({
   type: z.literal("agent_response"),
   run_id: z.string(),
   text: z.string(),
+  cost: CostInfoSchema.optional(),
+});
+
+export const CostUpdatedEventSchema = z.object({
+  type: z.literal("cost_updated"),
+  cost_total_usd: z.number(),
+  turn_cost: CostInfoSchema,
 });
 
 export const PlanRevisionFrozenEventSchema = z.object({
@@ -291,6 +298,7 @@ export const DOToCLIEventSchema = z.discriminatedUnion("type", [
   QuestionRaisedEventSchema,
   QuestionAssignedEventSchema,
   QuestionAnsweredEventSchema,
+  CostUpdatedEventSchema,
 ]);
 
 // Lenient variant for replaying persisted history from DO SQLite.
@@ -325,6 +333,7 @@ export type PlanExecutionStartedEvent = z.infer<typeof PlanExecutionStartedEvent
 export type AgentRunCompletedEvent = z.infer<typeof AgentRunCompletedEventSchema>;
 export type AgentRunFailedEvent = z.infer<typeof AgentRunFailedEventSchema>;
 export type AgentResponseEvent = z.infer<typeof AgentResponseEventSchema>;
+export type CostUpdatedEvent = z.infer<typeof CostUpdatedEventSchema>;
 export type PlanRevisionFrozenEvent = z.infer<typeof PlanRevisionFrozenEventSchema>;
 export type AnnotationCreatedEvent = z.infer<typeof AnnotationCreatedEventSchema>;
 export type AnnotationRepliedEvent = z.infer<typeof AnnotationRepliedEventSchema>;

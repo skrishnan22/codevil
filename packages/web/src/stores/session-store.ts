@@ -24,6 +24,8 @@ import {
   reduceAnnotations,
   reduceQuestions,
   parseRaisedAt,
+  parseReplayEvent,
+  parseSessionSnapshot,
 } from "@codevil/shared";
 import type {
   ChatMessage,
@@ -83,6 +85,7 @@ interface SessionStoreState {
   selectedAnnotationId: string | null;
   currentUserId: string | null;
   sessionCreatorId: string | null;
+  sessionCostTotal: number | null;
   planPanelOpen: boolean;
 }
 
@@ -147,6 +150,7 @@ const initialState: SessionStoreState = {
   selectedAnnotationId: emptySnap.selectedAnnotationId,
   currentUserId: null,
   sessionCreatorId: null,
+  sessionCostTotal: null,
   planPanelOpen: false,
 };
 
@@ -219,6 +223,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         questions: [],
         selectedAnnotationId: null,
         sessionCreatorId: hasCreatorIdOption ? options.sessionCreatorId ?? null : null,
+        sessionCostTotal: null,
         planPanelOpen: false,
       }),
       ...(isSameSession && hasCreatorIdOption
@@ -240,7 +245,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         if (generation !== connectionGeneration) return;
         // Clear any pending debounced events — the snapshot is the ground truth.
         clearPendingEvents();
-        const snap = frame.state as SessionSnapshot;
+        const snap = parseSessionSnapshot(frame.state);
+        if (!snap) return;
         set((state) => ({
           cursor: frame.cursor,
           sessionPhase: snap.sessionPhase,
@@ -277,6 +283,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           };
           for (let i = 0; i < frame.events.length; i++) {
             const item = frame.events[i];
+            const event = parseReplayEvent(item.event);
+            if (!event) continue;
             const ctx: ProjectionContext = {
               uid: () => `msg_${++localCounter}`,
               // +i gives each event a monotonically-increasing timestamp within
@@ -286,7 +294,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
               // per-iteration Date.now() calls.
               now: batchNow + i,
             };
-            snap = applyToSessionSnapshot(snap, item.cursor, item.event as DOToCLIEvent, ctx);
+            snap = applyToSessionSnapshot(snap, item.cursor, event, ctx);
           }
           return {
             cursor: snap.cursor,
@@ -344,6 +352,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             annotations: next.annotations,
             questions: next.questions,
             selectedAnnotationId: next.selectedAnnotationId,
+            ...(envelope.event.type === "cost_updated"
+              ? { sessionCostTotal: envelope.event.cost_total_usd }
+              : {}),
           };
         });
 

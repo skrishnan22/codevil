@@ -22,10 +22,8 @@ export interface NewSessionParams {
   provider?: string;
   planModel?: string;
   execModel?: string;
-  maxCost?: string;
   maxSessionTime?: string;
   maxIdleTime?: string;
-  maxSteps?: number;
 }
 
 export type SessionSummary = SharedSessionSummary;

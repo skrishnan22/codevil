@@ -1,9 +1,8 @@
 import type { DOToCLIEvent } from "@codevil/shared";
 import {
-  PersistedDOToCLIEventSchema,
-  SnapshotFrameSchema,
+  parseReplayEvent,
   ReplayBatchFrameSchema,
-  parseInbound,
+  SnapshotFrameSchema,
 } from "@codevil/shared";
 
 export interface EventEnvelope {
@@ -69,9 +68,9 @@ export function parseFrame(raw: string): ParsedFrame {
     // Each item is validated leniently (same as the legacy per-envelope path).
     const events: Array<{ cursor: number; event: DOToCLIEvent }> = [];
     for (const item of result.data.events) {
-      const event = parseInbound(PersistedDOToCLIEventSchema, item.event, "do_to_cli");
+      const event = parseReplayEvent(item.event);
       if (event) {
-        events.push({ cursor: item.cursor, event: event as unknown as DOToCLIEvent });
+        events.push({ cursor: item.cursor, event });
       }
     }
     return { kind: "replay_batch", events };
@@ -82,13 +81,13 @@ export function parseFrame(raw: string): ParsedFrame {
     throw new Error("Invalid event envelope");
   }
 
-  const event = parseInbound(PersistedDOToCLIEventSchema, parsed.event, "do_to_cli");
+  const event = parseReplayEvent(parsed.event);
   if (!event) return { kind: "unknown" };
 
   return {
     kind: "envelope",
     cursor: parsed.cursor,
-    event: event as unknown as DOToCLIEvent,
+    event,
   };
 }
 

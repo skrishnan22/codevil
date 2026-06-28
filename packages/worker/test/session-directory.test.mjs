@@ -25,7 +25,6 @@ test("normalizeCreateSessionBody accepts repo-only creation and defaults runtime
     exec_model: "gpt-5.4-mini",
     max_idle_time: "10m",
     max_session_time: "30m",
-    max_steps: 200,
   });
 
   assert.equal(result.repo, "github.com/acme/app");
@@ -33,7 +32,6 @@ test("normalizeCreateSessionBody accepts repo-only creation and defaults runtime
   assert.equal(result.title, "acme/app");
   assert.equal(result.max_idle_time, "10m");
   assert.equal(result.max_session_time, "30m");
-  assert.equal(result.max_steps, 200);
 });
 
 test("normalizeCreateSessionBody rejects prompt-based creation", () => {

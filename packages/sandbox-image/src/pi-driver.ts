@@ -19,6 +19,12 @@ import {
   isRecord,
 } from "@codevil/shared";
 
+import {
+  costFromSessionStats,
+  costSinceSnapshot,
+  snapshotSessionCost,
+} from "./pi-cost.js";
+
 import type {
   AgentDriver,
   AgentStartOptions,
@@ -30,12 +36,6 @@ import type {
   PlanResult,
   TurnResult,
 } from "./runtime.js";
-
-const zeroCost: CostInfo = {
-  input_tokens: 0,
-  output_tokens: 0,
-  total_cost_usd: 0,
-};
 
 const DEFAULT_CODEVIL_PI_AGENT_DIR = "/opt/codevil/pi-agent";
 
@@ -117,11 +117,13 @@ export class PiAgentDriver implements AgentDriver {
     const session = this.requireSession();
     this.latestAssistantText = "";
     this.streamedAssistantText = "";
+    const before = snapshotSessionCost(session);
     await session.prompt(prompt);
     await waitForQueuedAgentEvents(session);
+    const cost = costSinceSnapshot(before, snapshotSessionCost(session));
     return {
       response: this.latestAssistantText || latestAssistantText(session.messages) || this.streamedAssistantText.trim(),
-      cost: zeroCost,
+      cost,
     };
   }
 
@@ -187,7 +189,7 @@ export class PiAgentDriver implements AgentDriver {
       await session.prompt(consolidationPrompt(input));
       await waitForQueuedAgentEvents(session);
       const brief = latestAssistantText(session.messages);
-      return { brief, cost: zeroCost };
+      return { brief, cost: costFromSessionStats(session) };
     } finally {
       session.dispose();
     }
@@ -208,8 +210,10 @@ export class PiAgentDriver implements AgentDriver {
 
   async execute(plan: string): Promise<CostInfo> {
     const session = this.requireSession();
+    const before = snapshotSessionCost(session);
     await session.prompt(plan);
-    return zeroCost;
+    await waitForQueuedAgentEvents(session);
+    return costSinceSnapshot(before, snapshotSessionCost(session));
   }
 
   dispose(): void {

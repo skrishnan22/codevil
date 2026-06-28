@@ -6,17 +6,20 @@ export const CostInfoSchema = z.object({
   total_cost_usd: z.number(),
 });
 
-export const GuardLimitsSchema = z.object({
-  max_cost_usd: z.number(),
-  max_time_seconds: z.number(),
-  max_steps: z.number(),
-});
-
 export type CostInfo = z.infer<typeof CostInfoSchema>;
-export type GuardLimits = z.infer<typeof GuardLimitsSchema>;
 
-export const DEFAULT_GUARD_LIMITS: GuardLimits = {
-  max_cost_usd: 2,
-  max_time_seconds: 15 * 60,
-  max_steps: 50,
-};
+export function zeroCost(): CostInfo {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    total_cost_usd: 0,
+  };
+}
+
+export function addCost(left: CostInfo, right: CostInfo): CostInfo {
+  return {
+    input_tokens: left.input_tokens + right.input_tokens,
+    output_tokens: left.output_tokens + right.output_tokens,
+    total_cost_usd: Number((left.total_cost_usd + right.total_cost_usd).toFixed(6)),
+  };
+}

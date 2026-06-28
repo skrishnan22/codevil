@@ -1,4 +1,14 @@
-import type { AnnotationAnchor, AnnotationThread } from "@codevil/shared";
+import type { AnnotationThread } from "@codevil/shared";
+import {
+  AnnotationLookupRowSchema,
+  AnnotationReplyDbRowSchema,
+  annotationReplyFromDbRow,
+  OpenAnnotationDbRowSchema,
+  parseAnnotationAnchorJson,
+  parseSqliteRow,
+  PlanRevisionFullRowSchema,
+  PlanRevisionLockedRowSchema,
+} from "@codevil/shared";
 
 export function loadPlanRevision(
   sql: SqlStorage,
@@ -10,7 +20,11 @@ export function loadPlanRevision(
     runId,
     round,
   )) {
-    return { locked_at: row["locked_at"] as string | null };
+    return parseSqliteRow(
+      PlanRevisionLockedRowSchema,
+      row as Record<string, unknown>,
+      "sqlite_plan_revision",
+    );
   }
   return null;
 }
@@ -25,10 +39,11 @@ export function loadFullPlanRevision(
     runId,
     round,
   )) {
-    return {
-      markdown: row["markdown"] as string,
-      locked_at: row["locked_at"] as string | null,
-    };
+    return parseSqliteRow(
+      PlanRevisionFullRowSchema,
+      row as Record<string, unknown>,
+      "sqlite_plan_revision",
+    );
   }
   return null;
 }
@@ -45,15 +60,12 @@ export function loadAnnotationReplies(
      ORDER BY created_at ASC`,
     annotationId,
   )) {
-    replies.push({
-      id: row["id"] as string,
-      author: {
-        id: row["author_id"] as string,
-        name: row["author_name"] as string,
-      },
-      comment: row["body"] as string,
-      created_at: row["created_at"] as string,
-    });
+    const parsed = parseSqliteRow(
+      AnnotationReplyDbRowSchema,
+      row as Record<string, unknown>,
+      "sqlite_annotation_reply",
+    );
+    if (parsed) replies.push(annotationReplyFromDbRow(parsed));
   }
   return replies;
 }
@@ -72,20 +84,29 @@ export function loadOpenAnnotationThreads(
     runId,
     round,
   )) {
-    const id = row["id"] as string;
+    const parsed = parseSqliteRow(
+      OpenAnnotationDbRowSchema,
+      row as Record<string, unknown>,
+      "sqlite_annotation",
+    );
+    if (!parsed) continue;
+
+    const anchor = parseAnnotationAnchorJson(parsed.anchor_json);
+    if (!anchor) continue;
+
     threads.push({
-      id,
+      id: parsed.id,
       run_id: runId,
       round,
-      anchor: JSON.parse(row["anchor_json"] as string) as AnnotationAnchor,
+      anchor,
       author: {
-        id: row["author_id"] as string,
-        name: row["author_name"] as string,
+        id: parsed.author_id,
+        name: parsed.author_name,
       },
-      comment: row["comment"] as string,
-      status: row["status"] as "open",
-      created_at: row["created_at"] as string,
-      replies: loadAnnotationReplies(sql, id),
+      comment: parsed.comment,
+      status: parsed.status,
+      created_at: parsed.created_at,
+      replies: loadAnnotationReplies(sql, parsed.id),
     });
   }
   return threads;
@@ -106,12 +127,11 @@ export function loadAnnotation(
      WHERE id = ?`,
     id,
   )) {
-    return {
-      revision_run_id: row["revision_run_id"] as string,
-      revision_round: row["revision_round"] as number,
-      author_id: row["author_id"] as string,
-      status: row["status"] as string,
-    };
+    return parseSqliteRow(
+      AnnotationLookupRowSchema,
+      row as Record<string, unknown>,
+      "sqlite_annotation_lookup",
+    );
   }
   return null;
 }

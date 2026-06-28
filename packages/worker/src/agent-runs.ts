@@ -1,13 +1,6 @@
-import type { AgentRunState, ParticipantIdentity } from "@codevil/shared";
+import type { AgentRun } from "@codevil/shared";
 
-export interface AgentRun {
-  id: string;
-  actor: ParticipantIdentity;
-  text: string;
-  plan_first: boolean;
-  state: AgentRunState;
-  created_at: string;
-}
+export type { AgentRun };
 
 export interface AgentRunQueueState {
   active: AgentRun | null;
@@ -20,7 +13,7 @@ export interface AgentRunQueueResult extends AgentRunQueueState {
 }
 
 export function createAgentRun(input: {
-  actor: ParticipantIdentity;
+  actor: AgentRun["actor"];
   text: string;
   now: string;
   id?: string;

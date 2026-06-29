@@ -23,6 +23,7 @@ import {
   previewTokenFromHost,
   requireAuthContext,
 } from "./http-handlers.js";
+import { previewPathPrefix } from "./orchestrator/preview.js";
 import type { Env } from "./worker-env.js";
 
 export interface HttpRouterDeps {
@@ -38,6 +39,26 @@ export async function dispatchHttpRequest(
   const url = new URL(request.url);
   const path = url.pathname;
 
+  const hostPreview = previewTokenFromHost(url.hostname);
+  if (hostPreview) {
+    return handleSessionPreview(request, env, hostPreview.sessionId, hostPreview.token);
+  }
+
+  const previewMatch = path.match(/^\/sessions\/([^/]+)\/preview\/([^/]+)(?:\/.*)?$/);
+  if (previewMatch) {
+    return handleSessionPreview(request, env, previewMatch[1], previewMatch[2]);
+  }
+
+  const refererPreview = previewTokenFromSameOriginReferer(request, url);
+  if (refererPreview) {
+    return handleSessionPreview(
+      rewriteEscapedPreviewRequest(request, url, refererPreview),
+      env,
+      refererPreview.sessionId,
+      refererPreview.token,
+    );
+  }
+
   if (isOriginGuardedPath(request.method, path)) {
     const originGuard = requireTrustedOrigin(request, env);
     if (originGuard) return withCors(request, env, originGuard);
@@ -49,16 +70,6 @@ export async function dispatchHttpRequest(
 
   if (path.startsWith("/api/auth/")) {
     return withCors(request, env, await handleBetterAuth(request, env));
-  }
-
-  const hostPreview = previewTokenFromHost(url.hostname);
-  if (hostPreview) {
-    return handleSessionPreview(request, env, hostPreview.sessionId, hostPreview.token);
-  }
-
-  const previewMatch = path.match(/^\/sessions\/([^/]+)\/preview\/([^/]+)(?:\/.*)?$/);
-  if (previewMatch) {
-    return handleSessionPreview(request, env, previewMatch[1], previewMatch[2]);
   }
 
   if (path === "/auth/me" && request.method === "GET") {
@@ -153,4 +164,37 @@ export async function dispatchHttpRequest(
   }
 
   return null;
+}
+
+function previewTokenFromSameOriginReferer(
+  request: Request,
+  requestUrl: URL,
+): { sessionId: string; token: string } | null {
+  const referer = request.headers.get("referer");
+  if (!referer) return null;
+
+  let refererUrl: URL;
+  try {
+    refererUrl = new URL(referer);
+  } catch {
+    return null;
+  }
+
+  if (refererUrl.origin !== requestUrl.origin) return null;
+  const match = refererUrl.pathname.match(/^\/sessions\/([^/]+)\/preview\/([^/]+)(?:\/.*)?$/);
+  if (!match) return null;
+  return { sessionId: match[1], token: match[2] };
+}
+
+function rewriteEscapedPreviewRequest(
+  request: Request,
+  requestUrl: URL,
+  preview: { sessionId: string; token: string },
+): Request {
+  const rewrittenUrl = new URL(requestUrl);
+  rewrittenUrl.pathname = [
+    previewPathPrefix(preview.sessionId, preview.token),
+    requestUrl.pathname.replace(/^\//, ""),
+  ].join("");
+  return new Request(rewrittenUrl, request);
 }

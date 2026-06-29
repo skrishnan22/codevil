@@ -366,8 +366,17 @@ export function createComponentLogger(
   component: Component,
   traceId?: string,
 ): ComponentLogger {
-  let currentTraceId = traceId ?? newTraceId();
+  // Defer random trace IDs until the first log so module-level logger setup
+  // is safe in Cloudflare Workers global scope.
+  let currentTraceId = traceId;
   let sessionId: string | undefined;
+
+  const resolveTraceId = (): string => {
+    if (currentTraceId === undefined) {
+      currentTraceId = newTraceId();
+    }
+    return currentTraceId;
+  };
 
   const log = (
     severity: Severity,
@@ -378,7 +387,7 @@ export function createComponentLogger(
       severity,
       event,
       component,
-      trace_id: currentTraceId,
+      trace_id: resolveTraceId(),
       attributes: sessionId ? { session_id: sessionId, ...attributes } : attributes,
     });
   };

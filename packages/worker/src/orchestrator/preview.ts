@@ -97,12 +97,12 @@ export async function proxyPreviewRequest(
   if (response.status === 101) return response;
 
   const contentType = response.headers.get("content-type") ?? "";
-  if (isPathBasedPreview && contentType.includes("text/html")) {
+  if (isPathBasedPreview && shouldRewritePathBasedPreviewBody(contentType)) {
     const html = await response.text();
     const headers = new Headers(response.headers);
     headers.set("Cache-Control", "no-store");
     headers.delete("content-length");
-    return new Response(injectPreviewBaseHref(html, `${prefix}/`), {
+    return new Response(rewritePathBasedPreviewBody(html, `${prefix}/`, contentType), {
       status: response.status,
       statusText: response.statusText,
       headers,
@@ -142,18 +142,99 @@ export function rewriteHeadersForSandboxDevServer(
 }
 
 /**
- * Inject `<base href>` so dev servers that emit root-absolute assets (`/_next/...`,
- * `/@vite/...`) resolve under the preview path instead of the worker root.
+ * Patch path-based preview responses so same-origin URLs keep flowing through
+ * `/sessions/.../preview/.../` instead of escaping to the worker root.
  */
 export function injectPreviewBaseHref(html: string, baseHref: string): string {
   const normalizedBase = baseHref.endsWith("/") ? baseHref : `${baseHref}/`;
-  if (/<base\s[\s\S]*?\bhref\s*=/i.test(html)) return html;
+  const withBase = insertPreviewBaseHref(html, normalizedBase);
+  return rewriteHtmlRootRelativePreviewUrls(withBase, normalizedBase);
+}
 
+export function rewritePathBasedPreviewBody(
+  body: string,
+  baseHref: string,
+  contentType: string,
+): string {
+  if (contentType.toLowerCase().includes("text/html")) {
+    return injectPreviewBaseHref(body, baseHref);
+  }
+
+  return rewriteRootRelativePreviewUrls(body, baseHref);
+}
+
+function insertPreviewBaseHref(html: string, normalizedBase: string): string {
+  if (/<base\s[\s\S]*?\bhref\s*=/i.test(html)) return html;
   const tag = `<base href="${normalizedBase}">`;
   if (/<head[^>]*>/i.test(html)) {
     return html.replace(/<head([^>]*)>/i, `<head$1>${tag}`);
   }
   return `${tag}${html}`;
+}
+
+function shouldRewritePathBasedPreviewBody(contentType: string): boolean {
+  const type = contentType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return [
+    "text/html",
+    "text/css",
+    "text/javascript",
+    "text/ecmascript",
+    "application/javascript",
+    "application/ecmascript",
+    "application/x-javascript",
+    "image/svg+xml",
+  ].includes(type);
+}
+
+function rewriteHtmlRootRelativePreviewUrls(html: string, baseHref: string): string {
+  const baseTags: string[] = [];
+  const shielded = html.replace(/<base\b[^>]*>/gi, (tag) => {
+    const index = baseTags.push(tag) - 1;
+    return `__CODEVIL_PREVIEW_BASE_TAG_${index}__`;
+  });
+
+  const rewritten = rewriteRootRelativePreviewUrls(shielded, baseHref);
+  return rewritten.replace(/__CODEVIL_PREVIEW_BASE_TAG_(\d+)__/g, (_match, rawIndex: string) => {
+    const index = Number(rawIndex);
+    return baseTags[index] ?? "";
+  });
+}
+
+function rewriteRootRelativePreviewUrls(input: string, baseHref: string): string {
+  const normalizedBase = baseHref.endsWith("/") ? baseHref : `${baseHref}/`;
+  const quoted = input.replace(/(["'`])\/(?!\/)([^"'`\s<>)]*)/g, (_match, quote: string, tail: string) => {
+    return `${quote}${prefixPreviewPath(`/${tail}`, normalizedBase)}`;
+  });
+
+  const cssUrls = quoted.replace(/url\(\s*\/(?!\/)([^'")\s]*)\s*\)/g, (_match, tail: string) => {
+    return `url(${prefixPreviewPath(`/${tail}`, normalizedBase)})`;
+  });
+
+  return cssUrls.replace(/\bsrcset=(["'])(.*?)\1/gi, (_match, quote: string, value: string) => {
+    return `srcset=${quote}${rewriteSrcsetValue(value, normalizedBase)}${quote}`;
+  });
+}
+
+function rewriteSrcsetValue(value: string, baseHref: string): string {
+  return value.split(",").map((candidate) => {
+    const leading = candidate.match(/^\s*/)?.[0] ?? "";
+    const trimmed = candidate.slice(leading.length);
+    if (!trimmed.startsWith("/")) return candidate;
+
+    const parts = trimmed.split(/(\s+)/);
+    parts[0] = prefixPreviewPath(parts[0] ?? "", baseHref);
+    return `${leading}${parts.join("")}`;
+  }).join(",");
+}
+
+function prefixPreviewPath(path: string, baseHref: string): string {
+  if (!path.startsWith("/") || path.startsWith("//")) return path;
+
+  const normalizedBase = baseHref.endsWith("/") ? baseHref : `${baseHref}/`;
+  const baseWithoutSlash = normalizedBase.slice(0, -1);
+  if (path === baseWithoutSlash || path.startsWith(normalizedBase)) return path;
+  if (path === "/") return normalizedBase;
+  return `${normalizedBase}${path.slice(1)}`;
 }
 
 function normalizeOrigin(origin: string): string {

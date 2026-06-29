@@ -41,6 +41,27 @@ test("injectPreviewBaseHref adds base tag under head for root-absolute assets", 
   assert.ok(patched.indexOf("<base") < patched.indexOf("<title>"));
 });
 
+test("injectPreviewBaseHref rewrites root-absolute preview URLs under the preview path", () => {
+  const html = [
+    "<!doctype html><html><head>",
+    '<script type="module" src="/@vite/client"></script>',
+    '<link rel="stylesheet" href="/src/main.css">',
+    '<img srcset="/one.png 1x, /two.png 2x">',
+    "<style>.hero{background:url('/assets/bg.png')}</style>",
+    "<script>fetch('/api/data'); import('/src/main.tsx');</script>",
+    "</head><body></body></html>",
+  ].join("");
+
+  const patched = injectPreviewBaseHref(html, previewPathPrefix("ses_abc", "tok"));
+
+  assert.match(patched, /src="\/sessions\/ses_abc\/preview\/tok\/@vite\/client"/);
+  assert.match(patched, /href="\/sessions\/ses_abc\/preview\/tok\/src\/main\.css"/);
+  assert.match(patched, /srcset="\/sessions\/ses_abc\/preview\/tok\/one\.png 1x, \/sessions\/ses_abc\/preview\/tok\/two\.png 2x"/);
+  assert.match(patched, /url\('\/sessions\/ses_abc\/preview\/tok\/assets\/bg\.png'\)/);
+  assert.match(patched, /fetch\('\/sessions\/ses_abc\/preview\/tok\/api\/data'\)/);
+  assert.match(patched, /import\('\/sessions\/ses_abc\/preview\/tok\/src\/main\.tsx'\)/);
+});
+
 test("injectPreviewBaseHref is a no-op when base already exists", () => {
   const html = '<html><head><base href="/"></head><body></body></html>';
   assert.equal(injectPreviewBaseHref(html, "/sessions/ses_abc/preview/tok/"), html);

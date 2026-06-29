@@ -600,6 +600,7 @@ test("detectPreviewCommand remaps Next.js away from port 3000", async () => {
     assert.deepEqual(detectPreviewCommand(workspace), {
       command: "npm run dev -- --hostname 0.0.0.0 --port 3001",
       port: 3001,
+      readinessTimeoutMs: 120_000,
     });
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -699,6 +700,58 @@ test("PreviewManager includes recent process output when startup times out", asy
     assert.match(errors[0], /Preview server did not become healthy on port 59999/);
     assert.match(errors[0], /Recent preview output:/);
     assert.match(errors[0], /missing env key/);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager reports child exit before the readiness timeout", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-exit-"));
+  const errors = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 500,
+    onStarting() {},
+    onReady() {},
+    onStopped() {},
+    onError: (message) => errors.push(message),
+  });
+
+  try {
+    await manager.start({
+      command: "node -e \"process.exit(7)\"",
+      port: 59996,
+    });
+
+    assert.match(errors[0], /Preview command exited before becoming healthy \(code 7\)\./);
+    assert.doesNotMatch(errors[0], /Preview server did not become healthy/);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager honors command-specific readiness timeout", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-command-timeout-"));
+  const errors = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 25,
+    onStarting() {},
+    onReady() {},
+    onStopped() {},
+    onError: (message) => errors.push(message),
+  });
+
+  try {
+    await manager.start({
+      command: "node -e \"setTimeout(() => {}, 1000)\"",
+      port: 59995,
+      readinessTimeoutMs: 80,
+    });
+
+    assert.match(errors[0], /Preview server did not become healthy on port 59995 within 0\.08s\./);
   } finally {
     await manager.stop();
     await rm(workspace, { recursive: true, force: true });

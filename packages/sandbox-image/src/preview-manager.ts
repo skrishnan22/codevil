@@ -11,6 +11,7 @@ export interface PreviewCommand {
   command: string;
   port: number;
   cwd?: string;
+  readinessTimeoutMs?: number;
 }
 
 export interface PreviewManagerOptions {
@@ -27,6 +28,9 @@ type PreviewState =
   | { state: "idle" }
   | { state: "starting"; command: PreviewCommand; child: ChildProcess }
   | { state: "running"; command: PreviewCommand; child: ChildProcess };
+
+const DEFAULT_PREVIEW_READINESS_TIMEOUT_MS = 30_000;
+const NEXT_PREVIEW_READINESS_TIMEOUT_MS = 120_000;
 
 export class PreviewManager {
   private state: PreviewState = { state: "idle" };
@@ -70,6 +74,16 @@ export class PreviewManager {
     const childError = new Promise<never>((_resolve, reject) => {
       child.once("error", reject);
     });
+    const childExit = new Promise<void>((resolve, reject) => {
+      child.once("exit", (code, signal) => {
+        const current = this.state;
+        if (current.state === "idle" || current.child !== child) {
+          resolve();
+          return;
+        }
+        reject(new Error(previewCommandExitMessage(code, signal)));
+      });
+    });
 
     child.on("exit", () => {
       // Only react if this child is still the one we're tracking — a later
@@ -81,9 +95,12 @@ export class PreviewManager {
     });
 
     try {
+      const readinessTimeoutMs =
+        command.readinessTimeoutMs ?? this.options.readinessTimeoutMs ?? DEFAULT_PREVIEW_READINESS_TIMEOUT_MS;
       await Promise.race([
-        waitForPortReady(command.port, this.options.readinessTimeoutMs ?? 30_000),
+        waitForPortReady(command.port, readinessTimeoutMs),
         childError,
+        childExit,
       ]);
       // Re-read after the await: the exit handler may have flipped us to idle.
       // Cast defeats TS narrowing from the assignment above; `this.state` is
@@ -172,7 +189,13 @@ export function detectPreviewCommand(root: string): PreviewCommand | undefined {
 
 export function appToCommand(app: PreviewApp, root: string): PreviewCommand {
   const relCwd = relativeCwd(root, app.cwd);
-  return relCwd ? { command: app.command, port: app.port, cwd: relCwd } : { command: app.command, port: app.port };
+  const command: PreviewCommand = relCwd
+    ? { command: app.command, port: app.port, cwd: relCwd }
+    : { command: app.command, port: app.port };
+  if (app.framework === "next") {
+    command.readinessTimeoutMs = NEXT_PREVIEW_READINESS_TIMEOUT_MS;
+  }
+  return command;
 }
 
 function detectAppInDirectory(root: string, dir: string): PreviewApp | undefined {
@@ -435,7 +458,9 @@ function waitForPortReady(port: number, timeoutMs: number): Promise<void> {
           return;
         }
         if (Date.now() >= deadline) {
-          reject(new Error(`Preview server did not become healthy on port ${port}.`));
+          reject(new Error(
+            `Preview server did not become healthy on port ${port} within ${formatDuration(timeoutMs)}.`,
+          ));
           return;
         }
         setTimeout(poll, 500);
@@ -443,6 +468,17 @@ function waitForPortReady(port: number, timeoutMs: number): Promise<void> {
     };
     poll();
   });
+}
+
+function previewCommandExitMessage(code: number | null, signal: NodeJS.Signals | null): string {
+  if (code !== null) return `Preview command exited before becoming healthy (code ${code}).`;
+  if (signal) return `Preview command exited before becoming healthy (signal ${signal}).`;
+  return "Preview command exited before becoming healthy.";
+}
+
+function formatDuration(ms: number): string {
+  if (ms % 1_000 === 0) return `${ms / 1_000}s`;
+  return `${Number((ms / 1_000).toFixed(2))}s`;
 }
 
 function checkTcp(port: number): Promise<boolean> {

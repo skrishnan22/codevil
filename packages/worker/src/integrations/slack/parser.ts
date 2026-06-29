@@ -1,4 +1,4 @@
-import { z } from "../../../../shared/node_modules/zod/index.js";
+import { z } from "zod";
 
 export const SlackUrlVerificationSchema = z.object({
   type: z.literal("url_verification"),

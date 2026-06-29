@@ -15,7 +15,7 @@ export interface IntegrationExternalActorRow {
   id: string;
   integration_id: string;
   external_actor_id: string;
-  display_name: string | null;
+  display_name: string;
   email: string | null;
   linked_auth_user_id: string | null;
   metadata_json: string;
@@ -40,8 +40,8 @@ export interface ExternalSessionLinkRow {
   external_channel_id: string;
   external_conversation_id: string;
   session_id: string;
-  last_handled_message_id: string | null;
-  created_by_external_actor_id: string | null;
+  last_handled_message_id: string;
+  created_by_external_actor_id: string;
   created_at: string;
   updated_at: string;
 }

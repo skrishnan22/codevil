@@ -87,7 +87,7 @@ export function upsertExternalActor(row: IntegrationExternalActorRow): SqlStatem
     ON CONFLICT(integration_id, external_actor_id) DO UPDATE SET
       display_name = excluded.display_name,
       email = excluded.email,
-      linked_auth_user_id = excluded.linked_auth_user_id,
+      linked_auth_user_id = COALESCE(integration_external_actors.linked_auth_user_id, excluded.linked_auth_user_id),
       metadata_json = excluded.metadata_json,
       updated_at = excluded.updated_at`,
     bindings: [

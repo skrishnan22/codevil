@@ -11,6 +11,13 @@ import {
 } from "@codevil/shared";
 
 import { configureDefaultGitIdentity, ShellGitDriver } from "./git-driver.js";
+import {
+  sandboxLogException,
+  sandboxLogger,
+  sessionIdFromWsUrl,
+  setSandboxTraceFromSession,
+  wsUrlForLog,
+} from "./logging.js";
 import { PiAgentDriver } from "./pi-driver.js";
 import { SandboxRuntime } from "./runtime.js";
 import { readAndUnlinkSecret } from "./secrets.js";
@@ -29,7 +36,7 @@ function loadEnv(processEnv: Record<string, unknown>): EntrypointEnv {
   try {
     const raw = readFileSync("/run/secrets/env.json", "utf8");
     const fileParsed = JSON.parse(raw) as Record<string, unknown>;
-    console.log("codevil-sandbox: loaded env from /run/secrets/env.json");
+    sandboxLogger().log("INFO", "sandbox.env.loaded", { source: "/run/secrets/env.json" });
     return parseEntrypointEnv({ ...processEnv, ...fileParsed });
   } catch (error) {
     if (isNodeENOENT(error)) return fromProcess;
@@ -53,7 +60,7 @@ export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): 
     queue: Promise<void>,
     run: () => Promise<void>,
   ): Promise<void> => queue.then(run, run).catch((error: unknown) => {
-    console.error("codevil-sandbox: message handler failed", error);
+    sandboxLogException("sandbox.message_handler.failed", error);
   });
 
   return (message: DOToSandboxMessage): void => {
@@ -63,7 +70,9 @@ export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): 
       message.type === "ask_question_response" ||
       message.type === "ask_question_cancelled"
     ) {
-      void runtime.handleMessage(message);
+      void runtime.handleMessage(message).catch((error: unknown) => {
+        sandboxLogException("sandbox.rpc_handler.failed", error, { message_type: message.type });
+      });
       return;
     }
 
@@ -79,13 +88,15 @@ export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): 
 export async function startEntrypoint(
   rawEnv: Record<string, unknown> = process.env,
 ): Promise<void> {
-  console.log("codevil-sandbox: starting entrypoint");
+  sandboxLogger().log("INFO", "sandbox.entrypoint.start");
 
   const env = loadEnv(rawEnv);
 
   if (!env.CODEVIL_DO_WS_URL) throw new Error("CODEVIL_DO_WS_URL is required");
 
   const wsUrl = env.CODEVIL_DO_WS_URL;
+  const sessionId = sessionIdFromWsUrl(wsUrl);
+  if (sessionId) setSandboxTraceFromSession(sessionId);
 
   await configureDefaultGitIdentity();
 
@@ -104,32 +115,32 @@ export async function startEntrypoint(
 
   connection = new ReconnectingWebSocketClient({
     createSocket: () => {
-      console.log("codevil-sandbox: connecting to", wsUrl);
+      sandboxLogger().log("INFO", "sandbox.ws.connecting", { target: wsUrlForLog(wsUrl) });
       return new WebSocket(wsUrl, {
         headers: env.CODEVIL_API_KEY ? { Authorization: `Bearer ${env.CODEVIL_API_KEY}` } : undefined,
       });
     },
     onOpen: () => {
-      console.log("codevil-sandbox: websocket connected");
+      sandboxLogger().log("INFO", "sandbox.ws.connected");
       connection.send(JSON.stringify({ type: "status", message: "Sandbox connected." } satisfies SandboxToDOMessage));
     },
     onError: (error) => {
-      console.error("codevil-sandbox: websocket error", error.message);
+      sandboxLogException("sandbox.ws.error", error);
     },
     onClose: (code, reason) => {
-      console.log("codevil-sandbox: websocket closed; reconnecting", code, reason);
+      sandboxLogger().log("WARN", "sandbox.ws.closed", { code, reason });
     },
     onMessage: (data) => {
       let raw: unknown;
       try {
         raw = JSON.parse(String(data));
       } catch {
-        console.error("codevil-sandbox: malformed JSON from DO");
+        sandboxLogger().log("WARN", "sandbox.ws.malformed_json");
         return;
       }
       const message = parseInbound(DOToSandboxMessageSchema, raw, "do_to_sandbox");
       if (!message) return;
-      console.log("codevil-sandbox: received message", message.type);
+      sandboxLogger().log("DEBUG", "sandbox.message.received", { message_type: message.type });
       dispatch(message);
     },
   });

@@ -23,7 +23,4 @@ export function slugify(value: string): string {
   return slug.slice(0, 48) || "task";
 }
 
-export function traceIdFromSessionId(sessionId: string): string {
-  const hex = sessionId.replace(/^ses_/, "");
-  return /^[0-9a-f]{32}$/i.test(hex) ? hex.toLowerCase() : hex.padEnd(32, "0").slice(0, 32);
-}
+export { traceIdFromSessionId } from "@codevil/shared";

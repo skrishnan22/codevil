@@ -2,6 +2,7 @@ import { z } from "zod";
 import { CostInfoSchema } from "./cost.js";
 import { PreviewAppSchema } from "./preview.js";
 import { ParticipantIdentitySchema } from "./room.js";
+import { SessionSnapshotSchema } from "./session-snapshot-schema.js";
 import {
   AnnotationAnchorSchema,
   AnnotationReplySchema,
@@ -353,19 +354,15 @@ export type DOToCLIEvent = z.infer<typeof DOToCLIEventSchema>;
 // The wire carries two distinct frame shapes:
 //   1. EventEnvelope: { cursor: number; event: DOToCLIEvent }
 //      — used for live updates and replayed tail events (unchanged)
-//   2. SnapshotFrame: { type: "snapshot"; path: string; cursor: number; state: unknown }
+//   2. SnapshotFrame: { type: "snapshot"; path: string; cursor: number; state: SessionSnapshot }
 //      — sent at most once per WS connection, before the event tail, so late
 //        joiners can hydrate from the snapshot instead of replaying from cursor 0.
-//
-// `state` uses z.unknown() because SessionSnapshot's nested types (ChatMessage,
-// ActivityEntry, etc.) do not have zod schemas — the server is the source of
-// truth and the client treats the snapshot as an opaque blob to apply directly.
 
 export const SnapshotFrameSchema = z.object({
   type: z.literal("snapshot"),
   path: z.string(),           // 'session' today; routing key for future per-run paths
   cursor: z.number().int().nonnegative(),
-  state: z.unknown(),
+  state: SessionSnapshotSchema,
 });
 export type SnapshotFrame = z.infer<typeof SnapshotFrameSchema>;
 
@@ -458,19 +455,19 @@ export const AbortRunMessageSchema = z.object({
   run_id: z.string(),
 });
 
-export const QuestionAnswerMessageSchema = z
-  .object({
-    type: z.literal("question_answer"),
-    request_id: z.string(),
-    option_ids: z.array(z.string()).optional(),
-    freeform: z.string().trim().min(1).max(20_000).optional(),
-  })
-  .refine(
-    (val) =>
-      (Array.isArray(val.option_ids) && val.option_ids.length > 0) ||
-      (typeof val.freeform === "string" && val.freeform.length > 0),
-    { message: "question_answer must include non-empty option_ids, non-empty freeform, or both" },
-  );
+export const QuestionAnswerMessageObjectSchema = z.object({
+  type: z.literal("question_answer"),
+  request_id: z.string(),
+  option_ids: z.array(z.string()).optional(),
+  freeform: z.string().trim().min(1).max(20_000).optional(),
+});
+
+export const QuestionAnswerMessageSchema = QuestionAnswerMessageObjectSchema.refine(
+  (val) =>
+    (Array.isArray(val.option_ids) && val.option_ids.length > 0) ||
+    (typeof val.freeform === "string" && val.freeform.length > 0),
+  { message: "question_answer must include non-empty option_ids, non-empty freeform, or both" },
+);
 
 export const QuestionAssignMessageSchema = z.object({
   type: z.literal("question_assign"),
@@ -478,7 +475,7 @@ export const QuestionAssignMessageSchema = z.object({
   assigned_to: ParticipantIdentitySchema,
 });
 
-export const CLIToDOMessageSchema = z.union([
+const CLIToDOMessageDiscriminatedSchema = z.discriminatedUnion("type", [
   ApproveMessageSchema,
   AbortMessageSchema,
   RefinePlanMessageSchema,
@@ -494,8 +491,21 @@ export const CLIToDOMessageSchema = z.union([
   RefineRunMessageSchema,
   AbortRunMessageSchema,
   QuestionAssignMessageSchema,
-  QuestionAnswerMessageSchema,
+  QuestionAnswerMessageObjectSchema,
 ]);
+
+export const CLIToDOMessageSchema = CLIToDOMessageDiscriminatedSchema.superRefine((val, ctx) => {
+  if (val.type !== "question_answer") return;
+  const hasOptions = Array.isArray(val.option_ids) && val.option_ids.length > 0;
+  const hasFreeform = typeof val.freeform === "string" && val.freeform.length > 0;
+  if (!hasOptions && !hasFreeform) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "question_answer must include non-empty option_ids, non-empty freeform, or both",
+    });
+  }
+});
 
 export type ApproveMessage = z.infer<typeof ApproveMessageSchema>;
 export type AbortMessage = z.infer<typeof AbortMessageSchema>;

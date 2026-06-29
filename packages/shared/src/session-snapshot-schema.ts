@@ -123,3 +123,16 @@ export const SessionSnapshotSchema = z.object({
   questions: z.array(QuestionViewModelSchema),
   selectedAnnotationId: z.string().nullable(),
 });
+
+export type ChatMessageRole = z.infer<typeof ChatMessageRoleSchema>;
+export type ChatMessageVariant = z.infer<typeof ChatMessageVariantSchema>;
+export type ChatMessageMeta = z.infer<typeof ChatMessageMetaSchema>;
+export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+export type ActivityEntry = z.infer<typeof ActivityEntrySchema>;
+export type ActivityEntryStatus = ActivityEntry["status"];
+export type PreviewStatus = z.infer<typeof PreviewStatusSchema>;
+export type PreviewState = z.infer<typeof PreviewStateSchema>;
+export type PlanRevisionState = z.infer<typeof PlanRevisionStateSchema>;
+export type QuestionAnswer = z.infer<typeof QuestionAnswerSchema>;
+export type QuestionViewModel = z.infer<typeof QuestionViewModelSchema>;
+export type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;

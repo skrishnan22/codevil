@@ -1,6 +1,6 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { buildWebSocketUrl, connectWebSocket, parseEnvelope } from "../ws-client";
-import type { SnapshotFrame } from "@codevil/shared";
+import { emptySessionSnapshot, type SnapshotFrame } from "@codevil/shared";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -144,7 +144,7 @@ describe("connectWebSocket", () => {
         type: "snapshot",
         path: "session",
         cursor: 42,
-        state: { sessionPhase: "executing", messages: [], participants: [] },
+        state: { ...emptySessionSnapshot(), sessionPhase: "executing" },
       };
       sockets[0].onmessage?.({ data: JSON.stringify(snapshotFrame) });
 
@@ -177,7 +177,14 @@ describe("connectWebSocket", () => {
       });
 
       // Receive a snapshot at cursor 99
-      sockets[0].onmessage?.({ data: JSON.stringify({ type: "snapshot", path: "session", cursor: 99, state: {} }) });
+      sockets[0].onmessage?.({
+        data: JSON.stringify({
+          type: "snapshot",
+          path: "session",
+          cursor: 99,
+          state: { ...emptySessionSnapshot(), cursor: 99 },
+        }),
+      });
       // Trigger a reconnect
       sockets[0].onclose?.({ code: 1006, reason: "" });
       vi.runOnlyPendingTimers();

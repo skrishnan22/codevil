@@ -1,14 +1,28 @@
-// Tracer / Span / structured log emit for Codevil.
+// Tracer / Span / wide-event telemetry for Codevil.
 //
-// A Codevil session IS a trace. session_id → trace_id. Phases are top-level
-// spans; subprocess and LLM-call spans nest beneath them. Pi tool calls are
-// recorded as `events` on the active phase span — never their own spans —
-// to avoid cardinality explosion on chatty plan loops.
+// Philosophy: https://loggingsucks.com/ — one wide, context-rich event per hop.
+// A Codevil session IS a trace. session_id → trace_id. Phase spans are canonical
+// wide events; Pi tool calls are span events (not separate spans) to limit noise.
 //
-// One stdout JSON line per emit, OTLP-shaped, no SDK. Field names match
-// OpenTelemetry semantic conventions so the eventual switch to an OTLP HTTP
-// exporter or vendor SDK is one change to `createSink`, not re-instrumenting
-// every call site.
+// Query with: wrangler tail | jq 'select(.kind=="wide_event" and .session_id=="ses_...")'
+
+import {
+  WideEventBuilder,
+  assembleWideEvent,
+  partitionWideEventAttributes,
+  severityToOutcome,
+  wideEventOutcomeFromStatus,
+  type EmittedWideEvent,
+  type WideEventGroups,
+} from "./wide-event.js";
+
+export type {
+  WideEventOutcome,
+  WideEventRecordType,
+  WideEventGroups,
+  EmittedWideEvent,
+} from "./wide-event.js";
+export { WideEventBuilder, assembleWideEvent, partitionWideEventAttributes, severityToOutcome, wideEventOutcomeFromStatus } from "./wide-event.js";
 
 export type Component = "cli" | "worker" | "orchestrator" | "sandbox";
 export type Severity = "DEBUG" | "INFO" | "WARN" | "ERROR";
@@ -41,42 +55,24 @@ export interface Span {
   context(): SpanContext;
   addEvent(name: string, attributes?: Record<string, unknown>): void;
   setAttribute(key: string, value: unknown): void;
+  setGroup(name: string, values: Record<string, unknown>): void;
+  mergeContext(attributes: Record<string, unknown>): void;
   setStatus(code: SpanStatusCode, message?: string): void;
   end(): void;
 }
 
-export interface EmittedSpan {
-  kind: "span";
-  trace_id: string;
-  span_id: string;
-  parent_span_id?: string;
-  name: string;
-  component: Component;
-  span_kind: SpanKind;
-  start_unix_nano: number;
-  end_unix_nano: number;
-  duration_ms: number;
-  status: SpanStatus;
-  attributes: Record<string, unknown>;
-  events: SpanEvent[];
-}
+/** @deprecated Use EmittedWideEvent with record_type "span". */
+export type EmittedSpan = EmittedWideEvent;
 
-export interface EmittedLog {
-  kind: "log";
-  severity: Severity;
-  event: string;
-  component: Component;
-  timestamp_unix_nano: number;
-  trace_id?: string;
-  span_id?: string;
-  attributes: Record<string, unknown>;
-}
+/** @deprecated Use EmittedWideEvent with record_type "point". */
+export type EmittedLog = EmittedWideEvent;
 
-export type TracerSink = (line: EmittedSpan | EmittedLog) => void;
+export type TracerSink = (line: EmittedWideEvent) => void;
 
 export interface CreateTracerOptions {
   component: Component;
   trace_id: string;
+  session_id?: string;
   sink?: TracerSink;
 }
 
@@ -93,8 +89,6 @@ export interface Tracer {
   ): void;
 }
 
-// --- ID generation --------------------------------------------------
-
 function randomHex(bytes: number): string {
   const buf = new Uint8Array(bytes);
   crypto.getRandomValues(buf);
@@ -105,7 +99,6 @@ function randomHex(bytes: number): string {
   return s;
 }
 
-// OTLP: 16-byte (32 hex) trace ID, 8-byte (16 hex) span ID.
 export function newTraceId(): string {
   return randomHex(16);
 }
@@ -114,13 +107,11 @@ export function newSpanId(): string {
   return randomHex(8);
 }
 
-// --- Sink ----------------------------------------------------------
-
 export const defaultTracerSink: TracerSink = (line) => {
   try {
     console.log(JSON.stringify(line));
   } catch {
-    console.log("[observability_emit_failed]", line.kind, "component" in line ? line.component : "");
+    console.log("[observability_emit_failed]", line.operation, line.service);
   }
 };
 
@@ -134,16 +125,15 @@ function nowNanos(): number {
   return Date.now() * 1_000_000;
 }
 
-// --- Tracer + Span -------------------------------------------------
-
 class LiveSpan implements Span {
   private readonly _ctx: SpanContext;
   private readonly _name: string;
   private readonly _component: Component;
   private readonly _kind: SpanKind;
   private readonly _parent?: SpanContext;
+  private readonly _session_id?: string;
   private readonly _start: number;
-  private _attributes: Record<string, unknown>;
+  private readonly _builder = new WideEventBuilder();
   private _events: SpanEvent[] = [];
   private _status: SpanStatus = { code: "UNSET" };
   private _ended = false;
@@ -155,6 +145,7 @@ class LiveSpan implements Span {
     component: Component;
     kind: SpanKind;
     parent?: SpanContext;
+    session_id?: string;
     attributes?: Record<string, unknown>;
     sink: TracerSink;
   }) {
@@ -163,9 +154,11 @@ class LiveSpan implements Span {
     this._component = args.component;
     this._kind = args.kind;
     this._parent = args.parent;
-    this._attributes = { ...(args.attributes ?? {}) };
+    this._session_id = args.session_id;
     this._sink = args.sink;
     this._start = nowNanos();
+    if (args.attributes) this._builder.merge(args.attributes);
+    this._builder.set("span_kind", args.kind);
   }
 
   context(): SpanContext {
@@ -183,45 +176,65 @@ class LiveSpan implements Span {
 
   setAttribute(key: string, value: unknown): void {
     if (this._ended) return;
-    this._attributes[key] = value;
+    this._builder.set(key, value);
+  }
+
+  setGroup(name: string, values: Record<string, unknown>): void {
+    if (this._ended) return;
+    this._builder.setGroup(name, values);
+  }
+
+  mergeContext(attributes: Record<string, unknown>): void {
+    if (this._ended) return;
+    this._builder.merge(attributes);
   }
 
   setStatus(code: SpanStatusCode, message?: string): void {
     if (this._ended) return;
     this._status = message ? { code, message } : { code };
+    if (code === "ERROR" && message) {
+      this._builder.setGroup("error", {
+        type: "SpanError",
+        message,
+      });
+    }
   }
 
   end(): void {
     if (this._ended) return;
     this._ended = true;
     const end = nowNanos();
-    const emitted: EmittedSpan = {
-      kind: "span",
+    const duration_ms = Math.round((end - this._start) / 1_000_000);
+    const status = this._status.code === "UNSET" ? { code: "OK" as const } : this._status;
+
+    this._sink(assembleWideEvent({
+      record_type: "span",
       trace_id: this._ctx.trace_id,
       span_id: this._ctx.span_id,
-      ...(this._parent ? { parent_span_id: this._parent.span_id } : {}),
-      name: this._name,
-      component: this._component,
-      span_kind: this._kind,
-      start_unix_nano: this._start,
-      end_unix_nano: end,
-      duration_ms: Math.round((end - this._start) / 1_000_000),
-      status: this._status.code === "UNSET" ? { code: "OK" } : this._status,
-      attributes: this._attributes,
+      parent_span_id: this._parent?.span_id,
+      session_id: this._session_id,
+      service: this._component,
+      operation: this._name,
+      duration_ms,
+      outcome: wideEventOutcomeFromStatus(status),
+      status,
       events: this._events,
-    };
-    this._sink(emitted);
+      groups: this._builder.groupsSnapshot(),
+      flat: this._builder.flatSnapshot(),
+    }));
   }
 }
 
 class LiveTracer implements Tracer {
   readonly trace_id: string;
   readonly component: Component;
+  private readonly session_id?: string;
   private readonly sink: TracerSink;
 
   constructor(opts: CreateTracerOptions) {
     this.trace_id = opts.trace_id;
     this.component = opts.component;
+    this.session_id = opts.session_id;
     this.sink = opts.sink ?? ((line) => sharedSink(line));
   }
 
@@ -232,6 +245,7 @@ class LiveTracer implements Tracer {
       component: this.component,
       kind: options.kind ?? "internal",
       parent: options.parent,
+      session_id: this.session_id,
       attributes: options.attributes,
       sink: this.sink,
     });
@@ -256,6 +270,19 @@ class LiveTracer implements Tracer {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
       });
+      if (error instanceof Error) {
+        const errorGroup: Record<string, unknown> = {
+          type: error.name,
+          message: error.message,
+          stack: error.stack,
+        };
+        for (const [key, value] of Object.entries(error)) {
+          if (key !== "name" && key !== "message" && key !== "stack") {
+            errorGroup[key] = value;
+          }
+        }
+        span.setGroup("error", errorGroup);
+      }
       throw error;
     } finally {
       span.end();
@@ -264,22 +291,121 @@ class LiveTracer implements Tracer {
 
   log(
     severity: Severity,
-    event: string,
+    operation: string,
     attributes: Record<string, unknown> = {},
     span_context?: SpanContext,
   ): void {
-    const emitted: EmittedLog = {
-      kind: "log",
+    const session_id = typeof attributes.session_id === "string"
+      ? attributes.session_id
+      : this.session_id;
+
+    const { groups, flat } = partitionWideEventAttributes(attributes);
+    if (typeof flat.error === "string") {
+      groups.error = {
+        type: "Error",
+        message: flat.error,
+        ...(typeof flat.stack === "string" ? { stack: flat.stack } : {}),
+      };
+      delete flat.error;
+      delete flat.stack;
+    }
+
+    this.sink(assembleWideEvent({
+      record_type: "point",
+      trace_id: this.trace_id,
+      span_id: span_context?.span_id,
+      session_id,
+      service: this.component,
+      operation,
+      severity,
+      outcome: severityToOutcome(severity),
+      groups,
+      flat,
+    }));
+  }
+}
+
+export function emitLog(opts: {
+  severity: Severity;
+  event: string;
+  component: Component;
+  trace_id?: string;
+  span_id?: string;
+  attributes?: Record<string, unknown>;
+}): void {
+  const { groups, flat } = partitionWideEventAttributes(opts.attributes ?? {});
+  const session_id = typeof flat.session_id === "string" ? flat.session_id : undefined;
+  if (session_id) delete flat.session_id;
+
+  sharedSink(assembleWideEvent({
+    record_type: "point",
+    trace_id: opts.trace_id,
+    span_id: opts.span_id,
+    session_id,
+    service: opts.component,
+    operation: opts.event,
+    severity: opts.severity,
+    outcome: severityToOutcome(opts.severity),
+    groups,
+    flat,
+  }));
+}
+
+export function traceIdFromSessionId(sessionId: string): string {
+  const hex = sessionId.replace(/^ses_/, "");
+  return /^[0-9a-f]{32}$/i.test(hex) ? hex.toLowerCase() : hex.padEnd(32, "0").slice(0, 32);
+}
+
+export interface ComponentLogger {
+  log(severity: Severity, event: string, attributes?: Record<string, unknown>): void;
+  withTraceId(traceId: string): void;
+  withSessionId(sessionId: string): void;
+}
+
+export function createComponentLogger(
+  component: Component,
+  traceId?: string,
+): ComponentLogger {
+  let currentTraceId = traceId ?? newTraceId();
+  let sessionId: string | undefined;
+
+  const log = (
+    severity: Severity,
+    event: string,
+    attributes: Record<string, unknown> = {},
+  ): void => {
+    emitLog({
       severity,
       event,
-      component: this.component,
-      timestamp_unix_nano: nowNanos(),
-      trace_id: this.trace_id,
-      ...(span_context ? { span_id: span_context.span_id } : {}),
-      attributes,
-    };
-    this.sink(emitted);
-  }
+      component,
+      trace_id: currentTraceId,
+      attributes: sessionId ? { session_id: sessionId, ...attributes } : attributes,
+    });
+  };
+
+  return {
+    log,
+    withTraceId(next: string) {
+      currentTraceId = next;
+    },
+    withSessionId(next: string) {
+      sessionId = next;
+      currentTraceId = traceIdFromSessionId(next);
+    },
+  };
+}
+
+export function logException(
+  logger: ComponentLogger,
+  operation: string,
+  error: unknown,
+  attributes: Record<string, unknown> = {},
+): void {
+  logger.log("ERROR", operation, {
+    ...attributes,
+    error: error instanceof Error ? error.message : String(error),
+    ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+  });
 }
 
 export function createTracer(opts: CreateTracerOptions): Tracer {

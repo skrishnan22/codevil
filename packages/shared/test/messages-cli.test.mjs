@@ -43,6 +43,7 @@ import {
   PersistedDOToCLIEventSchema,
   SnapshotFrameSchema,
   ReplayBatchFrameSchema,
+  emptySessionSnapshot,
 } from "../dist/index.js";
 
 // Canonical fixture for the new AnnotationAnchor shape.
@@ -566,7 +567,11 @@ test("CLIToDOMessageSchema accepts question_assign messages", () => {
 // ---------------------------------------------------------------------------
 
 test("SnapshotFrameSchema: parses a valid snapshot frame", () => {
-  const state = { cursor: 10, sessionPhase: "executing", messages: [] };
+  const state = {
+    ...emptySessionSnapshot(),
+    cursor: 10,
+    sessionPhase: "executing",
+  };
   const parsed = SnapshotFrameSchema.parse({
     type: "snapshot",
     path: "session",
@@ -608,20 +613,19 @@ test("SnapshotFrameSchema: rejects a frame missing the path field", () => {
   assert.equal(result.success, false);
 });
 
-test("SnapshotFrameSchema: accepts a state with arbitrary nested structure", () => {
-  const complexState = {
-    messages: [{ id: "m1", role: "user", content: "hello" }],
-    participants: [{ id: "usr_1", name: "Alice" }],
-    preview: { status: "idle" },
-    nested: { deep: { value: 42 } },
-  };
-  const parsed = SnapshotFrameSchema.parse({
+test("SnapshotFrameSchema: rejects invalid snapshot state", () => {
+  const result = SnapshotFrameSchema.safeParse({
     type: "snapshot",
     path: "session",
     cursor: 0,
-    state: complexState,
+    state: {
+      messages: [{ id: "m1", role: "user", content: "hello" }],
+      participants: [{ id: "usr_1", name: "Alice" }],
+      preview: { status: "idle" },
+      nested: { deep: { value: 42 } },
+    },
   });
-  assert.deepEqual(parsed.state, complexState);
+  assert.equal(result.success, false);
 });
 
 // ---------------------------------------------------------------------------

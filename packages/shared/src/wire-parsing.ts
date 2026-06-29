@@ -5,8 +5,9 @@ import {
   DOToCLIEventSchema,
   PersistedDOToCLIEventSchema,
 } from "./messages-cli.js";
-import type { SessionSnapshot } from "./projections.js";
+import type { SessionSnapshot } from "./session-snapshot-schema.js";
 import { SessionSnapshotSchema } from "./session-snapshot-schema.js";
+import { emitLog } from "./observability.js";
 import { parseInbound } from "./validation.js";
 
 export interface ParseFailure {
@@ -18,11 +19,15 @@ export interface ParseFailure {
 type ParseFailureSink = (failure: ParseFailure) => void;
 
 let failureSink: ParseFailureSink = (failure) => {
-  try {
-    console.error(JSON.stringify(failure));
-  } catch {
-    console.error("[parse_failure]", failure.boundary);
-  }
+  emitLog({
+    severity: "ERROR",
+    event: "parse_failure",
+    component: failure.boundary === "session_snapshot" ? "orchestrator" : "orchestrator",
+    attributes: {
+      boundary: failure.boundary,
+      issues: failure.issues,
+    },
+  });
 };
 
 export function setParseFailureSink(next: ParseFailureSink): void {

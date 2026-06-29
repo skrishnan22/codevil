@@ -30,6 +30,22 @@ test("CreateSessionRequestSchema rejects prompt-based task creation", () => {
   });
 });
 
+test("CreateSessionRequestSchema rejects unknown providers", () => {
+  const result = CreateSessionRequestSchema.safeParse({
+    repo: "github.com/acme/app",
+    provider: "not-a-real-provider",
+  });
+  assert.equal(result.success, false);
+});
+
+test("CreateSessionRequestSchema accepts provider aliases", () => {
+  const parsed = CreateSessionRequestSchema.parse({
+    repo: "github.com/acme/app",
+    provider: "opencode",
+  });
+  assert.equal(parsed.provider, "opencode");
+});
+
 test("ListSessionsResponseSchema parses cloud session summaries", () => {
   const now = "2026-06-03T00:00:00.000Z";
   const parsed = ListSessionsResponseSchema.parse({

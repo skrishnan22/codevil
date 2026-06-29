@@ -20,6 +20,8 @@ export const SessionStateSchema = z.enum([
 
 export type SessionState = z.infer<typeof SessionStateSchema>;
 
+export const SESSION_STATES = SessionStateSchema.options;
+
 export type TerminalState = "completed" | "failed" | "timed_out" | "cost_exceeded";
 
 const transitions: Record<SessionState, readonly SessionState[]> = {

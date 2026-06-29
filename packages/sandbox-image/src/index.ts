@@ -1,7 +1,7 @@
 import { startEntrypoint } from "./entrypoint.js";
+import { sandboxLogException } from "./logging.js";
 
 startEntrypoint().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
+  sandboxLogException("sandbox.entrypoint.fatal", error);
   process.exitCode = 1;
 });

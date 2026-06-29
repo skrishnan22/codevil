@@ -1,5 +1,5 @@
 import type { SessionMeta } from "@codevil/shared";
-import { SessionMetaSchema } from "@codevil/shared";
+import { SessionMetaSchema, emitValidationDrop, isRecord } from "@codevil/shared";
 import type { SessionEventLog } from "./event-log.js";
 
 export interface SessionMetaStore {
@@ -29,23 +29,17 @@ export function loadSessionMeta(
     try {
       raw = JSON.parse(r["value"] as string);
     } catch {
-      console.error(JSON.stringify({
-        kind: "validation_drop",
-        boundary: "session_meta",
-        raw_type: null,
-        issues: [{ message: "Invalid JSON in session_meta row" }],
-      }));
+      emitValidationDrop("orchestrator", "session_meta", [
+        { code: "custom", message: "Invalid JSON in session_meta row", path: [] },
+      ]);
       break;
     }
 
     const parsed = SessionMetaSchema.safeParse(raw);
     if (!parsed.success) {
-      console.error(JSON.stringify({
-        kind: "validation_drop",
-        boundary: "session_meta",
-        raw_type: null,
-        issues: parsed.error.issues,
-      }));
+      emitValidationDrop("orchestrator", "session_meta", parsed.error.issues, {
+        session_id: isRecord(raw) && typeof raw.session_id === "string" ? raw.session_id : undefined,
+      });
       break;
     }
 

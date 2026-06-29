@@ -4,6 +4,7 @@ export type {
 } from "./session.js";
 export {
   SessionStateSchema,
+  SESSION_STATES,
   isValidTransition,
   isTerminalState,
   MAX_REFINEMENT_ROUNDS,
@@ -50,6 +51,8 @@ export type {
 export {
   LLM_PROVIDERS,
   getProviderDefinition,
+  LLMProviderIdSchema,
+  KnownProviderSchema,
 } from "./providers.js";
 
 export type {
@@ -297,8 +300,14 @@ export {
 export type {
   Config,
   ConfigDefaults,
+  ConfigParsed,
+  ConfigDefaultsParsed,
 } from "./config.js";
-export { DEFAULT_CONFIG } from "./config.js";
+export {
+  DEFAULT_CONFIG,
+  ConfigSchema,
+  ConfigDefaultsSchema,
+} from "./config.js";
 
 export type {
   RoomState,
@@ -358,7 +367,6 @@ export type {
   ChatMessageRole,
   ChatMessageMeta,
   ChatMessage,
-  ActivityEntryStatus,
   ActivityEntry,
   PreviewStatus,
   PreviewState,
@@ -367,6 +375,7 @@ export type {
   QuestionViewModel,
   ParticipantIdentity as ProjectionParticipantIdentity,
 } from "./projection-types.js";
+export type { ActivityEntryStatus } from "./session-snapshot-schema.js";
 
 export type {
   ProjectionContext,
@@ -419,6 +428,15 @@ export {
   setParseFailureSink,
 } from "./wire-parsing.js";
 
+export type {
+  SetupClaimRequest,
+  CreateInvitationRequest,
+} from "./http-schemas.js";
+export {
+  SetupClaimRequestSchema,
+  CreateInvitationRequestSchema,
+} from "./http-schemas.js";
+
 export type { QuestionRow } from "./sqlite-rows.js";
 export {
   QuestionRowSchema,
@@ -445,6 +463,7 @@ export {
   parseInbound,
   setValidationDropSink,
   tracerValidationDropSink,
+  emitValidationDrop,
 } from "./validation.js";
 
 export type {
@@ -462,11 +481,23 @@ export type {
   TracerSink,
   Tracer,
   CreateTracerOptions,
+  ComponentLogger,
+  EmittedWideEvent,
+  WideEventGroups,
+  WideEventOutcome,
+  WideEventRecordType,
 } from "./observability.js";
 export {
   createTracer,
+  createComponentLogger,
   defaultTracerSink,
+  emitLog,
+  logException,
   setTracerSink,
+  traceIdFromSessionId,
   newTraceId,
   newSpanId,
+  WideEventBuilder,
+  assembleWideEvent,
+  partitionWideEventAttributes,
 } from "./observability.js";

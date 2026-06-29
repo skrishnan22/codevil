@@ -40,6 +40,11 @@ test("mapEventToChat: maps session_created to a system message", () => {
   assert.ok(messages[0].content.includes("ses_abc"));
 });
 
+test("mapEventToChat: returns empty array for unknown event types", () => {
+  const messages = mapEventToChat({ type: "future_event" }, makeCtx());
+  assert.deepEqual(messages, []);
+});
+
 test("mapEventToChat: maps status to a system message", () => {
   const event = { type: "status", message: "Provisioning sandbox..." };
   const messages = mapEventToChat(event, makeCtx());

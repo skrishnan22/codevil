@@ -310,6 +310,9 @@ export function mapEventToChat(event: DOToCLIEvent, ctx: ProjectionContext): Cha
 
     case "cost_updated":
       return [];
+
+    default:
+      return [];
   }
 }
 

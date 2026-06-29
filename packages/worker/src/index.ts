@@ -11,6 +11,7 @@ import {
 import { configuredWebOrigins } from "./auth-config.js";
 import { dispatchHttpRequest } from "./http-router.js";
 import { json } from "./http-handlers.js";
+import { sandboxLifecycleLogger } from "./logging.js";
 import type { Env } from "./worker-env.js";
 
 export type { Env } from "./worker-env.js";
@@ -28,7 +29,9 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
     };
     await this.ctx.storage.put(SANDBOX_KEEPALIVE_STATE_KEY, state);
     if (active) this.renewActivityTimeout();
-    console.log("codevil.sandbox.keepalive", state);
+    sandboxLifecycleLogger(this.sessionId()).log("INFO", "sandbox.keepalive", {
+      sandbox: { ...state },
+    });
   }
 
   async getCodevilLifecycleSnapshot(): Promise<{
@@ -77,7 +80,9 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
         reason: keepAlive.reason,
       });
       this.renewActivityTimeout();
-      console.log("codevil.sandbox.activity_expired_deferred", keepAlive);
+      sandboxLifecycleLogger(this.sessionId()).log("INFO", "sandbox.activity_expired_deferred", {
+        sandbox: { ...keepAlive },
+      });
       return;
     }
 
@@ -89,8 +94,15 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
   }
 
   private async recordLifecycle(event: SandboxLifecycleEvent): Promise<void> {
-    console.log("codevil.sandbox.lifecycle", event);
+    sandboxLifecycleLogger(this.sessionId()).log("INFO", "sandbox.lifecycle", {
+      sandbox: { ...event },
+    });
     await recordSandboxLifecycleEvent(this.ctx.storage, event);
+  }
+
+  private sessionId(): string | undefined {
+    const name = this.ctx.id.name;
+    return typeof name === "string" && name.length > 0 ? name : undefined;
   }
 
   override async fetch(request: Request): Promise<Response> {

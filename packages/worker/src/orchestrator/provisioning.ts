@@ -13,26 +13,17 @@ export async function traceSandboxProvisioning<T>(
 ): Promise<T> {
   const { tracer, secrets, attributes, provision } = options;
 
-  try {
-    return await tracer.span(
-      "sandbox.provision",
-      { attributes },
-      async () => {
-        try {
-          return await provision();
-        } catch (error) {
-          throw redactedProvisioningError(error, secrets);
-        }
-      },
-    );
-  } catch (error) {
-    tracer.log(
-      "ERROR",
-      "sandbox.provision.failed",
-      redactEvent(provisioningErrorAttributes(error), secrets),
-    );
-    throw error;
-  }
+  return tracer.span(
+    "sandbox.provision",
+    { attributes },
+    async () => {
+      try {
+        return await provision();
+      } catch (error) {
+        throw redactedProvisioningError(error, secrets);
+      }
+    },
+  );
 }
 
 function redactedProvisioningError(error: unknown, secrets: readonly string[]): Error {

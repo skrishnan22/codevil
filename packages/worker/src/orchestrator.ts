@@ -68,6 +68,7 @@ import { runOrchestratorSchemaMigrations } from "./orchestrator/schema-migration
 import type { OrchestratorHost } from "./orchestrator/host.js";
 import { SessionEventLog } from "./orchestrator/event-log.js";
 import { loadSessionMeta, saveSessionMeta } from "./orchestrator/session-meta.js";
+import { sessionWideEventGroup } from "./orchestrator/session-telemetry.js";
 import {
   completeActiveRun as completeActiveRunFn,
   decisionRejection as decisionRejectionFn,
@@ -559,6 +560,11 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     // Close span for the state we just left; open one for the state we entered.
     const leavingSpan = this.phaseSpans.get(from);
     if (leavingSpan) {
+      if (this.meta) {
+        leavingSpan.setGroup("session", sessionWideEventGroup(this.meta));
+      }
+      leavingSpan.setAttribute("state_from", from);
+      leavingSpan.setAttribute("state_to", to);
       this.phaseSpans.delete(from);
       leavingSpan.end();
     }
@@ -567,19 +573,30 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       const tracer = this.getTracer();
       if (tracer) {
         const span = tracer.startSpan(enteringName, { attributes: { state: to } });
+        if (this.meta) {
+          span.setGroup("session", sessionWideEventGroup(this.meta));
+        }
         this.phaseSpans.set(to, span);
       }
     }
     if (isTerminalState(to)) {
-      // Drop any phase spans still open (e.g. on `failed` from mid-phase).
       for (const [state, span] of this.phaseSpans) {
+        if (this.meta) {
+          span.setGroup("session", sessionWideEventGroup(this.meta));
+        }
         span.setStatus("ERROR", `terminal: ${to}`);
+        span.setAttribute("terminal_state", to);
         span.end();
         this.phaseSpans.delete(state);
       }
+      if (this.meta) {
+        this.getTracer()?.log("INFO", "session.terminal", {
+          session: sessionWideEventGroup(this.meta),
+          terminal_state: to,
+        });
+      }
     }
 
-    this.getTracer()?.log("INFO", "state.transition", { from, to });
     return true;
   }
 
@@ -590,6 +607,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.tracer = createTracer({
       component: "orchestrator",
       trace_id: traceIdFromSessionId(this.meta.session_id),
+      session_id: this.meta.session_id,
     });
     setValidationDropSink(tracerValidationDropSink(this.tracer));
     return this.tracer;

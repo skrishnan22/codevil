@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { emptySessionSnapshot } from "@codevil/shared";
 import { parseEnvelope, parseFrame, renderEvent } from "../dist/events.js";
+
+function snapshotState(overrides = {}) {
+  return { ...emptySessionSnapshot(), ...overrides };
+}
 
 test("parses cursor envelope and renders plan markdown", () => {
   const envelope = parseEnvelope(JSON.stringify({
@@ -62,7 +67,7 @@ test("parseFrame: snapshot frame returns kind=snapshot with cursor, does not thr
     type: "snapshot",
     path: "session",
     cursor: 42,
-    state: { sessionPhase: "executing", messages: [], participants: [] },
+    state: snapshotState({ sessionPhase: "executing" }),
   });
   const result = parseFrame(raw);
   assert.equal(result.kind, "snapshot", "snapshot frame must parse as kind=snapshot");
@@ -94,7 +99,7 @@ test("parseFrame: snapshot frame followed by replay_batch frame — neither thro
     type: "snapshot",
     path: "session",
     cursor: 10,
-    state: { sessionPhase: "ready" },
+    state: snapshotState({ sessionPhase: "ready", cursor: 10 }),
   });
   const replayRaw = JSON.stringify({
     type: "replay_batch",

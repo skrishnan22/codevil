@@ -59,6 +59,14 @@ test("provisioning telemetry redacts provider credentials from errors without hi
   assert.doesNotMatch(serialized, new RegExp(providerKey));
   assert.match(serialized, /\[REDACTED\]/);
   assert.match(serialized, /container unavailable/);
-  assert.equal(emitted.some((event) => event.kind === "span" && event.name === "sandbox.provision"), true);
-  assert.equal(emitted.some((event) => event.kind === "log" && event.event === "sandbox.provision.failed"), true);
+  assert.equal(
+    emitted.some(
+      (event) =>
+        event.kind === "wide_event" &&
+        event.record_type === "span" &&
+        event.operation === "sandbox.provision" &&
+        event.outcome === "error",
+    ),
+    true,
+  );
 });

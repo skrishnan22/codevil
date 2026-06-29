@@ -6,6 +6,7 @@ import {
   type AnnotationReply,
 } from "./annotations.js";
 import { AnswerableBySchema } from "./questions.js";
+import { emitValidationDrop } from "./validation.js";
 
 const nullableString = z.union([z.string(), z.null()]);
 
@@ -64,11 +65,7 @@ export function parseSqliteRow<S extends z.ZodTypeAny>(
 ): z.infer<S> | null {
   const result = schema.safeParse(row);
   if (result.success) return result.data;
-  console.error(JSON.stringify({
-    kind: "validation_drop",
-    boundary,
-    issues: result.error.issues,
-  }));
+  emitValidationDrop("orchestrator", boundary, result.error.issues);
   return null;
 }
 
@@ -77,22 +74,15 @@ export function parseAnnotationAnchorJson(raw: string): AnnotationAnchor | null 
   try {
     parsed = JSON.parse(raw);
   } catch {
-    console.error(JSON.stringify({
-      kind: "validation_drop",
-      boundary: "sqlite_annotation_anchor",
-      raw_type: null,
-      issues: [{ message: "Invalid JSON in anchor_json column" }],
-    }));
+    emitValidationDrop("orchestrator", "sqlite_annotation_anchor", [
+      { code: "custom", message: "Invalid JSON in anchor_json column", path: [] },
+    ]);
     return null;
   }
 
   const result = AnnotationAnchorSchema.safeParse(parsed);
   if (!result.success) {
-    console.error(JSON.stringify({
-      kind: "validation_drop",
-      boundary: "sqlite_annotation_anchor",
-      issues: result.error.issues,
-    }));
+    emitValidationDrop("orchestrator", "sqlite_annotation_anchor", result.error.issues);
     return null;
   }
   return result.data;

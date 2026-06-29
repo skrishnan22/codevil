@@ -89,7 +89,7 @@ export function initializeSandboxConnection(
 ): void {
   host.loadMeta();
   if (!host.meta) {
-    console.error("codevil.initializeSandboxConnection.no_meta");
+    host.getTracer()?.log("ERROR", "sandbox.init.no_meta", {});
     return;
   }
 

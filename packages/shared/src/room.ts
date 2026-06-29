@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { KnownProviderSchema } from "./providers.js";
+
 export const RoomStateSchema = z.enum([
   "initializing",
   "ready",
@@ -59,7 +61,7 @@ export const SessionSummarySchema = z.object({
 
 export const CreateSessionRequestSchema = z.object({
   repo: z.string().trim().min(1),
-  provider: z.string().trim().min(1).optional(),
+  provider: KnownProviderSchema.optional(),
   plan_model: z.string().trim().min(1).optional(),
   exec_model: z.string().trim().min(1).optional(),
   max_session_time: z.string().trim().min(1).optional(),

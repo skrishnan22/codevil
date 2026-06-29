@@ -1,6 +1,7 @@
 import type { ZodIssue, ZodTypeAny, infer as ZodInfer } from "zod";
 
-import type { Tracer } from "./observability.js";
+import type { Component, Tracer } from "./observability.js";
+import { createComponentLogger, emitLog } from "./observability.js";
 
 export type Boundary =
   | "cli_to_do"
@@ -19,14 +20,31 @@ export interface ValidationDrop {
 
 type DropSink = (drop: ValidationDrop) => void;
 
-let sink: DropSink = (drop) => {
-  // Single structured log line. Cloudflare Workers, Node sandbox, and the CLI
-  // all surface stderr to their respective log pipelines.
-  try {
-    console.error(JSON.stringify(drop));
-  } catch {
-    console.error("[validation_drop]", drop.boundary, drop.raw_type);
+function componentForBoundary(boundary: Boundary): Component {
+  switch (boundary) {
+    case "cli_to_do":
+      return "cli";
+    case "do_to_cli":
+    case "do_to_sandbox":
+    case "persisted_replay":
+      return "orchestrator";
+    case "sandbox_to_do":
+    case "pi_agent_event":
+      return "sandbox";
   }
+}
+
+let sink: DropSink = (drop) => {
+  emitLog({
+    severity: "WARN",
+    event: "validation_drop",
+    component: componentForBoundary(drop.boundary),
+    attributes: {
+      boundary: drop.boundary,
+      raw_type: drop.raw_type,
+      issues: drop.issues,
+    },
+  });
 };
 
 export function setValidationDropSink(next: DropSink): void {
@@ -43,6 +61,22 @@ export function tracerValidationDropSink(tracer: Tracer): DropSink {
       issues: drop.issues,
     });
   };
+}
+
+/** Emit validation-style drops outside parseInbound (e.g. SQLite row hydration). */
+export function emitValidationDrop(
+  component: Component,
+  boundary: string,
+  issues: ZodIssue[],
+  options: { raw_type?: string | null; session_id?: string } = {},
+): void {
+  const logger = createComponentLogger(component);
+  if (options.session_id) logger.withSessionId(options.session_id);
+  logger.log("WARN", "validation_drop", {
+    boundary,
+    raw_type: options.raw_type ?? null,
+    issues,
+  });
 }
 
 function readRawType(raw: unknown): string | null {

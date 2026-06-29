@@ -9,6 +9,7 @@ import {
   type SessionDirectoryRow,
 } from "./session-directory.js";
 import { createCodevilAuth } from "./auth.js";
+import { workerLogSessionException } from "./logging.js";
 import {
   activeMembershipByUserSelect,
   createOwnerMembershipInsert,
@@ -32,7 +33,6 @@ import {
   listPendingInvitationsSelect,
   membershipByEmailSelect,
   membershipByUserSelect,
-  parseInviteRole,
   revokeInvitationUpdate,
   type InvitationStatus,
 } from "./invitations.js";
@@ -43,7 +43,7 @@ import {
 } from "./auth-redirect.js";
 import { configuredWebOrigins, missingAuthConfigKeys } from "./auth-config.js";
 import { createEmailProvider } from "./email.js";
-import { can, isRecord, type AuthAction } from "@codevil/shared";
+import { can, isRecord, type AuthAction, CreateInvitationRequestSchema, SetupClaimRequestSchema } from "@codevil/shared";
 import {
   getCodevilSandbox,
   readSandboxDiagnostics,
@@ -138,8 +138,12 @@ export async function handleSetupClaim(request: Request, env: Env): Promise<Resp
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  const setupToken = isRecord(body) && typeof body.setupToken === "string" ? body.setupToken : "";
-  if (!verifySetupToken(env.CODEVIL_SETUP_TOKEN, setupToken)) {
+  const parsed = SetupClaimRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return json({ error: "Invalid setup body", issues: parsed.error.issues }, 400);
+  }
+
+  if (!verifySetupToken(env.CODEVIL_SETUP_TOKEN, parsed.data.setupToken)) {
     return json({ error: "Invalid setup token" }, 403);
   }
 
@@ -246,12 +250,13 @@ export async function handleCreateInvitation(request: Request, env: Env, auth: A
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  const email = isRecord(body) && typeof body.email === "string" ? normalizeEmail(body.email) : "";
-  const role = isRecord(body) ? parseInviteRole(body.role) : null;
-  if (!email || !email.includes("@") || !role) {
-    return json({ error: "Invalid invitation body" }, 400);
+  const parsed = CreateInvitationRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    return json({ error: "Invalid invitation body", issues: parsed.error.issues }, 400);
   }
 
+  const email = normalizeEmail(parsed.data.email);
+  const role = parsed.data.role;
   if (!canInviteRole(auth.role, role)) {
     return json({ error: "Forbidden" }, 403);
   }
@@ -519,11 +524,7 @@ export async function handleCreateSession(
     const failedAt = new Date().toISOString();
     const failure = sessionDirectoryFailureUpdate(sessionId, failedAt);
     await env.DB.prepare(failure.sql).bind(...failure.bindings).run();
-    console.error("session.init.failed", {
-      session_id: sessionId,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
+    workerLogSessionException(sessionId, "session.init.failed", error);
     return json({
       error: "Failed to initialize session",
       detail: error instanceof Error ? error.message : String(error),

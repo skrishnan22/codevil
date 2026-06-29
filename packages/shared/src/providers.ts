@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type LLMProviderId = "opencode-go" | "openrouter" | "openai";
 
 type ProviderSecretNameById = {
@@ -49,6 +51,17 @@ export const LLM_PROVIDERS = [
     keyHelpUrl: "https://platform.openai.com/api-keys",
   },
 ] as const satisfies readonly LLMProviderDefinition[];
+
+export const LLMProviderIdSchema = z.enum(["opencode-go", "openrouter", "openai"]);
+
+/** Accepts canonical provider ids and documented aliases (e.g. `opencode` → `opencode-go`). */
+export const KnownProviderSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((provider) => getProviderDefinition(provider) !== undefined, {
+    message: "Unknown LLM provider",
+  });
 
 export function getProviderDefinition(
   provider: string,

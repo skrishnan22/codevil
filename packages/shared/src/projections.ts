@@ -7,9 +7,6 @@
  */
 
 import type { DOToCLIEvent } from "./messages-cli.js";
-import type { SessionState } from "./session.js";
-import type { ParticipantIdentity } from "./room.js";
-import type { AnnotationThread } from "./annotations.js";
 import type {
   ChatMessage,
   ActivityEntry,
@@ -60,19 +57,8 @@ export { mapEventToActivity } from "./projection-activity.js";
 // SessionSnapshot — the full projection state maintained per session
 // ---------------------------------------------------------------------------
 
-export interface SessionSnapshot {
-  cursor: number;
-  sessionPhase: SessionState | null;
-  planApproved: boolean;
-  messages: ChatMessage[];
-  activityLog: ActivityEntry[];
-  participants: ParticipantIdentity[];
-  preview: PreviewState;
-  planRevision: PlanRevisionState | null;
-  annotations: AnnotationThread[];
-  questions: QuestionViewModel[];
-  selectedAnnotationId: string | null;
-}
+export type { SessionSnapshot } from "./session-snapshot-schema.js";
+import type { SessionSnapshot } from "./session-snapshot-schema.js";
 
 export function emptySessionSnapshot(): SessionSnapshot {
   return {

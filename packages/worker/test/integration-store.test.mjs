@@ -104,7 +104,22 @@ test("dedupe insert ignores duplicate external events", () => {
   const statement = dedupeEventInsert("Ev123", "int_slack_T123", "171951.0001", "2026-06-28T00:00:00.000Z");
 
   assert.match(statement.sql, /^INSERT OR IGNORE INTO external_message_dedupe/i);
-  assert.deepEqual(statement.bindings, ["emd_Ev123", "int_slack_T123", "Ev123", "171951.0001", "2026-06-28T00:00:00.000Z"]);
+  assert.deepEqual(statement.bindings, [
+    "emd_int_slack_T123_Ev123",
+    "int_slack_T123",
+    "Ev123",
+    "171951.0001",
+    "2026-06-28T00:00:00.000Z",
+  ]);
+});
+
+test("dedupe insert scopes duplicate detection by integration", () => {
+  const first = dedupeEventInsert("Ev123", "int_slack_T123", null, "2026-06-28T00:00:00.000Z");
+  const second = dedupeEventInsert("Ev123", "int_slack_T456", null, "2026-06-28T00:00:00.000Z");
+
+  assert.match(first.sql, /integration_id,\s*external_event_id/s);
+  assert.equal(first.bindings[0], "emd_int_slack_T123_Ev123");
+  assert.equal(second.bindings[0], "emd_int_slack_T456_Ev123");
 });
 
 test("externalSessionLinkBySessionSelect looks up all external links for a session", () => {

@@ -215,7 +215,7 @@ export function externalSessionLinkBySessionSelect(sessionId: string): SqlStatem
 
 export function dedupeEventInsert(
   externalEventId: string,
-  integrationIdValue: string | null,
+  integrationIdValue: string,
   externalMessageId: string | null,
   handledAt: string,
 ): SqlStatement {
@@ -227,6 +227,6 @@ export function dedupeEventInsert(
       external_message_id,
       handled_at
     ) VALUES (?, ?, ?, ?, ?)`,
-    bindings: [`emd_${externalEventId}`, integrationIdValue, externalEventId, externalMessageId, handledAt],
+    bindings: [`emd_${integrationIdValue}_${externalEventId}`, integrationIdValue, externalEventId, externalMessageId, handledAt],
   };
 }

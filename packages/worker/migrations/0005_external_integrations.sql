@@ -50,11 +50,11 @@ CREATE TABLE IF NOT EXISTS external_session_links (
 
 CREATE TABLE IF NOT EXISTS external_message_dedupe (
   id TEXT PRIMARY KEY,
-  integration_id TEXT,
+  integration_id TEXT NOT NULL,
   external_event_id TEXT NOT NULL,
   external_message_id TEXT,
   handled_at TEXT NOT NULL,
-  UNIQUE(external_event_id)
+  UNIQUE(integration_id, external_event_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_integration_channels_lookup

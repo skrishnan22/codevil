@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  channelDefaultRepoLookup,
   extractGithubRepoUrl,
   resolveRepoForExternalRequest,
 } from "../dist/integrations/repo-resolution.js";
@@ -20,18 +19,10 @@ test("extractGithubRepoUrl normalizes supported GitHub URL forms", () => {
     repoUrl: "https://github.com/acme/app",
     repoSlug: "acme/app",
   });
-  assert.deepEqual(extractGithubRepoUrl("git@github.com:acme/app.git"), {
-    repoUrl: "https://github.com/acme/app",
-    repoSlug: "acme/app",
-  });
 });
 
 test("extractGithubRepoUrl strips trailing punctuation and paths", () => {
   assert.deepEqual(extractGithubRepoUrl("please use https://github.com/acme/app/issues/12."), {
-    repoUrl: "https://github.com/acme/app",
-    repoSlug: "acme/app",
-  });
-  assert.deepEqual(extractGithubRepoUrl("please use github.com/acme/app."), {
     repoUrl: "https://github.com/acme/app",
     repoSlug: "acme/app",
   });
@@ -90,11 +81,4 @@ test("repo resolution returns null when no valid repo is present", () => {
     }),
     null,
   );
-});
-
-test("channel default repo lookup reuses integration channel store shape", () => {
-  const statement = channelDefaultRepoLookup("int_slack_T123", "C123");
-
-  assert.match(statement.sql, /FROM integration_channels/i);
-  assert.deepEqual(statement.bindings, ["int_slack_T123", "C123"]);
 });

@@ -1,63 +1,92 @@
-export type SlackApiBody = Record<string, unknown>;
-
-export type SlackApiResult<T extends SlackApiBody = SlackApiBody> =
-  | { ok: true; data: T }
-  | { ok: false; error: string; data?: SlackApiBody };
-
-export type SlackApi = <T extends SlackApiBody = SlackApiBody>(
-  token: string,
+export type SlackApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
+export type SlackApi = <T = Record<string, unknown>>(
+  botToken: string,
   method: string,
-  body?: SlackApiBody,
-) => Promise<SlackApiResult<T>>;
+  body?: Record<string, unknown>,
+) => Promise<SlackApiResult<T> | { ok: false; error: string; data: Record<string, unknown> }>;
+
+export async function slackApi<T>(
+  botToken: string | undefined,
+  method: string,
+  body?: Record<string, unknown>,
+): Promise<SlackApiResult<T>> {
+  if (!botToken) return { ok: false, error: "missing_bot_token" };
+
+  const response = await fetch(`https://slack.com/api/${method}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${botToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body ?? {}),
+  });
+
+  let data: unknown = null;
+  try {
+    data = await response.json();
+  } catch {
+    // Slack normally returns JSON; fall through to HTTP status when it does not.
+  }
+
+  if (!response.ok) {
+    return { ok: false, error: slackError(data) ?? `http_${response.status}` };
+  }
+
+  if (!isSlackOk(data)) {
+    return { ok: false, error: slackError(data) ?? "slack_not_ok" };
+  }
+
+  return { ok: true, data: data as T };
+}
 
 export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
-  return async function slackApi<T extends SlackApiBody = SlackApiBody>(
-    token: string,
+  return async function slackWebApi<T>(
+    botToken: string,
     method: string,
-    body: SlackApiBody = {},
-  ): Promise<SlackApiResult<T>> {
-    let response: Response;
-    try {
-      response = await fetcher(`https://slack.com/api/${method}`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json; charset=utf-8",
-        },
-        body: JSON.stringify(body),
-      });
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
-    }
-
-    let data: SlackApiBody;
-    try {
-      data = await response.json<SlackApiBody>();
-    } catch {
-      return { ok: false, error: `Slack API returned non-JSON response (${response.status})` };
-    }
-
-    if (!response.ok) {
-      return { ok: false, error: `Slack API HTTP ${response.status}`, data };
-    }
-
-    if (data.ok !== true) {
-      return {
-        ok: false,
-        error: typeof data.error === "string" ? data.error : "Slack API request failed",
-        data,
-      };
-    }
-
+    body?: Record<string, unknown>,
+  ): Promise<SlackApiResult<T> | { ok: false; error: string; data: Record<string, unknown> }> {
+    const response = await fetcher(`https://slack.com/api/${method}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${botToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+    const data = await response.json<Record<string, unknown>>();
+    if (!response.ok) return { ok: false, error: slackError(data) ?? `http_${response.status}`, data };
+    if (!isSlackOk(data)) return { ok: false, error: slackError(data) ?? "slack_not_ok", data };
     return { ok: true, data: data as T };
   };
 }
 
-export function postSlackMessage(
-  slackApi: SlackApi,
-  token: string,
+export async function postSlackMessage(
+  botToken: string | SlackApi | undefined,
   channel: string,
   text: string,
-): Promise<SlackApiResult> {
-  return slackApi(token, "chat.postMessage", { channel, text });
+  optionsOrText: { threadTs?: string } | string = {},
+): Promise<SlackApiResult<unknown>> {
+  if (typeof botToken === "function") {
+    return botToken(channel, "chat.postMessage", {
+      channel: text,
+      text: typeof optionsOrText === "string" ? optionsOrText : "",
+    }) as Promise<SlackApiResult<unknown>>;
+  }
+
+  const options = typeof optionsOrText === "object" ? optionsOrText : {};
+  return slackApi(botToken, "chat.postMessage", {
+    channel,
+    text,
+    ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
+  });
+}
+
+function isSlackOk(data: unknown): data is { ok: true } {
+  return typeof data === "object" && data !== null && (data as { ok?: unknown }).ok === true;
+}
+
+function slackError(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const error = (data as { error?: unknown }).error;
+  return typeof error === "string" && error.length > 0 ? error : null;
 }

@@ -23,7 +23,7 @@ import {
   previewTokenFromHost,
   requireAuthContext,
 } from "./http-handlers.js";
-import { handleSlackManifest, handleSlackStatus, type SlackStatusDeps } from "./integrations/slack/routes.js";
+import { handleSlackCommand, handleSlackManifest, handleSlackStatus, type SlackStatusDeps } from "./integrations/slack/routes.js";
 import { previewPathPrefix } from "./orchestrator/preview.js";
 import type { Env } from "./worker-env.js";
 
@@ -59,6 +59,10 @@ export async function dispatchHttpRequest(
       refererPreview.sessionId,
       refererPreview.token,
     );
+  }
+
+  if (path === "/slack/commands" && request.method === "POST") {
+    return await handleSlackCommand(request, env);
   }
 
   if (isOriginGuardedPath(request.method, path)) {

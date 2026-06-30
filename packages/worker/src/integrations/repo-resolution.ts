@@ -1,51 +1,64 @@
-import type { SqlStatement } from "../session-directory.js";
-import { channelByExternalIdSelect } from "./store.js";
-
-export interface ResolvedRepo {
+export interface ResolvedGithubRepo {
   repoUrl: string;
   repoSlug: string;
 }
 
-export interface RepoResolutionInput {
-  text?: string | null;
-  contextText?: string | null;
-  channelDefaultRepoUrl?: string | null;
-}
+const GITHUB_REPO_CANDIDATE = /(?:https?:\/\/)?github\.com\/[^\s<>"']+/gi;
+const TRAILING_PUNCTUATION = /[.,;:!?)}\]]+$/;
+const REPO_PART = /^[A-Za-z0-9_.-]+$/;
 
-const OWNER_REPO_SEGMENT = "([A-Za-z0-9_.-]+)\\/([A-Za-z0-9_.-]+)";
-const GITHUB_REPO_PATTERNS = [
-  new RegExp(`(?:https?:\\/\\/)?github\\.com\\/${OWNER_REPO_SEGMENT}(?:\\.git)?(?:[\\/?#][^\\s<>)\\],;]*)?`, "i"),
-  new RegExp(`git@github\\.com:${OWNER_REPO_SEGMENT}(?:\\.git)?`, "i"),
-];
-
-export function extractGithubRepoUrl(text: string | null | undefined): ResolvedRepo | null {
-  if (!text) return null;
-
-  for (const pattern of GITHUB_REPO_PATTERNS) {
-    const match = text.match(pattern);
-    if (!match) continue;
-
-    const owner = match[1];
-    const repo = match[2].replace(/\.git$/i, "").replace(/[.,;:!?]+$/, "");
-    if (!owner || !repo) continue;
-
-    return {
-      repoUrl: `https://github.com/${owner}/${repo}`,
-      repoSlug: `${owner}/${repo}`,
-    };
+export function extractGithubRepoUrl(text: string): ResolvedGithubRepo | null {
+  for (const match of text.matchAll(GITHUB_REPO_CANDIDATE)) {
+    const resolved = normalizeGithubRepoCandidate(match[0]);
+    if (resolved) return resolved;
   }
 
   return null;
 }
 
-export function resolveRepoForExternalRequest(input: RepoResolutionInput): ResolvedRepo | null {
+export function resolveRepoForExternalRequest({
+  text,
+  contextText,
+  channelDefaultRepoUrl,
+}: {
+  text: string;
+  contextText?: string;
+  channelDefaultRepoUrl?: string | null;
+}): ResolvedGithubRepo | null {
   return (
-    extractGithubRepoUrl(input.text) ??
-    extractGithubRepoUrl(input.contextText) ??
-    extractGithubRepoUrl(input.channelDefaultRepoUrl)
+    extractGithubRepoUrl(text) ??
+    (contextText ? extractGithubRepoUrl(contextText) : null) ??
+    (channelDefaultRepoUrl ? extractGithubRepoUrl(channelDefaultRepoUrl) : null)
   );
 }
 
-export function channelDefaultRepoLookup(integrationId: string, externalChannelId: string): SqlStatement {
-  return channelByExternalIdSelect(integrationId, externalChannelId);
+function normalizeGithubRepoCandidate(rawCandidate: string): ResolvedGithubRepo | null {
+  const candidate = rawCandidate.replace(TRAILING_PUNCTUATION, "");
+  const urlText = candidate.startsWith("http://") || candidate.startsWith("https://")
+    ? candidate
+    : `https://${candidate}`;
+
+  let url: URL;
+  try {
+    url = new URL(urlText);
+  } catch {
+    return null;
+  }
+
+  if (url.hostname.toLowerCase() !== "github.com") return null;
+
+  const [owner, rawRepo] = url.pathname.split("/").filter(Boolean);
+  if (!owner || !rawRepo) return null;
+
+  const repo = rawRepo.replace(/\.git$/i, "");
+  if (!isValidGithubPart(owner) || !isValidGithubPart(repo)) return null;
+
+  return {
+    repoUrl: `https://github.com/${owner}/${repo}`,
+    repoSlug: `${owner}/${repo}`,
+  };
+}
+
+function isValidGithubPart(value: string): boolean {
+  return value.length > 0 && value !== "." && value !== ".." && REPO_PART.test(value);
 }

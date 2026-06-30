@@ -82,3 +82,77 @@ test("dispatchHttpRequest protects Slack setup routes with admin-ish auth", asyn
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: "Auth is not configured" });
 });
+
+
+test("dispatchHttpRequest routes Slack slash commands before origin guard", async () => {
+  const body = new URLSearchParams({
+    team_id: "T123",
+    channel_id: "C123",
+    channel_name: "eng",
+    text: "repo",
+  }).toString();
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = `v0=${await hmacSha256Hex("secret", `v0:${timestamp}:${body}`)}`;
+
+  const response = await dispatchHttpRequest(new Request("https://codevil.example.workers.dev/slack/commands", {
+    method: "POST",
+    headers: {
+      origin: "https://evil.example.com",
+      "content-type": "application/x-www-form-urlencoded",
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": signature,
+    },
+    body,
+  }), {
+    SLACK_SIGNING_SECRET: "secret",
+    DB: createFakeIntegrationDb(),
+    ORCHESTRATOR: {
+      idFromName: (name) => name,
+      get: () => {
+        throw new Error("should not route to preview");
+      },
+    },
+  }, {
+    withCors: (_request, _env, innerResponse) => innerResponse,
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "This channel does not have a Codevil default repo.");
+});
+
+async function hmacSha256Hex(secret, message) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function createFakeIntegrationDb() {
+  const channels = new Map();
+  return {
+    prepare(sql) {
+      const state = { bindings: [] };
+      return {
+        bind(...bindings) {
+          state.bindings = bindings;
+          return this;
+        },
+        async run() {
+          return { success: true };
+        },
+        async first() {
+          if (/SELECT \* FROM integration_channels/i.test(sql)) {
+            const [integrationId, channelId] = state.bindings;
+            return channels.get(`${integrationId}:${channelId}`) ?? null;
+          }
+          return null;
+        },
+      };
+    },
+  };
+}

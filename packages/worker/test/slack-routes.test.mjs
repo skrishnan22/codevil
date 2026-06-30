@@ -245,7 +245,7 @@ test("event creates a session, links the Slack thread, and submits the stripped 
     CODEVIL_SLACK_BOT_USER_ID: "U999",
     DB: db,
     ORCHESTRATOR: fakeOrchestrator((sessionId) => ({
-      submitAgentRequest(args) {
+      async submitAgentRequest(args) {
         orchestratorCalls.push({ sessionId, args });
         return { ok: true };
       },
@@ -342,7 +342,7 @@ test("event continues an existing linked session and updates the handled message
     CODEVIL_SLACK_BOT_USER_ID: "U999",
     DB: db,
     ORCHESTRATOR: fakeOrchestrator((sessionId) => ({
-      submitAgentRequest(args) {
+      async submitAgentRequest(args) {
         orchestratorCalls.push({ sessionId, args });
         return { ok: true };
       },

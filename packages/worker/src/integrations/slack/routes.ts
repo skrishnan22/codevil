@@ -208,7 +208,7 @@ export async function handleSlackEvent(
     }));
   }
 
-  const submit = env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).submitAgentRequest({
+  const submit = await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).submitAgentRequest({
     text: strippedText,
     actor,
     planFirst: true,

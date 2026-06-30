@@ -120,6 +120,40 @@ test("dispatchHttpRequest routes Slack slash commands before origin guard", asyn
   assert.equal(await response.text(), "This channel does not have a Codevil default repo.");
 });
 
+test("dispatchHttpRequest routes Slack events before origin guard", async () => {
+  const body = JSON.stringify({
+    type: "url_verification",
+    challenge: "challenge-token",
+  });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = `v0=${await hmacSha256Hex("secret", `v0:${timestamp}:${body}`)}`;
+
+  const response = await dispatchHttpRequest(new Request("https://codevil.example.workers.dev/slack/events", {
+    method: "POST",
+    headers: {
+      origin: "https://evil.example.com",
+      "content-type": "application/json",
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": signature,
+    },
+    body,
+  }), {
+    SLACK_SIGNING_SECRET: "secret",
+    DB: createFakeIntegrationDb(),
+    ORCHESTRATOR: {
+      idFromName: (name) => name,
+      get: () => {
+        throw new Error("should not route to preview");
+      },
+    },
+  }, {
+    withCors: (_request, _env, innerResponse) => innerResponse,
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "challenge-token");
+});
+
 async function hmacSha256Hex(secret, message) {
   const key = await crypto.subtle.importKey(
     "raw",

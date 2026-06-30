@@ -23,13 +23,20 @@ import {
   previewTokenFromHost,
   requireAuthContext,
 } from "./http-handlers.js";
-import { handleSlackCommand, handleSlackManifest, handleSlackStatus, type SlackStatusDeps } from "./integrations/slack/routes.js";
+import {
+  handleSlackCommand,
+  handleSlackEvent,
+  handleSlackManifest,
+  handleSlackStatus,
+  type SlackEventDeps,
+  type SlackStatusDeps,
+} from "./integrations/slack/routes.js";
 import { previewPathPrefix } from "./orchestrator/preview.js";
 import type { Env } from "./worker-env.js";
 
 export interface HttpRouterDeps {
   withCors: (request: Request, env: Env, response: Response) => Response;
-  slack?: SlackStatusDeps;
+  slack?: SlackStatusDeps & SlackEventDeps;
 }
 
 export async function dispatchHttpRequest(
@@ -63,6 +70,10 @@ export async function dispatchHttpRequest(
 
   if (path === "/slack/commands" && request.method === "POST") {
     return await handleSlackCommand(request, env);
+  }
+
+  if (path === "/slack/events" && request.method === "POST") {
+    return await handleSlackEvent(request, env, deps.slack);
   }
 
   if (isOriginGuardedPath(request.method, path)) {

@@ -1,22 +1,48 @@
 import { json } from "../../http-handlers.js";
+import { createSession, type CreateSessionResult } from "../../session-service.js";
 import type { Env } from "../../worker-env.js";
-import { extractGithubRepoUrl } from "../repo-resolution.js";
+import { extractGithubRepoUrl, resolveRepoForExternalRequest } from "../repo-resolution.js";
 import {
   channelByExternalIdSelect,
   clearChannelDefaultRepoUpdate,
+  dedupeEventInsert,
+  externalActorRowId,
+  externalParticipantId,
+  externalSessionLinkHandledUpdate,
+  externalSessionLinkId,
+  externalSessionLinkInsert,
+  externalSessionLinkSelect,
   integrationChannelRowId,
   integrationId,
+  upsertExternalActor,
   upsertChannelDefaultRepo,
   upsertIntegration,
 } from "../store.js";
-import type { IntegrationChannelRow } from "../types.js";
-import { parseCodevilSlashCommand } from "./parser.js";
+import type { ExternalSessionLinkRow, IntegrationChannelRow } from "../types.js";
+import {
+  containsBotMention,
+  parseCodevilSlashCommand,
+  SlackEventCallbackSchema,
+  SlackUrlVerificationSchema,
+  slackThreadRootTs,
+  stripBotMention,
+} from "./parser.js";
 import { verifySlackSignature } from "./signature.js";
-import { createSlackWebApi, type SlackApi } from "./client.js";
+import { createSlackWebApi, postSlackMessage, type SlackApi } from "./client.js";
 import { buildSlackManifest } from "./manifest.js";
 
 export interface SlackStatusDeps {
   slackApi?: SlackApi;
+}
+
+export interface SlackEventDeps {
+  slackApi?: SlackApi;
+  createSession?: (
+    env: Env,
+    requestUrlOrOrigin: string,
+    input: { repo: string },
+    createdBy: { id: string; name: string; email?: string | null },
+  ) => Promise<CreateSessionResult>;
 }
 
 export async function handleSlackManifest(request: Request): Promise<Response> {
@@ -58,6 +84,161 @@ export async function handleSlackStatus(env: Env, deps: SlackStatusDeps = {}): P
   }
 
   return json(body, 200);
+}
+
+export async function handleSlackEvent(
+  request: Request,
+  env: Env,
+  deps: SlackEventDeps = {},
+): Promise<Response> {
+  const body = await request.text();
+  const valid = await verifySlackSignature({
+    signingSecret: env.SLACK_SIGNING_SECRET,
+    signature: request.headers.get("x-slack-signature") ?? undefined,
+    timestamp: request.headers.get("x-slack-request-timestamp") ?? undefined,
+    body,
+  });
+  if (!valid) return json({ error: "Invalid signature" }, 401);
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
+  }
+
+  const urlVerification = SlackUrlVerificationSchema.safeParse(payload);
+  if (urlVerification.success) {
+    return plainText(urlVerification.data.challenge);
+  }
+
+  const eventCallback = SlackEventCallbackSchema.safeParse(payload);
+  if (!eventCallback.success || eventCallback.data.event.type !== "app_mention") {
+    return json({ ok: true }, 200);
+  }
+
+  const { event } = eventCallback.data;
+  const teamId = eventCallback.data.team_id;
+  const channelId = event.channel;
+  const userId = event.user;
+  const messageTs = event.ts;
+  const botUserId = env.CODEVIL_SLACK_BOT_USER_ID;
+
+  if (!teamId || !channelId || !userId || !messageTs) return json({ ok: true }, 200);
+  if (event.bot_id || (botUserId && userId === botUserId)) return json({ ok: true }, 200);
+  if (!containsBotMention(event.text, botUserId)) return json({ ok: true }, 200);
+
+  const integrationIdValue = integrationId("slack", teamId);
+  const handledAt = new Date().toISOString();
+  const dedupe = dedupeEventInsert(
+    eventCallback.data.event_id ?? `${channelId}:${messageTs}`,
+    integrationIdValue,
+    messageTs,
+    handledAt,
+  );
+  const dedupeResult = await env.DB.prepare(dedupe.sql).bind(...dedupe.bindings).run();
+  if (d1Changes(dedupeResult) === 0) return json({ ok: true }, 200);
+
+  await runStatement(env.DB, upsertIntegration({
+    id: integrationIdValue,
+    provider: "slack",
+    external_workspace_id: teamId,
+    external_workspace_name: null,
+    bot_external_actor_id: botUserId ?? null,
+    config_json: "{}",
+    created_at: handledAt,
+    updated_at: handledAt,
+  }));
+
+  await runStatement(env.DB, upsertExternalActor({
+    id: externalActorRowId(integrationIdValue, userId),
+    integration_id: integrationIdValue,
+    external_actor_id: userId,
+    display_name: userId,
+    email: null,
+    linked_auth_user_id: null,
+    metadata_json: "{}",
+    created_at: handledAt,
+    updated_at: handledAt,
+  }));
+
+  const actor = { id: externalParticipantId("slack", userId), name: userId };
+  const strippedText = stripBotMention(event.text ?? "", botUserId);
+  const rootConversationId = slackThreadRootTs({ ts: messageTs, thread_ts: event.thread_ts });
+  const channelRow = await firstRow<Pick<IntegrationChannelRow, "default_repo_url"> | null>(
+    env.DB,
+    channelByExternalIdSelect(integrationIdValue, channelId),
+  );
+  const existingLink = await firstRow<ExternalSessionLinkRow | null>(
+    env.DB,
+    externalSessionLinkSelect(integrationIdValue, channelId, rootConversationId),
+  );
+  const repo = resolveRepoForExternalRequest({
+    text: strippedText,
+    channelDefaultRepoUrl: channelRow?.default_repo_url ?? null,
+  });
+
+  if (!existingLink && !repo) {
+    await postSlackReply(
+      env,
+      deps,
+      channelId,
+      "Please include a GitHub repo URL or use /codevil set-repo first.",
+      rootConversationId,
+    );
+    return json({ ok: true }, 200);
+  }
+
+  let sessionId = existingLink?.session_id;
+  let createdSession = false;
+  if (!sessionId) {
+    const created = await (deps.createSession ?? createSession)(env, request.url, { repo: repo!.repoUrl }, actor);
+    sessionId = created.session_id;
+    createdSession = true;
+    await runStatement(env.DB, externalSessionLinkInsert({
+      id: externalSessionLinkId(integrationIdValue, channelId, rootConversationId),
+      integration_id: integrationIdValue,
+      external_channel_id: channelId,
+      external_conversation_id: rootConversationId,
+      session_id: sessionId,
+      last_handled_message_id: messageTs,
+      created_by_external_actor_id: userId,
+      created_at: handledAt,
+      updated_at: handledAt,
+    }));
+  }
+
+  const submit = env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).submitAgentRequest({
+    text: strippedText,
+    actor,
+    planFirst: true,
+  });
+
+  if (existingLink) {
+    await runStatement(env.DB, externalSessionLinkHandledUpdate(existingLink.id, messageTs, handledAt));
+  }
+
+  if (!submit.ok) {
+    await postSlackReply(
+      env,
+      deps,
+      channelId,
+      "I couldn't hand that off to Codevil right now. Please try again.",
+      rootConversationId,
+    );
+    return json({ ok: true }, 200);
+  }
+
+  await postSlackReply(
+    env,
+    deps,
+    channelId,
+    createdSession
+      ? `Started Codevil session ${sessionId}.`
+      : `Continuing Codevil session ${sessionId}.`,
+    rootConversationId,
+  );
+  return json({ ok: true }, 200);
 }
 
 function slackMissingEnv(env: Env): string[] {
@@ -156,4 +337,27 @@ function plainText(text: string, status = 200): Response {
 
 async function runStatement(db: D1Database, statement: { sql: string; bindings: unknown[] }): Promise<void> {
   await db.prepare(statement.sql).bind(...statement.bindings).run();
+}
+
+async function firstRow<T>(
+  db: D1Database,
+  statement: { sql: string; bindings: unknown[] },
+): Promise<T | null> {
+  return await db.prepare(statement.sql).bind(...statement.bindings).first<T>();
+}
+
+async function postSlackReply(
+  env: Env,
+  deps: SlackEventDeps,
+  channelId: string,
+  text: string,
+  threadTs: string,
+): Promise<void> {
+  if (!env.SLACK_BOT_TOKEN) return;
+  const slackApi = deps.slackApi ?? createSlackWebApi();
+  await postSlackMessage(slackApi, env.SLACK_BOT_TOKEN, channelId, text, { threadTs });
+}
+
+function d1Changes(result: D1Result<unknown>): number {
+  return Number(result.meta.changes ?? 0);
 }

@@ -931,4 +931,23 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
 
     return proxyPreviewRequest(request, this.meta, token, this.workerEnv.Sandbox);
   }
+
+  submitAgentRequest(args: {
+    text: string;
+    actor: ParticipantIdentity;
+    planFirst?: boolean;
+  }): { ok: true } | { ok: false; status: number; error: string } {
+    this.loadMeta();
+    if (!this.meta) {
+      return { ok: false, status: 409, error: "Session not initialized" };
+    }
+
+    if (!args.text.trim()) {
+      return { ok: true };
+    }
+
+    this.appendAndBroadcast({ type: "participant_joined", participant: args.actor });
+    handleAgentRequest(this, args.text, args.actor, args.planFirst ?? false);
+    return { ok: true };
+  }
 }

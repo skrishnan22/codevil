@@ -10,6 +10,7 @@ import {
 } from "./session-directory.js";
 import { createCodevilAuth } from "./auth.js";
 import { workerLogSessionException } from "./logging.js";
+import { createSession } from "./session-service.js";
 import {
   activeMembershipByUserSelect,
   createOwnerMembershipInsert,
@@ -482,60 +483,19 @@ export async function handleCreateSession(
     }, 400);
   }
 
-  const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;
-  const now = new Date().toISOString();
-  const legacyGuards = legacyDirectoryGuardColumns();
-  const row: SessionDirectoryRow = {
-    id: sessionId,
-    repo: normalized.repo,
-    title: normalized.title,
-    provider: normalized.provider,
-    plan_model: normalized.plan_model,
-    exec_model: normalized.exec_model,
-    max_cost: legacyGuards.max_cost,
-    max_session_time: normalized.max_session_time,
-    max_idle_time: normalized.max_idle_time,
-    max_steps: legacyGuards.max_steps,
-    room_state: "initializing",
-    sandbox_state: "not_started",
-    created_by_id: auth.userId,
-    created_by_name: auth.name,
-    created_by_email: auth.email,
-    created_at: now,
-    updated_at: now,
-    last_event_at: now,
-  };
-  const insert = sessionDirectoryInsert(row);
-  await env.DB.prepare(insert.sql).bind(...insert.bindings).run();
-
-  const doId = env.ORCHESTRATOR.idFromName(sessionId);
-  const stub = env.ORCHESTRATOR.get(doId);
-
   try {
-    await stub.init(sessionId, normalized.title, normalized.repo, {
-      worker_url: new URL("/", request.url).toString().replace(/\/$/, ""),
-      provider: normalized.provider,
-      plan_model: normalized.plan_model,
-      exec_model: normalized.exec_model,
-      max_time: normalized.max_session_time,
-      created_by: { id: auth.userId, name: auth.name },
+    const created = await createSession(env, request.url, normalized, {
+      id: auth.userId,
+      name: auth.name,
+      email: auth.email,
     });
+    return json(created, 201);
   } catch (error) {
-    const failedAt = new Date().toISOString();
-    const failure = sessionDirectoryFailureUpdate(sessionId, failedAt);
-    await env.DB.prepare(failure.sql).bind(...failure.bindings).run();
-    workerLogSessionException(sessionId, "session.init.failed", error);
     return json({
       error: "Failed to initialize session",
       detail: error instanceof Error ? error.message : String(error),
     }, 500);
   }
-
-  return json({
-    session_id: sessionId,
-    ws_url: new URL(`/sessions/${sessionId}/ws`, request.url).toString(),
-    summary: buildSessionSummary(row),
-  }, 201);
 }
 
 export async function handleListSessions(

@@ -4,10 +4,18 @@ export interface ResolvedGithubRepo {
 }
 
 const GITHUB_REPO_CANDIDATE = /(?:https?:\/\/)?github\.com\/[^\s<>"']+/gi;
+const GITHUB_SSH_REPO_CANDIDATE = /git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:\.git)?/gi;
 const TRAILING_PUNCTUATION = /[.,;:!?)}\]]+$/;
 const REPO_PART = /^[A-Za-z0-9_.-]+$/;
 
-export function extractGithubRepoUrl(text: string): ResolvedGithubRepo | null {
+export function extractGithubRepoUrl(text: string | null | undefined): ResolvedGithubRepo | null {
+  if (!text) return null;
+
+  for (const match of text.matchAll(GITHUB_SSH_REPO_CANDIDATE)) {
+    const resolved = normalizeGithubRepoParts(match[1], match[2]);
+    if (resolved) return resolved;
+  }
+
   for (const match of text.matchAll(GITHUB_REPO_CANDIDATE)) {
     const resolved = normalizeGithubRepoCandidate(match[0]);
     if (resolved) return resolved;
@@ -21,8 +29,8 @@ export function resolveRepoForExternalRequest({
   contextText,
   channelDefaultRepoUrl,
 }: {
-  text: string;
-  contextText?: string;
+  text?: string | null;
+  contextText?: string | null;
   channelDefaultRepoUrl?: string | null;
 }): ResolvedGithubRepo | null {
   return (
@@ -50,9 +58,12 @@ function normalizeGithubRepoCandidate(rawCandidate: string): ResolvedGithubRepo 
   const [owner, rawRepo] = url.pathname.split("/").filter(Boolean);
   if (!owner || !rawRepo) return null;
 
+  return normalizeGithubRepoParts(owner, rawRepo);
+}
+
+function normalizeGithubRepoParts(owner: string, rawRepo: string): ResolvedGithubRepo | null {
   const repo = rawRepo.replace(/\.git$/i, "");
   if (!isValidGithubPart(owner) || !isValidGithubPart(repo)) return null;
-
   return {
     repoUrl: `https://github.com/${owner}/${repo}`,
     repoSlug: `${owner}/${repo}`,

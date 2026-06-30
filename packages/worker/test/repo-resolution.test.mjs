@@ -19,6 +19,10 @@ test("extractGithubRepoUrl normalizes supported GitHub URL forms", () => {
     repoUrl: "https://github.com/acme/app",
     repoSlug: "acme/app",
   });
+  assert.deepEqual(extractGithubRepoUrl("git@github.com:acme/app.git"), {
+    repoUrl: "https://github.com/acme/app",
+    repoSlug: "acme/app",
+  });
 });
 
 test("extractGithubRepoUrl strips trailing punctuation and paths", () => {
@@ -72,6 +76,8 @@ test("resolveRepoForExternalRequest falls back to valid channel default", () => 
 });
 
 test("repo resolution returns null when no valid repo is present", () => {
+  assert.equal(extractGithubRepoUrl(null), null);
+  assert.equal(extractGithubRepoUrl(undefined), null);
   assert.equal(extractGithubRepoUrl("https://gitlab.com/acme/app"), null);
   assert.equal(
     resolveRepoForExternalRequest({

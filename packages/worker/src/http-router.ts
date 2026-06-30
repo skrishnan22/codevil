@@ -23,11 +23,13 @@ import {
   previewTokenFromHost,
   requireAuthContext,
 } from "./http-handlers.js";
+import { handleSlackManifest, handleSlackStatus, type SlackStatusDeps } from "./integrations/slack/routes.js";
 import { previewPathPrefix } from "./orchestrator/preview.js";
 import type { Env } from "./worker-env.js";
 
 export interface HttpRouterDeps {
   withCors: (request: Request, env: Env, response: Response) => Response;
+  slack?: SlackStatusDeps;
 }
 
 export async function dispatchHttpRequest(
@@ -78,6 +80,18 @@ export async function dispatchHttpRequest(
 
   if (path === "/setup/claim" && request.method === "POST") {
     return withCors(request, env, await handleSetupClaim(request, env));
+  }
+
+  if (path === "/integrations/slack/manifest" && request.method === "GET") {
+    const auth = await requireAuthContext(request, env, "members:invite");
+    if (auth instanceof Response) return withCors(request, env, auth);
+    return withCors(request, env, await handleSlackManifest(request));
+  }
+
+  if (path === "/integrations/slack/status" && request.method === "GET") {
+    const auth = await requireAuthContext(request, env, "members:invite");
+    if (auth instanceof Response) return withCors(request, env, auth);
+    return withCors(request, env, await handleSlackStatus(env, deps.slack));
   }
 
   if (path === "/invitations" && request.method === "GET") {

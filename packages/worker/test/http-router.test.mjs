@@ -57,3 +57,28 @@ test("dispatchHttpRequest ignores preview-looking referers from another origin",
 
   assert.equal(response, null);
 });
+
+test("dispatchHttpRequest protects Slack setup routes with admin-ish auth", async () => {
+  let corsApplied = false;
+  const response = await dispatchHttpRequest(
+    new Request("https://codevil.example.workers.dev/integrations/slack/status"),
+    {
+      ORCHESTRATOR: {
+        idFromName: (name) => name,
+        get: () => {
+          throw new Error("should not route to preview");
+        },
+      },
+    },
+    {
+      withCors: (_request, _env, innerResponse) => {
+        corsApplied = true;
+        return innerResponse;
+      },
+    },
+  );
+
+  assert.equal(corsApplied, true);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "Auth is not configured" });
+});

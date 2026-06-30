@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  createSlackWebApi,
+  postSlackMessage,
+} from "../dist/integrations/slack/client.js";
+
+test("Slack Web API client posts JSON and returns ok data", async () => {
+  const requests = [];
+  const slackApi = createSlackWebApi(async (url, init) => {
+    requests.push({ url, init });
+    return Response.json({ ok: true, team_id: "T123" });
+  });
+
+  const result = await slackApi("xoxb-test", "auth.test");
+
+  assert.deepEqual(result, { ok: true, data: { ok: true, team_id: "T123" } });
+  assert.equal(requests[0].url, "https://slack.com/api/auth.test");
+  assert.equal(requests[0].init.method, "POST");
+  assert.equal(requests[0].init.headers.authorization, "Bearer xoxb-test");
+  assert.equal(requests[0].init.body, "{}");
+});
+
+test("Slack Web API client returns Slack error envelopes", async () => {
+  const slackApi = createSlackWebApi(async () => Response.json({ ok: false, error: "invalid_auth" }));
+
+  assert.deepEqual(await slackApi("xoxb-test", "auth.test"), {
+    ok: false,
+    error: "invalid_auth",
+    data: { ok: false, error: "invalid_auth" },
+  });
+});
+
+test("postSlackMessage uses chat.postMessage", async () => {
+  const calls = [];
+  const result = await postSlackMessage(
+    async (token, method, body) => {
+      calls.push({ token, method, body });
+      return { ok: true, data: { ok: true, ts: "171951.0001" } };
+    },
+    "xoxb-test",
+    "C123",
+    "hello",
+  );
+
+  assert.deepEqual(calls, [{
+    token: "xoxb-test",
+    method: "chat.postMessage",
+    body: { channel: "C123", text: "hello" },
+  }]);
+  assert.deepEqual(result, { ok: true, data: { ok: true, ts: "171951.0001" } });
+});

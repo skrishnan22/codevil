@@ -10,6 +10,11 @@ import {
 } from "@codevil/shared";
 import { redactEvent } from "../redaction.js";
 import { buildReplayBatch } from "../replay-batch.js";
+import {
+  capEventForStorage,
+  EVENT_LOG_RETENTION_DAYS,
+  eventJsonByteLength,
+} from "./event-log-limits.js";
 
 export class SessionEventLog {
   private snapshot: SessionSnapshot = emptySessionSnapshot();
@@ -42,6 +47,14 @@ export class SessionEventLog {
 
   onAlarm(): void {
     this.snapshotAlarmScheduled = false;
+    this.pruneExpiredEvents();
+  }
+
+  pruneExpiredEvents(): void {
+    this.sql.exec(
+      "DELETE FROM events WHERE created_at < datetime('now', ?)",
+      `-${EVENT_LOG_RETENTION_DAYS} days`,
+    );
   }
 
   appendAndBroadcast(event: DOToCLIEvent): void {
@@ -57,7 +70,16 @@ export class SessionEventLog {
     }
 
     const redacted = redactEvent(validated.data, this.redactionSecrets);
-    const json = JSON.stringify(redacted);
+    const capped = capEventForStorage(redacted);
+    if (capped.truncated) {
+      this.getTracer()?.log("WARN", "event.append.truncated", {
+        raw_type: redacted.type,
+        original_bytes: eventJsonByteLength(JSON.stringify(redacted)),
+      });
+    }
+
+    const stored = capped.event;
+    const json = JSON.stringify(stored);
     this.sql.exec("INSERT INTO events (event_json) VALUES (?)", json);
 
     const row = this.sql.exec(
@@ -71,17 +93,17 @@ export class SessionEventLog {
       uid: () => `msg_${row.id}_${this.snapshotMessageCounter++}`,
       now: Date.now(),
     };
-    this.snapshot = applyToSessionSnapshot(this.snapshot, row.id, redacted, ctx);
+    this.snapshot = applyToSessionSnapshot(this.snapshot, row.id, stored, ctx);
     this.snapshotCursor = row.id;
     this.snapshotDirty = true;
 
-    const envelope = JSON.stringify({ cursor: row.id, event: redacted });
+    const envelope = JSON.stringify({ cursor: row.id, event: stored });
     for (const ws of this.getCliWebSockets()) {
       ws.send(envelope);
     }
 
     // Persist synchronously on terminal events; otherwise debounce via alarm.
-    if (this.snapshotTerminalEventTypes.has(redacted.type)) {
+    if (this.snapshotTerminalEventTypes.has(stored.type)) {
       this.persistSnapshot();
     } else {
       this.scheduleSnapshotPersist();
@@ -117,7 +139,7 @@ export class SessionEventLog {
   replayEvents(ws: WebSocket, afterCursor: number): void {
     // Schema re-validation skipped: rows were validated when written.
     const rows = this.sql.exec(
-      "SELECT id, event_json FROM events WHERE id > ? AND path = 'session' ORDER BY id ASC",
+      "SELECT id, event_json FROM events WHERE id > ? ORDER BY id ASC",
       afterCursor,
     );
     const events = buildReplayBatch(

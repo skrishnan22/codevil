@@ -208,6 +208,7 @@ export type {
   ConsolidateAnnotationsMessage,
   AskQuestionResponse,
   AskQuestionCancelled,
+  ProtocolErrorMessage,
   DOToSandboxMessage,
   SandboxAgentEvent,
   SandboxCloneStarted,
@@ -250,6 +251,7 @@ export {
   ConsolidateAnnotationsMessageSchema,
   AskQuestionResponseSchema,
   AskQuestionCancelledSchema,
+  ProtocolErrorMessageSchema,
   DOToSandboxMessageSchema,
   SandboxAgentEventSchema,
   SandboxCloneStartedSchema,
@@ -460,6 +462,7 @@ export {
 
 export type { Boundary, ValidationDrop } from "./validation.js";
 export {
+  clientValidationErrorMessage,
   parseInbound,
   setValidationDropSink,
   tracerValidationDropSink,

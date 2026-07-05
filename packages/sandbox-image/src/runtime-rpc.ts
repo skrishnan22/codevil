@@ -6,9 +6,12 @@ type CredentialRequestMessage = Extract<SandboxToDOMessage, { type: "credential_
 type CreatePRRequestMessage = Extract<SandboxToDOMessage, { type: "create_pr_request" }>;
 type AskQuestionRequestMessage = Extract<SandboxToDOMessage, { type: "ask_question_request" }>;
 
+const DEFAULT_ASK_QUESTION_TIMEOUT_MS = 600_000;
+
 export class SandboxRpcCoordinator {
   private readonly send: (message: SandboxToDOMessage) => void;
   private readonly credentialTimeoutMs: number;
+  private readonly askQuestionTimeoutMs: number;
   private credentialRequests = new Map<string, {
     resolve(credential: GitCredential | undefined): void;
     timeout: ReturnType<typeof setTimeout>;
@@ -20,14 +23,17 @@ export class SandboxRpcCoordinator {
   }>();
   private askQuestionRequests = new Map<string, {
     resolve(outcome: AskQuestionOutcome): void;
+    timeout: ReturnType<typeof setTimeout>;
   }>();
 
   constructor(options: {
     send: (message: SandboxToDOMessage) => void;
     credentialTimeoutMs: number;
+    askQuestionTimeoutMs?: number;
   }) {
     this.send = options.send;
     this.credentialTimeoutMs = options.credentialTimeoutMs;
+    this.askQuestionTimeoutMs = options.askQuestionTimeoutMs ?? DEFAULT_ASK_QUESTION_TIMEOUT_MS;
   }
 
   async requestCredential(request: Omit<CredentialRequestMessage, "type" | "request_id">): Promise<GitCredential | undefined> {
@@ -122,7 +128,15 @@ export class SandboxRpcCoordinator {
     } satisfies AskQuestionRequestMessage);
 
     return new Promise((resolve) => {
-      this.askQuestionRequests.set(requestId, { resolve });
+      const timeout = setTimeout(() => {
+        this.askQuestionRequests.delete(requestId);
+        resolve({
+          cancelled: true,
+          reason: "Timed out waiting for question response",
+        });
+      }, this.askQuestionTimeoutMs);
+
+      this.askQuestionRequests.set(requestId, { resolve, timeout });
     });
   }
 
@@ -133,6 +147,7 @@ export class SandboxRpcCoordinator {
   handleAskQuestionResponse(message: Extract<DOToSandboxMessage, { type: "ask_question_response" }>): void {
     const pending = this.askQuestionRequests.get(message.request_id);
     if (!pending) return;
+    clearTimeout(pending.timeout);
     this.askQuestionRequests.delete(message.request_id);
     pending.resolve({
       cancelled: false,
@@ -145,6 +160,7 @@ export class SandboxRpcCoordinator {
   handleAskQuestionCancelled(message: Extract<DOToSandboxMessage, { type: "ask_question_cancelled" }>): void {
     const pending = this.askQuestionRequests.get(message.request_id);
     if (!pending) return;
+    clearTimeout(pending.timeout);
     this.askQuestionRequests.delete(message.request_id);
     pending.resolve({ cancelled: true, reason: message.reason });
   }

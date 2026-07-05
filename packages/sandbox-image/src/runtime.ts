@@ -29,6 +29,7 @@ import { executePrompt, planPrompt, refinePrompt } from "./prompts.js";
 import { parsePreviewSuggestion } from "./preview-parsers.js";
 export { parsePreviewCommand, parsePreviewDiscovery, parsePreviewSuggestion } from "./preview-parsers.js";
 import { SandboxRpcCoordinator } from "./runtime-rpc.js";
+import { sandboxLogException } from "./logging.js";
 import { setupRepository } from "./repo-setup.js";
 export { dependencyCacheEnv } from "./repo-setup.js";
 import {
@@ -118,6 +119,7 @@ export class SandboxRuntime {
     this.rpc = new SandboxRpcCoordinator({
       send: this.send,
       credentialTimeoutMs: this.credentialTimeoutMs,
+      askQuestionTimeoutMs: options.askQuestionTimeoutMs,
     });
   }
 
@@ -175,8 +177,13 @@ export class SandboxRuntime {
         case "preview_stop":
           await this.handlePreviewStop();
           return;
+        case "protocol_error":
+          return;
       }
     } catch (error) {
+      sandboxLogException("sandbox_handle_message_failed", error, {
+        message_type: message.type,
+      });
       this.send({
         type: "error",
         message: error instanceof Error ? error.message : String(error),

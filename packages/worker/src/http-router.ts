@@ -1,4 +1,5 @@
 import { GOOGLE_SOCIAL_SIGN_IN_PATH } from "./auth-redirect.js";
+import { handleHealth, handleReady } from "./health.js";
 import { isAppShellNavigation, isOriginGuardedPath, requireTrustedOrigin } from "./http-guards.js";
 import {
   authenticate,
@@ -38,6 +39,14 @@ export async function dispatchHttpRequest(
   const { withCors } = deps;
   const url = new URL(request.url);
   const path = url.pathname;
+
+  if (path === "/health" && request.method === "GET") {
+    return handleHealth();
+  }
+
+  if (path === "/ready" && request.method === "GET") {
+    return handleReady(env);
+  }
 
   const hostPreview = previewTokenFromHost(url.hostname);
   if (hostPreview) {

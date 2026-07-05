@@ -6,6 +6,8 @@ import type { CostInfo } from "@codevil/shared";
 import { MAX_VERIFICATION_ATTEMPTS, addCost, zeroCost } from "@codevil/shared";
 
 import { repairPrompt } from "./prompts.js";
+import { detectPackageManager } from "./package-manager.js";
+import { trimOutput } from "./runtime-helpers.js";
 
 export interface VerificationResult {
   success: boolean;
@@ -119,7 +121,7 @@ export function detectSetupCommand(cwd: string): string | undefined {
     return "bash .codevil/setup.sh";
   }
 
-  const packageManager = detectPackageManager(cwd);
+  const packageManager = detectPackageManager({ cwd });
   switch (packageManager) {
     case "pnpm":
       return "pnpm install --frozen-lockfile";
@@ -143,7 +145,7 @@ export function detectVerificationCommand(cwd: string): string | undefined {
   if (existsSync(packageJson)) {
     const scripts = readPackageScripts(packageJson);
     if (scripts.has("test")) {
-      switch (detectPackageManager(cwd)) {
+      switch (detectPackageManager({ cwd })) {
         case "pnpm":
           return "pnpm test";
         case "yarn":
@@ -167,32 +169,6 @@ export function detectVerificationCommand(cwd: string): string | undefined {
 
 export function formatVerificationFailure(result: VerificationResult): string {
   return `${result.command} failed:\n${result.output}`.trim();
-}
-
-function detectPackageManager(cwd: string): "pnpm" | "npm" | "yarn" | "bun" | undefined {
-  const packageJson = join(cwd, "package.json");
-  if (existsSync(packageJson)) {
-    const packageManager = readPackageManager(packageJson);
-    if (packageManager === "pnpm" || packageManager === "npm" || packageManager === "yarn" || packageManager === "bun") {
-      return packageManager;
-    }
-  }
-
-  if (existsSync(join(cwd, "pnpm-lock.yaml"))) return "pnpm";
-  if (existsSync(join(cwd, "package-lock.json")) || existsSync(join(cwd, "npm-shrinkwrap.json"))) return "npm";
-  if (existsSync(join(cwd, "yarn.lock"))) return "yarn";
-  if (existsSync(join(cwd, "bun.lock")) || existsSync(join(cwd, "bun.lockb"))) return "bun";
-  return undefined;
-}
-
-function readPackageManager(packageJson: string): string | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(packageJson, "utf8")) as { packageManager?: unknown };
-    if (typeof parsed.packageManager !== "string") return undefined;
-    return parsed.packageManager.split("@", 1)[0];
-  } catch {
-    return undefined;
-  }
 }
 
 function readPackageScripts(packageJson: string): Set<string> {
@@ -260,10 +236,4 @@ function runShell(
       });
     });
   });
-}
-
-function trimOutput(output: string): string {
-  const maxLength = 32 * 1024;
-  if (output.length <= maxLength) return output.trim();
-  return output.slice(output.length - maxLength).trim();
 }

@@ -11,7 +11,12 @@ import {
 import { configuredWebOrigins } from "./auth-config.js";
 import { dispatchHttpRequest } from "./http-router.js";
 import { json } from "./http-handlers.js";
-import { sandboxLifecycleLogger } from "./logging.js";
+import {
+  handleUncaughtHttpError,
+  observeRoutedResponse,
+  sandboxLifecycleLogger,
+  withRequestId,
+} from "./logging.js";
 import type { Env } from "./worker-env.js";
 
 export type { Env } from "./worker-env.js";
@@ -180,13 +185,35 @@ export default {
       return new Response(null, { status: 204, headers: corsHeadersFor(request, env) });
     }
 
-    const routed = await dispatchHttpRequest(request, env, { withCors });
-    if (routed) return routed;
+    const requestId = crypto.randomUUID();
+    const startedAt = Date.now();
+    const path = new URL(request.url).pathname;
+    const applyCors = (response: Response) => withCors(request, env, response);
 
-    if (request.method === "GET" || request.method === "HEAD") {
-      return env.ASSETS.fetch(request);
+    try {
+      const routed = await dispatchHttpRequest(request, env, { withCors });
+      if (routed) {
+        return observeRoutedResponse(routed, {
+          requestId,
+          method: request.method,
+          path,
+          startedAt,
+        });
+      }
+
+      if (request.method === "GET" || request.method === "HEAD") {
+        return env.ASSETS.fetch(request);
+      }
+
+      return applyCors(withRequestId(json({ error: "Not found" }, 404), requestId));
+    } catch (error) {
+      return handleUncaughtHttpError(error, {
+        requestId,
+        method: request.method,
+        path,
+        startedAt,
+        withCors: applyCors,
+      });
     }
-
-    return withCors(request, env, json({ error: "Not found" }, 404));
   },
 } satisfies ExportedHandler<Env>;

@@ -12,6 +12,7 @@ import {
   isValidTransition,
   isTerminalState,
   CLIToDOMessageSchema,
+  clientValidationErrorMessage,
   parseInbound,
   createTracer,
   setValidationDropSink,
@@ -105,6 +106,7 @@ import {
   initializeSandboxConnection,
   provisionSessionSandbox,
 } from "./orchestrator/sandbox-handlers.js";
+import { runSessionDirectoryUpdateWithRetry } from "./session-directory.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
 
@@ -230,7 +232,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.appendAndBroadcast({ type: "session_created", session_id: sessionId });
     this.appendAndBroadcast({ type: "status", message: "Session created. Waiting for sandbox provisioning." });
     this.ctx.waitUntil(provisionSessionSandbox(this));
-    void this.armNextAlarm();
+    this.armNextAlarmSafe();
   }
 
   async alarm(): Promise<void> {
@@ -295,7 +297,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       return;
     }
 
-    void this.armNextAlarm(now);
+    this.armNextAlarmSafe(now);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -388,7 +390,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       this.saveMeta();
       this.appendAndBroadcast({ type: "status", message: "Sandbox reconnected." });
       this.updateDirectory({ sandbox_state: "ready" });
-      void this.armNextAlarm();
+      this.armNextAlarmSafe();
     }
 
     return new Response(null, { status: 101, webSocket: client });
@@ -410,7 +412,10 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       return;
     }
     const msg = parseInbound(CLIToDOMessageSchema, raw, "cli_to_do");
-    if (!msg) return;
+    if (!msg) {
+      ws.send(JSON.stringify({ type: "error", message: clientValidationErrorMessage(raw) }));
+      return;
+    }
 
     this.loadMeta();
     if (!this.meta) {
@@ -516,7 +521,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
           closeReason: reason,
           state,
         }));
-        this.ctx.waitUntil(this.armNextAlarm());
+        this.ctx.waitUntil(this.armNextAlarmSafe());
       }
       return;
     }
@@ -766,17 +771,16 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
 
     const assignments = entries.map(([key]) => `${key} = ?`).join(", ");
     const bindings = [...entries.map(([, value]) => value), this.meta.session_id];
+    const sql = `UPDATE sessions SET ${assignments} WHERE id = ?`;
 
     this.ctx.waitUntil(
-      this.workerEnv.DB
-        .prepare(`UPDATE sessions SET ${assignments} WHERE id = ?`)
-        .bind(...bindings)
-        .run()
-        .catch((error) => {
+      runSessionDirectoryUpdateWithRetry(this.workerEnv.DB, sql, bindings, {
+        onFailure: (error) => {
           this.getTracer()?.log("ERROR", "session_directory.update.failed", {
             error: error instanceof Error ? error.message : String(error),
           });
-        }),
+        },
+      }),
     );
   }
 
@@ -859,6 +863,14 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     if (Number.isFinite(nextDeadline)) {
       await this.ctx.storage.setAlarm(nextDeadline);
     }
+  }
+
+  private armNextAlarmSafe(now?: number): Promise<void> {
+    return this.armNextAlarm(now).catch((error) => {
+      this.getTracer()?.log("ERROR", "alarm.arm.failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   private closeSandboxSockets(reason: string): void {

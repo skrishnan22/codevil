@@ -130,6 +130,11 @@ export const AskQuestionCancelledSchema = z.object({
   reason: z.string(),
 });
 
+export const ProtocolErrorMessageSchema = z.object({
+  type: z.literal("protocol_error"),
+  message: z.string(),
+});
+
 export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   InitMessageSchema,
   AgentTurnMessageSchema,
@@ -144,6 +149,7 @@ export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   ConsolidateAnnotationsMessageSchema,
   AskQuestionResponseSchema,
   AskQuestionCancelledSchema,
+  ProtocolErrorMessageSchema,
 ]);
 
 export type InitMessage = z.infer<typeof InitMessageSchema>;
@@ -158,6 +164,7 @@ export type PreviewStartSandboxMessage = z.infer<typeof PreviewStartSandboxMessa
 export type PreviewStopSandboxMessage = z.infer<typeof PreviewStopSandboxMessageSchema>;
 export type ConsolidationAnnotation = z.infer<typeof ConsolidationAnnotationSchema>;
 export type ConsolidateAnnotationsMessage = z.infer<typeof ConsolidateAnnotationsMessageSchema>;
+export type ProtocolErrorMessage = z.infer<typeof ProtocolErrorMessageSchema>;
 export type DOToSandboxMessage = z.infer<typeof DOToSandboxMessageSchema>;
 
 // --- Sandbox → DO messages ---

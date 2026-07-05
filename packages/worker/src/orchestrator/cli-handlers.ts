@@ -112,22 +112,10 @@ export function handleAgentRequest(
     created_at: run.created_at,
   });
 
-  if (!host.meta.active_run && host.meta.state !== "ready") {
-    host.meta.queued_runs = [...host.meta.queued_runs, run];
-    host.saveMeta();
-    host.appendAndBroadcast({
-      type: "agent_request_queued",
-      run_id: run.id,
-      position: host.meta.queued_runs.length,
-    });
-    host.updateDirectory({});
-    return;
-  }
-
   const next = enqueueAgentRun({
     active: host.meta.active_run ?? null,
     queue: host.meta.queued_runs,
-  }, run);
+  }, run, { sessionReady: host.meta.state === "ready" });
 
   host.meta.active_run = next.active;
   host.meta.queued_runs = next.queue;

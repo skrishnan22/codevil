@@ -1,11 +1,16 @@
 import {
+  buildCreateSessionResponse,
   buildSessionSummary,
   legacyDirectoryGuardColumns,
   normalizeCreateSessionBody,
+  normalizeIdempotencyKey,
   recentSessionsSelect,
   sessionByIdSelect,
   sessionDirectoryFailureUpdate,
   sessionDirectoryInsert,
+  sessionIdempotencyInsert,
+  sessionIdempotencyLookup,
+  SESSION_IDEMPOTENCY_HEADER,
   type SessionDirectoryRow,
 } from "./session-directory.js";
 import { createCodevilAuth } from "./auth.js";
@@ -465,6 +470,37 @@ export async function handleCreateSession(
   env: Env,
   auth: AuthContext,
 ): Promise<Response> {
+  let idempotencyKey: string | null = null;
+  try {
+    idempotencyKey = normalizeIdempotencyKey(request.headers.get(SESSION_IDEMPOTENCY_HEADER));
+  } catch (error) {
+    return json({
+      error: "Invalid Idempotency-Key",
+      detail: error instanceof Error ? error.message : String(error),
+    }, 400);
+  }
+
+  if (idempotencyKey) {
+    const lookup = sessionIdempotencyLookup(auth.userId, idempotencyKey);
+    const existing = await env.DB
+      .prepare(lookup.sql)
+      .bind(...lookup.bindings)
+      .first<{ session_id: string }>();
+    if (existing) {
+      const select = sessionByIdSelect(existing.session_id);
+      const row = await env.DB
+        .prepare(select.sql)
+        .bind(...select.bindings)
+        .first<SessionDirectoryRow>();
+      if (row) {
+        return json(
+          buildCreateSessionResponse(existing.session_id, request.url, row),
+          200,
+        );
+      }
+    }
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -506,7 +542,42 @@ export async function handleCreateSession(
     last_event_at: now,
   };
   const insert = sessionDirectoryInsert(row);
-  await env.DB.prepare(insert.sql).bind(...insert.bindings).run();
+  const statements = [env.DB.prepare(insert.sql).bind(...insert.bindings)];
+  if (idempotencyKey) {
+    const idempotency = sessionIdempotencyInsert({
+      user_id: auth.userId,
+      idempotency_key: idempotencyKey,
+      session_id: sessionId,
+      created_at: now,
+    });
+    statements.push(env.DB.prepare(idempotency.sql).bind(...idempotency.bindings));
+  }
+
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    if (idempotencyKey) {
+      const lookup = sessionIdempotencyLookup(auth.userId, idempotencyKey);
+      const existing = await env.DB
+        .prepare(lookup.sql)
+        .bind(...lookup.bindings)
+        .first<{ session_id: string }>();
+      if (existing) {
+        const select = sessionByIdSelect(existing.session_id);
+        const existingRow = await env.DB
+          .prepare(select.sql)
+          .bind(...select.bindings)
+          .first<SessionDirectoryRow>();
+        if (existingRow) {
+          return json(
+            buildCreateSessionResponse(existing.session_id, request.url, existingRow),
+            200,
+          );
+        }
+      }
+    }
+    throw error;
+  }
 
   const doId = env.ORCHESTRATOR.idFromName(sessionId);
   const stub = env.ORCHESTRATOR.get(doId);
@@ -531,11 +602,7 @@ export async function handleCreateSession(
     }, 500);
   }
 
-  return json({
-    session_id: sessionId,
-    ws_url: new URL(`/sessions/${sessionId}/ws`, request.url).toString(),
-    summary: buildSessionSummary(row),
-  }, 201);
+  return json(buildCreateSessionResponse(sessionId, request.url, row), 201);
 }
 
 export async function handleListSessions(

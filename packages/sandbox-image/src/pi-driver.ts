@@ -272,10 +272,16 @@ export function extractAssistantDeltaFromEvent(event: unknown): string {
   return "";
 }
 
+// Pi SDK keeps _agentEventQueue private on AgentSession with no public flush/await API.
+// Reaching into it risks breakage on SDK upgrades; keep this guard defensive.
 async function waitForQueuedAgentEvents(session: AgentSession): Promise<void> {
   const maybeQueued = (session as unknown as { _agentEventQueue?: unknown })._agentEventQueue;
-  if (maybeQueued && typeof (maybeQueued as Promise<void>).then === "function") {
-    await maybeQueued;
+  if (maybeQueued != null && typeof (maybeQueued as Promise<unknown>).then === "function") {
+    try {
+      await maybeQueued;
+    } catch {
+      // A rejected queue should not block the caller.
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 import { isRecord } from "@codevil/shared";
 
 import type { PreviewCommand } from "./preview-manager.js";
+import { PreviewCommandRejectedError, resolvePreviewSpawn } from "./preview-spawn.js";
 
 export function parsePreviewCommand(value: unknown): PreviewCommand | undefined {
   if (!isRecord(value)) return undefined;
@@ -10,9 +11,18 @@ export function parsePreviewCommand(value: unknown): PreviewCommand | undefined 
   if (typeof fields.port !== "number" || !Number.isInteger(fields.port)) return undefined;
   if (fields.port < 1024 || fields.port > 65535 || fields.port === 3000) return undefined;
   if (fields.cwd !== undefined && typeof fields.cwd !== "string") return undefined;
+
+  const command = fields.command.trim();
+  try {
+    resolvePreviewSpawn(command);
+  } catch (error) {
+    if (error instanceof PreviewCommandRejectedError) return undefined;
+    throw error;
+  }
+
   return {
     cwd: fields.cwd?.trim() || ".",
-    command: fields.command.trim(),
+    command,
     port: fields.port,
   };
 }

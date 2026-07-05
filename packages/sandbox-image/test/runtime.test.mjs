@@ -17,6 +17,7 @@ import {
 } from "../dist/runtime.js";
 import { createSandboxMessageDispatcher } from "../dist/entrypoint.js";
 import { PreviewManager } from "../dist/preview-manager.js";
+import { detectPackageManager } from "../dist/package-manager.js";
 import {
   DEPENDENCY_ARTIFACT_FORMAT_VERSION,
   computeDependencyFingerprint,
@@ -589,6 +590,30 @@ test("detectPreviewApps reads pnpm-workspace.yaml packages", async () => {
   }
 });
 
+test("detectPreviewApps uses the root package manager for workspace apps", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-pnpm-next-"));
+  try {
+    await writeFile(join(workspace, "package.json"), JSON.stringify({ name: "root", private: true }));
+    await writeFile(join(workspace, "pnpm-workspace.yaml"), "packages:\n  - 'apps/*'\n");
+    await writeFile(join(workspace, "pnpm-lock.yaml"), "");
+
+    await mkdir(join(workspace, "apps", "landing"), { recursive: true });
+    await writeFile(join(workspace, "apps", "landing", "package.json"), JSON.stringify({
+      name: "landing",
+      scripts: { dev: "next dev" },
+      dependencies: { next: "^16.0.0" },
+    }));
+
+    const apps = detectPreviewApps(workspace);
+
+    assert.equal(apps.length, 1);
+    assert.equal(apps[0].framework, "next");
+    assert.equal(apps[0].command, "pnpm dev -- --hostname 0.0.0.0 --port 3001");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("detectPreviewCommand remaps Next.js away from port 3000", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-next-"));
   try {
@@ -674,6 +699,21 @@ test("sandbox dispatcher lets create_pr_response resolve a tool call during an a
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(calls, ["agent_turn", "create_pr_response"]);
+});
+
+test("sandbox dispatcher consumes protocol_error without queueing", async () => {
+  const calls = [];
+  const runtime = {
+    async handleMessage(message) {
+      calls.push(message.type);
+    },
+  };
+  const dispatch = createSandboxMessageDispatcher(runtime);
+
+  dispatch({ type: "protocol_error", message: "Invalid message" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, []);
 });
 
 test("PreviewManager includes recent process output when startup times out", async () => {
@@ -781,6 +821,81 @@ test("PreviewManager treats an accepted TCP connection as ready", async () => {
     assert.equal(ready.length, 1);
   } finally {
     await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager restarts when the requested command differs from the running preview", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-restart-"));
+  const ready = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 1_000,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped() {},
+    onError() {},
+  });
+
+  try {
+    await manager.start({
+      command: "node -e \"require('net').createServer(() => {}).listen(59987, '127.0.0.1')\"",
+      port: 59987,
+    });
+    await manager.start({
+      command: "node -e \"require('net').createServer(() => {}).listen(59986, '127.0.0.1')\"",
+      port: 59986,
+    });
+
+    assert.equal(ready.length, 2);
+    assert.equal(ready[0].port, 59987);
+    assert.equal(ready[1].port, 59986);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager stop terminates a running child within the grace period", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-stop-grace-"));
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 1_000,
+    onStarting() {},
+    onReady() {},
+    onStopped() {},
+    onError() {},
+  });
+
+  try {
+    await manager.start({
+      command: "node -e \"require('net').createServer(() => {}).listen(59985, '127.0.0.1'); setInterval(() => {}, 1000)\"",
+      port: 59985,
+    });
+
+    const started = Date.now();
+    await manager.stop();
+    assert.ok(Date.now() - started < 8_000, "stop should not hang waiting for child exit");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("detectPackageManager walks from app cwd up to repo root for lockfiles", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-package-manager-walk-"));
+  try {
+    await writeFile(join(workspace, "package.json"), JSON.stringify({ name: "root", private: true }));
+    await writeFile(join(workspace, "pnpm-lock.yaml"), "");
+
+    await mkdir(join(workspace, "apps", "web"), { recursive: true });
+    await writeFile(join(workspace, "apps", "web", "package.json"), JSON.stringify({ name: "web" }));
+
+    assert.equal(
+      detectPackageManager({ cwd: join(workspace, "apps", "web"), root: workspace }),
+      "pnpm",
+    );
+    assert.equal(detectPackageManager({ cwd: workspace }), "pnpm");
+  } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });

@@ -53,3 +53,22 @@ test("finishActiveAgentRun promotes the next queued run", () => {
   assert.equal(next.started?.id, queued.id);
   assert.equal(next.queue.length, 0);
 });
+
+test("enqueueAgentRun queues when session is not ready and no run is active", () => {
+  const run = createAgentRun({ actor, text: "early request", now: "2026-06-03T00:00:00.000Z" });
+  const next = enqueueAgentRun({ active: null, queue: [] }, run, { sessionReady: false });
+
+  assert.equal(next.active, null);
+  assert.equal(next.queued?.position, 1);
+  assert.equal(next.queue[0].id, run.id);
+  assert.equal(next.started, undefined);
+});
+
+test("enqueueAgentRun starts immediately when session is ready and no run is active", () => {
+  const run = createAgentRun({ actor, text: "ready request", now: "2026-06-03T00:00:00.000Z" });
+  const next = enqueueAgentRun({ active: null, queue: [] }, run, { sessionReady: true });
+
+  assert.equal(next.active?.id, run.id);
+  assert.equal(next.started?.id, run.id);
+  assert.equal(next.queued, undefined);
+});

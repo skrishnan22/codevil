@@ -2,10 +2,14 @@ import { createServer } from "node:http";
 import { connect as connectTcp } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import type { Readable } from "node:stream";
 
 import type { PreviewApp, PreviewFramework } from "@codevil/shared";
+
+import { sandboxLogException, sandboxLogger } from "./logging.js";
+import { detectPackageManager } from "./package-manager.js";
+import { PreviewCommandRejectedError, resolvePreviewSpawn } from "./preview-spawn.js";
 
 export interface PreviewCommand {
   command: string;
@@ -31,6 +35,7 @@ type PreviewState =
 
 const DEFAULT_PREVIEW_READINESS_TIMEOUT_MS = 30_000;
 const NEXT_PREVIEW_READINESS_TIMEOUT_MS = 120_000;
+const STOP_GRACE_MS = 5_000;
 
 export class PreviewManager {
   private state: PreviewState = { state: "idle" };
@@ -39,11 +44,17 @@ export class PreviewManager {
 
   async start(command: PreviewCommand): Promise<void> {
     if (this.state.state === "running" && !this.state.child.killed) {
-      this.options.onReady(this.state.command);
-      return;
+      if (previewCommandsEqual(this.state.command, command)) {
+        this.options.onReady(this.state.command);
+        return;
+      }
+      await this.stop();
     }
 
-    if (this.state.state === "starting") return;
+    if (this.state.state === "starting") {
+      sandboxLogger().log("WARN", "preview_start_ignored", { reason: "already_starting" });
+      return;
+    }
 
     this.options.onStarting(command);
     const recentLogs: string[] = [];
@@ -56,10 +67,24 @@ export class PreviewManager {
       this.options.onLog?.(clipped);
     };
 
-    const child = spawn(command.command, {
+    let spawnSpec: ReturnType<typeof resolvePreviewSpawn>;
+    try {
+      spawnSpec = resolvePreviewSpawn(command.command);
+    } catch (error) {
+      const message = error instanceof PreviewCommandRejectedError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      sandboxLogger().log("WARN", "preview_command_rejected", { message, command: command.command });
+      this.options.onError(message);
+      return;
+    }
+
+    const child = spawn(spawnSpec.executable, spawnSpec.argv, {
       cwd: resolvePreviewCwd(this.options.cwd, command.cwd),
       detached: process.platform !== "win32",
-      shell: true,
+      shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -131,15 +156,25 @@ export class PreviewManager {
       return;
     }
 
-    if (process.platform !== "win32" && child.pid) {
-      try {
-        process.kill(-child.pid, "SIGTERM");
-      } catch {
-        child.kill("SIGTERM");
-      }
-    } else {
-      child.kill("SIGTERM");
+    const exitPromise = new Promise<void>((resolve) => {
+      child.once("exit", () => resolve());
+    });
+
+    killPreviewProcessGroup(child, "SIGTERM");
+
+    await Promise.race([
+      exitPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, STOP_GRACE_MS)),
+    ]);
+
+    if (child.exitCode === null && child.signalCode === null) {
+      killPreviewProcessGroup(child, "SIGKILL");
+      await Promise.race([
+        exitPromise,
+        new Promise<void>((resolve) => setTimeout(resolve, STOP_GRACE_MS)),
+      ]);
     }
+
     this.options.onStopped();
   }
 }
@@ -207,7 +242,12 @@ function detectAppInDirectory(root: string, dir: string): PreviewApp | undefined
     if (scriptName) {
       const scriptValue = scripts[scriptName] ?? "";
       const framework = detectFrameworkFromPackage(parsed, scriptValue);
-      const manager = detectPackageManager(dir, parsed.packageManager);
+      const manager = detectPackageManager({
+        cwd: dir,
+        root,
+        declared: parsed.packageManager,
+        fallback: "npm",
+      }) ?? "npm";
       const port = portForFramework(framework);
       return {
         key: keyFromDir(root, dir, parsed.name),
@@ -332,13 +372,20 @@ function readPackageJson(path: string): PackageJson {
   }
 }
 
-function detectPackageManager(cwd: string, packageManager?: string): "pnpm" | "npm" | "yarn" | "bun" {
-  const declared = packageManager?.split("@", 1)[0];
-  if (declared === "pnpm" || declared === "npm" || declared === "yarn" || declared === "bun") return declared;
-  if (existsSync(join(cwd, "pnpm-lock.yaml"))) return "pnpm";
-  if (existsSync(join(cwd, "yarn.lock"))) return "yarn";
-  if (existsSync(join(cwd, "bun.lock")) || existsSync(join(cwd, "bun.lockb"))) return "bun";
-  return "npm";
+function previewCommandsEqual(a: PreviewCommand, b: PreviewCommand): boolean {
+  return a.command === b.command && a.port === b.port && a.cwd === b.cwd;
+}
+
+function killPreviewProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      child.kill(signal);
+    }
+  } else {
+    child.kill(signal);
+  }
 }
 
 function detectTarget(path: string, targets: string[]): string | undefined {
@@ -514,6 +561,9 @@ function collectLines(stream: Readable | null, onLine: (line: string) => void): 
   stream.on("end", () => {
     if (buffered) onLine(buffered);
     buffered = "";
+  });
+  stream.on("error", (error) => {
+    sandboxLogException("preview_stream_error", error);
   });
 }
 

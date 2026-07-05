@@ -7,6 +7,9 @@ import type { GitCredential, GitDriver, PushBranchOptions } from "./runtime.js";
 export const DEFAULT_GIT_AUTHOR_NAME = "Codevil Coder";
 export const DEFAULT_GIT_AUTHOR_EMAIL = "coder@codevil.com";
 
+const DEFAULT_RUN_TIMEOUT_MS = 600_000;
+const KILL_GRACE_MS = 2_000;
+
 export async function configureDefaultGitIdentity(): Promise<void> {
   await run("git", ["config", "--global", "user.name", DEFAULT_GIT_AUTHOR_NAME]);
   await run("git", ["config", "--global", "user.email", DEFAULT_GIT_AUTHOR_EMAIL]);
@@ -94,6 +97,7 @@ interface RunOptions {
   cwd?: string;
   onStdout?(line: string): void;
   onStderr?(line: string): void;
+  timeoutMs?: number;
 }
 
 interface RunResult {
@@ -101,7 +105,13 @@ interface RunResult {
   stderr: string;
 }
 
+export function runGitCommand(command: string, args: string[], options: RunOptions = {}): Promise<RunResult> {
+  return run(command, args, options);
+}
+
 function run(command: string, args: string[], options: RunOptions = {}): Promise<RunResult> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -110,6 +120,28 @@ function run(command: string, args: string[], options: RunOptions = {}): Promise
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      if (child.pid) {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // Process may have already exited.
+        }
+      }
+      killTimer = setTimeout(() => {
+        if (child.pid) {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // Process may have already exited.
+          }
+        }
+      }, KILL_GRACE_MS);
+    }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -123,8 +155,18 @@ function run(command: string, args: string[], options: RunOptions = {}): Promise
       emitLines(chunk, options.onStderr);
     });
 
-    child.on("error", reject);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      reject(error);
+    });
     child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      if (timedOut) {
+        reject(new Error(`${command} ${args.join(" ")} timed out after ${timeoutMs}ms`));
+        return;
+      }
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {

@@ -87,6 +87,12 @@ function readRawType(raw: unknown): string | null {
   return null;
 }
 
+/** Client-facing error text for inbound messages that fail schema validation. */
+export function clientValidationErrorMessage(raw: unknown): string {
+  const rawType = readRawType(raw);
+  return rawType ? `Invalid message (type: ${rawType})` : "Invalid message";
+}
+
 export function parseInbound<S extends ZodTypeAny>(
   schema: S,
   raw: unknown,

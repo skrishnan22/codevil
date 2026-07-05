@@ -511,6 +511,5 @@ export async function handlePreviewStart(host: OrchestratorHost, appKey?: string
 }
 
 export async function handlePreviewStop(host: OrchestratorHost): Promise<void> {
-  host.revokePreview();
   host.sendToSandbox({ type: "preview_stop" });
 }

@@ -241,7 +241,7 @@ export function handleSandboxCloneComplete(host: OrchestratorHost): void {
 
   if (host.transition("ready")) {
     host.updateDirectory({ room_state: "ready", sandbox_state: "ready" });
-    host.appendAndBroadcast({ type: "status", message: "Repository cloned. Room is ready." });
+    host.appendAndBroadcast({ type: "status", message: "Repository cloned. Session is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
     scheduleWorkspaceCacheSnapshot(host);
     if (!host.meta.active_run && host.meta.queued_runs.length > 0) {

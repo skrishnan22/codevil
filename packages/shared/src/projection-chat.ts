@@ -153,7 +153,7 @@ export function mapEventToChat(event: DOToCLIEvent, ctx: ProjectionContext): Cha
           id: ctx.uid(),
           role: "system",
           variant: "status",
-          content: `Room ready for ${event.repo}`,
+          content: `Session ready for ${event.repo}`,
           timestamp: ts,
         },
       ];

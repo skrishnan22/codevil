@@ -11,7 +11,7 @@ export function mapEventToActivity(event: DOToCLIEvent, ctx: ProjectionContext):
 
   switch (event.type) {
     case "session_created":
-      return [eventEntry("Room created", ts, ctx, event.session_id)];
+      return [eventEntry("Session created", ts, ctx, event.session_id)];
 
     case "status":
       if (event.message === "Waiting for user approval.") return [];
@@ -21,7 +21,7 @@ export function mapEventToActivity(event: DOToCLIEvent, ctx: ProjectionContext):
       return [];
 
     case "room_ready":
-      return [eventEntry("Room ready", ts, ctx, event.repo)];
+      return [eventEntry("Session ready", ts, ctx, event.repo)];
 
     case "preview_starting":
       return [eventEntry("Preview starting", ts, ctx, event.command)];

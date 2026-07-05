@@ -1,5 +1,4 @@
-import { createServer } from "node:http";
-import { connect as connectTcp } from "node:net";
+import { createServer, request as httpRequest } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -36,25 +35,51 @@ type PreviewState =
 const DEFAULT_PREVIEW_READINESS_TIMEOUT_MS = 30_000;
 const NEXT_PREVIEW_READINESS_TIMEOUT_MS = 120_000;
 const STOP_GRACE_MS = 5_000;
+const MAX_PREVIEW_AUTO_RESTARTS = 3;
+const HTTP_READINESS_POLL_MS = 500;
+const HTTP_READINESS_REQUEST_TIMEOUT_MS = 2_000;
+
+type PreviewStartSource = "user" | "auto-restart";
 
 export class PreviewManager {
   private state: PreviewState = { state: "idle" };
+  private autoRestartCount = 0;
+  private stopping = false;
+  private stopGeneration = 0;
 
   constructor(private readonly options: PreviewManagerOptions) {}
 
-  async start(command: PreviewCommand): Promise<void> {
+  async start(
+    command: PreviewCommand,
+    source: PreviewStartSource = "user",
+    restartGeneration?: number,
+  ): Promise<void> {
+    let startGeneration: number;
+    if (source === "auto-restart") {
+      if (this.stopping) return;
+      if (restartGeneration === undefined || restartGeneration !== this.stopGeneration) return;
+      startGeneration = restartGeneration;
+    } else {
+      this.stopping = false;
+      startGeneration = ++this.stopGeneration;
+    }
+
+    const aborted = (): boolean => this.stopping || startGeneration !== this.stopGeneration;
+
     if (this.state.state === "running" && !this.state.child.killed) {
       if (previewCommandsEqual(this.state.command, command)) {
         this.options.onReady(this.state.command);
         return;
       }
-      await this.stop();
+      await this.terminateChild();
     }
 
     if (this.state.state === "starting") {
       sandboxLogger().log("WARN", "preview_start_ignored", { reason: "already_starting" });
       return;
     }
+
+    if (aborted()) return;
 
     this.options.onStarting(command);
     const recentLogs: string[] = [];
@@ -80,6 +105,8 @@ export class PreviewManager {
       this.options.onError(message);
       return;
     }
+
+    if (aborted()) return;
 
     const child = spawn(spawnSpec.executable, spawnSpec.argv, {
       cwd: resolvePreviewCwd(this.options.cwd, command.cwd),
@@ -113,10 +140,25 @@ export class PreviewManager {
     child.on("exit", () => {
       // Only react if this child is still the one we're tracking — a later
       // start() may have replaced it.
-      if (this.state.state !== "idle" && this.state.child === child) {
-        this.state = { state: "idle" };
-        this.options.onStopped();
+      if (this.state.state === "idle" || this.state.child !== child) return;
+
+      const wasRunning = this.state.state === "running";
+      const crashedCommand = this.state.command;
+      this.state = { state: "idle" };
+
+      if (!this.stopping && wasRunning && this.autoRestartCount < MAX_PREVIEW_AUTO_RESTARTS) {
+        this.autoRestartCount++;
+        const restartGeneration = this.stopGeneration;
+        sandboxLogger().log("INFO", "preview_auto_restart", {
+          attempt: this.autoRestartCount,
+          port: crashedCommand.port,
+        });
+        void this.start(crashedCommand, "auto-restart", restartGeneration);
+        return;
       }
+
+      this.autoRestartCount = 0;
+      this.options.onStopped();
     });
 
     try {
@@ -131,8 +173,14 @@ export class PreviewManager {
       // Cast defeats TS narrowing from the assignment above; `this.state` is
       // a mutable class field, so the narrow no longer holds across awaits.
       const after = this.state as PreviewState;
-      if (after.state === "idle" || after.child !== child) return;
+      if (after.state === "idle" || after.child !== child || aborted()) {
+        if (after.state !== "idle" && after.child === child) {
+          await this.terminateChild();
+        }
+        return;
+      }
       this.state = { state: "running", command, child };
+      this.autoRestartCount = 0;
       this.options.onReady(command);
     } catch (error) {
       await this.stop();
@@ -144,17 +192,25 @@ export class PreviewManager {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
+    this.stopGeneration++;
+    this.autoRestartCount = 0;
+
     if (this.state.state === "idle") {
       this.options.onStopped();
       return;
     }
 
+    await this.terminateChild();
+    this.options.onStopped();
+  }
+
+  private async terminateChild(): Promise<void> {
+    if (this.state.state === "idle") return;
+
     const child = this.state.child;
     this.state = { state: "idle" };
-    if (child.killed) {
-      this.options.onStopped();
-      return;
-    }
+    if (child.killed) return;
 
     const exitPromise = new Promise<void>((resolve) => {
       child.once("exit", () => resolve());
@@ -174,8 +230,6 @@ export class PreviewManager {
         new Promise<void>((resolve) => setTimeout(resolve, STOP_GRACE_MS)),
       ]);
     }
-
-    this.options.onStopped();
   }
 }
 
@@ -499,7 +553,7 @@ function waitForPortReady(port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const poll = () => {
-      checkTcp(port).then((ready) => {
+      checkHttp(port).then((ready) => {
         if (ready) {
           resolve();
           return;
@@ -510,7 +564,7 @@ function waitForPortReady(port: number, timeoutMs: number): Promise<void> {
           ));
           return;
         }
-        setTimeout(poll, 500);
+        setTimeout(poll, HTTP_READINESS_POLL_MS);
       });
     };
     poll();
@@ -528,22 +582,28 @@ function formatDuration(ms: number): string {
   return `${Number((ms / 1_000).toFixed(2))}s`;
 }
 
-function checkTcp(port: number): Promise<boolean> {
+function checkHttp(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = connectTcp({
-      host: "127.0.0.1",
-      port,
-      timeout: 1_000,
-    });
-    socket.on("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.on("timeout", () => {
-      socket.destroy();
+    const req = httpRequest(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/",
+        method: "GET",
+        timeout: HTTP_READINESS_REQUEST_TIMEOUT_MS,
+      },
+      (res) => {
+        res.resume();
+        const status = res.statusCode ?? 0;
+        resolve(status > 0 && status < 500);
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy();
       resolve(false);
     });
-    socket.on("error", () => resolve(false));
+    req.on("error", () => resolve(false));
+    req.end();
   });
 }
 

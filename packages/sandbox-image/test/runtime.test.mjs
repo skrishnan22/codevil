@@ -26,6 +26,11 @@ import {
   writeDependencyArtifactMarker,
 } from "../dist/dependency-cache.js";
 
+function previewHttpServerCommand(port, trailing = "") {
+  const suffix = trailing ? `;${trailing}` : "";
+  return `node -e "require('http').createServer((req,res)=>{res.writeHead(200);res.end('ok')}).listen(${port},'127.0.0.1')${suffix}"`;
+}
+
 const zeroCost = {
   input_tokens: 0,
   output_tokens: 0,
@@ -798,8 +803,8 @@ test("PreviewManager honors command-specific readiness timeout", async () => {
   }
 });
 
-test("PreviewManager treats an accepted TCP connection as ready", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-tcp-ready-"));
+test("PreviewManager waits for HTTP readiness before marking ready", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-http-ready-"));
   const ready = [];
   const errors = [];
   const manager = new PreviewManager({
@@ -813,12 +818,39 @@ test("PreviewManager treats an accepted TCP connection as ready", async () => {
 
   try {
     await manager.start({
-      command: "node -e \"require('net').createServer(() => {}).listen(59998, '127.0.0.1')\"",
+      command: previewHttpServerCommand(59998),
       port: 59998,
     });
 
     assert.equal(errors.length, 0);
     assert.equal(ready.length, 1);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager does not treat a TCP-only listener as ready", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-tcp-not-ready-"));
+  const ready = [];
+  const errors = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 500,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped() {},
+    onError: (message) => errors.push(message),
+  });
+
+  try {
+    await manager.start({
+      command: "node -e \"require('net').createServer(() => {}).listen(59998, '127.0.0.1')\"",
+      port: 59998,
+    });
+
+    assert.equal(ready.length, 0);
+    assert.match(errors[0], /Preview server did not become healthy on port 59998/);
   } finally {
     await manager.stop();
     await rm(workspace, { recursive: true, force: true });
@@ -839,17 +871,79 @@ test("PreviewManager restarts when the requested command differs from the runnin
 
   try {
     await manager.start({
-      command: "node -e \"require('net').createServer(() => {}).listen(59987, '127.0.0.1')\"",
+      command: previewHttpServerCommand(59987),
       port: 59987,
     });
     await manager.start({
-      command: "node -e \"require('net').createServer(() => {}).listen(59986, '127.0.0.1')\"",
+      command: previewHttpServerCommand(59986),
       port: 59986,
     });
 
     assert.equal(ready.length, 2);
     assert.equal(ready[0].port, 59987);
     assert.equal(ready[1].port, 59986);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager auto-restarts after an unexpected exit while running", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-auto-restart-"));
+  const ready = [];
+  const stopped = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 2_000,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped: () => stopped.push(true),
+    onError() {},
+  });
+
+  try {
+    await manager.start({
+      command: previewHttpServerCommand(59984, "setTimeout(()=>process.exit(0),800)"),
+      port: 59984,
+    });
+    assert.equal(ready.length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    assert.ok(ready.length >= 2, "preview should auto-restart after crash");
+    assert.equal(stopped.length, 0, "auto-restart should not emit stopped");
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager does not auto-restart after the user stops preview", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-stop-blocks-restart-"));
+  const ready = [];
+  const stopped = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 2_000,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped: () => stopped.push(true),
+    onError() {},
+  });
+
+  try {
+    await manager.start({
+      command: previewHttpServerCommand(59983, "setTimeout(()=>process.exit(0),800)"),
+      port: 59983,
+    });
+    assert.equal(ready.length, 1);
+
+    setTimeout(() => {
+      void manager.stop();
+    }, 400);
+
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    assert.equal(ready.length, 1, "should not auto-restart after user stop");
+    assert.ok(stopped.length >= 1);
   } finally {
     await manager.stop();
     await rm(workspace, { recursive: true, force: true });
@@ -869,7 +963,7 @@ test("PreviewManager stop terminates a running child within the grace period", a
 
   try {
     await manager.start({
-      command: "node -e \"require('net').createServer(() => {}).listen(59985, '127.0.0.1'); setInterval(() => {}, 1000)\"",
+      command: previewHttpServerCommand(59985, "setInterval(()=>{},1000)"),
       port: 59985,
     });
 
@@ -1177,7 +1271,7 @@ test("preview_start uses the cached main-agent preview command without a discove
       plan: [
         "## Plan",
         "",
-        "{\"preview\":{\"cwd\":\".\",\"command\":\"node -e \\\"require('net').createServer(() => {}).listen(59997, '127.0.0.1')\\\"\",\"port\":59997}}",
+        "{\"preview\":{\"cwd\":\".\",\"command\":\"node -e \\\"require('http').createServer((req,res)=>{res.writeHead(200);res.end('ok')}).listen(59997,'127.0.0.1')\\\"\",\"port\":59997}}",
       ].join("\n"),
       cost: zeroCost,
     },
@@ -1202,7 +1296,7 @@ test("preview_start uses the cached main-agent preview command without a discove
     assert.equal(createdAgents, 1);
     assert.deepEqual(sent.at(-1), {
       type: "preview_ready",
-      command: "node -e \"require('net').createServer(() => {}).listen(59997, '127.0.0.1')\"",
+      command: previewHttpServerCommand(59997),
       port: 59997,
     });
 

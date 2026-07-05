@@ -45,7 +45,7 @@ const activity = [
   </div>
   <div class="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
     <div class="flex items-center gap-2">
-      <span class="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-fg-4">ROOM · {phases[activePhase]}</span>
+      <span class="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-fg-4">SESSION · {phases[activePhase]}</span>
       <span class="flex gap-1" aria-label={`Phase ${activePhase + 1} of ${phases.length}`}>
         {phases.map((_, i) => (
           <span class={"h-1.5 w-5 rounded-full " + (i <= activePhase ? "bg-accent" : "bg-line")} />
@@ -58,7 +58,7 @@ const activity = [
         <span class="flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface bg-fg-3/60 text-[10px] font-semibold text-surface">S</span>
         <span class="flex h-6 w-6 items-center justify-center rounded-full border-2 border-surface bg-accent text-[10px] font-semibold text-accent-fg" title="Codevil">◆</span>
       </div>
-      <span class="font-mono text-[10px] text-fg-4">3 in room</span>
+      <span class="font-mono text-[10px] text-fg-4">3 in session</span>
     </div>
   </div>
   <div class="grid grid-cols-2 divide-x divide-line text-left">
@@ -85,7 +85,7 @@ const activity = [
       <div class="mt-1 flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-1.5">
         <span class="rounded-full bg-accent/15 px-2 py-0.5 font-mono text-[10px] font-medium text-accent">@codevil</span>
         <span class="rounded-full bg-accent/15 px-2 py-0.5 font-mono text-[10px] font-medium text-accent">plan first</span>
-        <span class="text-[11px] text-fg-4">Message the room…</span>
+        <span class="text-[11px] text-fg-4">Message the session…</span>
       </div>
     </div>
     <div class="flex flex-col gap-2 p-4">

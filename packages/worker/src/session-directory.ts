@@ -70,7 +70,7 @@ export function deriveSessionTitle(repo: string): string {
   const trimmed = repo.trim().replace(/\/$/, "").replace(/\.git$/, "");
   const match = trimmed.match(/(?:^|\/\/|@)github\.com[:/](?<owner>[^/\s]+)\/(?<repo>[^/\s]+)$/);
   if (match?.groups) return `${match.groups.owner}/${match.groups.repo}`;
-  return trimmed || "Untitled room";
+  return trimmed || "Untitled session";
 }
 
 export function buildSessionSummary(row: SessionDirectoryRow): SessionSummary {

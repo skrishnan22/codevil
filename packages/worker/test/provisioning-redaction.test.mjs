@@ -70,3 +70,44 @@ test("provisioning telemetry redacts provider credentials from errors without hi
     true,
   );
 });
+
+test("provisioning telemetry survives hostile exception accessors", async () => {
+  const [{ traceSandboxProvisioning }, { createTracer }] = await Promise.all([
+    import("../dist/orchestrator.js"),
+    import("@codevil/shared"),
+  ]);
+  const emitted = [];
+  const tracer = createTracer({
+    component: "orchestrator",
+    trace_id: "0123456789abcdef0123456789abcdef",
+    sink: (event) => emitted.push(event),
+  });
+  const error = {};
+  for (const key of ["name", "message", "stack", "details"]) {
+    Object.defineProperty(error, key, {
+      enumerable: true,
+      get() {
+        throw new Error(`hostile ${key} getter`);
+      },
+    });
+  }
+
+  await assert.rejects(
+    () => traceSandboxProvisioning({
+      tracer,
+      secrets: [],
+      attributes: { provider: "openai" },
+      provision: async () => {
+        throw error;
+      },
+    }),
+    (caught) => {
+      assert.equal(caught.message, "[UNAVAILABLE]");
+      return true;
+    },
+  );
+
+  const serialized = JSON.stringify(emitted);
+  assert.doesNotMatch(serialized, /hostile .* getter/);
+  assert.match(serialized, /\[UNAVAILABLE\]/);
+});

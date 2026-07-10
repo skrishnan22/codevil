@@ -7,8 +7,10 @@ import {
   handleSandboxCloneComplete,
   handleSandboxCloneStarted,
   handleSandboxPlanReady,
+  issueProxyCapabilities,
   provisionSessionSandbox,
 } from "../dist/orchestrator/sandbox-handlers.js";
+import { handleSandboxProxy } from "../dist/sandbox-proxy.js";
 import { actor, createFakeHost, createFakeTracer } from "./helpers/fake-host.mjs";
 
 function createWsRecorder() {
@@ -52,6 +54,73 @@ test("dispatchSandboxSocketMessage routes valid clone_started to its handler", a
   assert.equal(host.meta.state, "cloning_repo");
   assert.deepEqual(transitions.at(-1), { from: "provisioning_sandbox", to: "cloning_repo" });
   assert.deepEqual(directoryPatches.at(-1), { sandbox_state: "cloning" });
+});
+
+test("authenticated sandbox capability refresh returns new session-bound short-lived tokens", async () => {
+  const { host } = createFakeHost({}, {
+    workerEnv: { CODEVIL_PROXY_SIGNING_SECRET: "test-signing-secret", CODEVIL_API_KEY: "test-key", Sandbox: {}, DB: {} },
+  });
+  const { ws, sent } = createWsRecorder();
+
+  await dispatchSandboxSocketMessage(host, ws, JSON.stringify({ type: "proxy_capabilities_refresh_request" }));
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, "proxy_capabilities");
+  assert.match(sent[0].tokens["openai-responses"], /^v1\.[^.]+\.[^.]+$/);
+  assert.match(sent[0].sandbox_ws_token, /^sws1\.[^.]+\.[^.]+$/);
+  assert.ok((await issueProxyCapabilities(host))["openai-responses"]);
+});
+
+test("proxy capability refresh normalizes an HTTPS primary repository without .git", async () => {
+  const { host } = createFakeHost({ repo: "https://github.com/acme/app" }, {
+    workerEnv: {
+      CODEVIL_PROXY_SIGNING_SECRET: "test-signing-secret",
+      CODEVIL_API_KEY: "test-key",
+      GITHUB_PAT: "github-pat",
+      Sandbox: {},
+      DB: {},
+    },
+  });
+  const { ws, sent } = createWsRecorder();
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ url: String(input), init });
+    return new Response("ok");
+  };
+  try {
+    await dispatchSandboxSocketMessage(host, ws, JSON.stringify({ type: "proxy_capabilities_refresh_request" }));
+
+    assert.equal(sent[0].type, "proxy_capabilities");
+    const capability = sent[0].tokens.git;
+    assert.match(capability, /^git1\.[^.]+\.[^.]+$/);
+    const authorization = `Basic ${Buffer.from(`x-access-token:${capability}`).toString("base64")}`;
+    const response = await handleSandboxProxy(new Request(
+      "https://worker.test/sandbox-proxy/sessions/ses_test/github/acme/app.git/info/refs?service=git-upload-pack",
+      { headers: { authorization } },
+    ), host.workerEnv);
+
+    assert.equal(response.status, 200);
+    assert.equal(calls[0].url, "https://github.com/acme/app.git/info/refs?service=git-upload-pack");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("proxy capabilities reject unsafe primary repository forms", async () => {
+  for (const repo of [
+    "https://user@github.com/acme/app",
+    "https://github.com/acme/app?ref=main",
+    "https://github.com/acme/app#readme",
+    "https://github.com/acme/app/extra",
+    "https://gitlab.com/acme/app",
+    "https://github.com/acme/../private",
+  ]) {
+    const { host } = createFakeHost({ repo }, {
+      workerEnv: { CODEVIL_PROXY_SIGNING_SECRET: "test-signing-secret", CODEVIL_API_KEY: "test-key", Sandbox: {}, DB: {} },
+    });
+    await assert.rejects(() => issueProxyCapabilities(host), /Session repository must be a github\.com HTTPS repository/, repo);
+  }
 });
 
 test("handleSandboxCloneStarted transitions from provisioning_sandbox to cloning_repo", () => {

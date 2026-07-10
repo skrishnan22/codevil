@@ -3,6 +3,7 @@ import {
   buildProviderModelOptions,
   getProviderDefinition,
   MODELS_DEV_CATALOG_URL,
+  PROVIDERS_WITH_MODEL_CATALOG,
   type ModelsDevCatalog,
   type ProviderModelOption,
 } from "@codevil/shared";
@@ -18,6 +19,10 @@ export async function listProviderModels(
   const definition = getProviderDefinition(providerId);
   if (!definition) {
     throw new Error(`Unknown provider: ${providerId}`);
+  }
+
+  if (!PROVIDERS_WITH_MODEL_CATALOG.includes(definition.id)) {
+    return [];
   }
 
   const catalog = await fetchModelsDevCatalog(fetcher);

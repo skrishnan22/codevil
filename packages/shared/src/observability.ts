@@ -74,6 +74,8 @@ export interface CreateTracerOptions {
   trace_id: string;
   session_id?: string;
   sink?: TracerSink;
+  /** Last-chance transformation before any trace record leaves this process. */
+  transform?: (line: EmittedWideEvent) => EmittedWideEvent;
 }
 
 export interface Tracer {
@@ -235,7 +237,8 @@ class LiveTracer implements Tracer {
     this.trace_id = opts.trace_id;
     this.component = opts.component;
     this.session_id = opts.session_id;
-    this.sink = opts.sink ?? ((line) => sharedSink(line));
+    const sink = opts.sink ?? ((line) => sharedSink(line));
+    this.sink = opts.transform ? (line) => sink(opts.transform!(line)) : sink;
   }
 
   startSpan(name: string, options: SpanOptions = {}): Span {
@@ -262,27 +265,20 @@ class LiveTracer implements Tracer {
       span.setStatus("OK");
       return result;
     } catch (error) {
-      span.setStatus(
-        "ERROR",
-        error instanceof Error ? error.message : String(error),
-      );
-      span.addEvent("exception", {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
+      const exception = safeExceptionAttributes(error);
+      const message = typeof exception.error === "string"
+        ? exception.error
+        : UNAVAILABLE_EXCEPTION_FIELD;
+      span.setStatus("ERROR", message);
+      span.addEvent("exception", exception);
+      span.setGroup("error", {
+        type: exception.name,
+        message,
+        ...(typeof exception.stack === "string" ? { stack: exception.stack } : {}),
+        ...Object.fromEntries(Object.entries(exception).filter(([key]) =>
+          key !== "name" && key !== "error" && key !== "stack"
+        )),
       });
-      if (error instanceof Error) {
-        const errorGroup: Record<string, unknown> = {
-          type: error.name,
-          message: error.message,
-          stack: error.stack,
-        };
-        for (const [key, value] of Object.entries(error)) {
-          if (key !== "name" && key !== "message" && key !== "stack") {
-            errorGroup[key] = value;
-          }
-        }
-        span.setGroup("error", errorGroup);
-      }
       throw error;
     } finally {
       span.end();
@@ -412,9 +408,97 @@ export function logException(
 ): void {
   logger.log("ERROR", operation, {
     ...attributes,
-    error: error instanceof Error ? error.message : String(error),
-    ...(error instanceof Error && error.stack ? { stack: error.stack } : {}),
+    ...safeExceptionAttributes(error),
   });
+}
+
+const UNAVAILABLE_EXCEPTION_FIELD = "[UNAVAILABLE]";
+
+/**
+ * Extract diagnostics from an untrusted thrown value without invoking any of
+ * its accessors or coercion hooks. Error reporting must never turn a failed
+ * operation into a second failure (or expose an accessor's side effects).
+ */
+export function safeExceptionAttributes(error: unknown): Record<string, unknown> {
+  if (error === null) return { name: "Error", error: "null" };
+  if (typeof error !== "object" && typeof error !== "function") {
+    return { name: "Error", error: safePrimitiveString(error) };
+  }
+
+  const descriptors = safePropertyDescriptors(error);
+  if (!descriptors) {
+    return { name: UNAVAILABLE_EXCEPTION_FIELD, error: UNAVAILABLE_EXCEPTION_FIELD };
+  }
+
+  const result: Record<string, unknown> = {
+    name: safeExceptionText(error, descriptors, "name"),
+    error: safeExceptionText(error, descriptors, "message"),
+  };
+  const stack = safeExceptionText(error, descriptors, "stack");
+  if (stack !== UNAVAILABLE_EXCEPTION_FIELD) result.stack = stack;
+
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!descriptor.enumerable || key === "name" || key === "message" || key === "stack") continue;
+    result[key] = "value" in descriptor ? descriptor.value : UNAVAILABLE_EXCEPTION_FIELD;
+  }
+  return result;
+}
+
+/** Read an untrusted object's own data property without invoking accessors. */
+export function safeOwnDataProperty(value: unknown, key: string): unknown {
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return undefined;
+  }
+  const descriptor = safePropertyDescriptors(value)?.[key];
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
+/** Render only primitive values; never invoke untrusted object coercion hooks. */
+export function safePrimitiveString(value: unknown): string {
+  switch (typeof value) {
+    case "string":
+      return value;
+    case "number":
+    case "bigint":
+    case "boolean":
+    case "undefined":
+    case "symbol":
+      return String(value);
+    default:
+      return UNAVAILABLE_EXCEPTION_FIELD;
+  }
+}
+
+function safePropertyDescriptors(value: object): Record<string, PropertyDescriptor> | undefined {
+  try {
+    return Object.getOwnPropertyDescriptors(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function safeExceptionText(
+  value: object,
+  descriptors: Record<string, PropertyDescriptor>,
+  key: "name" | "message" | "stack",
+): string {
+  const descriptor = descriptors[key] ?? safeInheritedDescriptor(value, key);
+  if (!descriptor || !("value" in descriptor)) return UNAVAILABLE_EXCEPTION_FIELD;
+  return typeof descriptor.value === "string" ? descriptor.value : safePrimitiveString(descriptor.value);
+}
+
+function safeInheritedDescriptor(value: object, key: string): PropertyDescriptor | undefined {
+  try {
+    let prototype: object | null = Object.getPrototypeOf(value);
+    while (prototype) {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
+      if (descriptor) return descriptor;
+      prototype = Object.getPrototypeOf(prototype);
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export function createTracer(opts: CreateTracerOptions): Tracer {

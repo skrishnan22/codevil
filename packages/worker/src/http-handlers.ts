@@ -14,7 +14,7 @@ import {
   type SessionDirectoryRow,
 } from "./session-directory.js";
 import { createCodevilAuth } from "./auth.js";
-import { workerLogSessionException } from "./logging.js";
+import { workerLogSessionExceptionForEnv } from "./logging.js";
 import {
   activeMembershipByUserSelect,
   createOwnerMembershipInsert,
@@ -53,6 +53,8 @@ import {
   getCodevilSandbox,
   readSandboxDiagnostics,
 } from "./sandbox.js";
+import { redactEvent } from "./redaction.js";
+import { collectWorkerSecretValues } from "./worker-env.js";
 import type { Env } from "./worker-env.js";
 import type { SocketAuthContext } from "./ws-authorization.js";
 import { createSocketAuthToken } from "./ws-token.js";
@@ -154,7 +156,13 @@ export async function handleSetupClaim(request: Request, env: Env): Promise<Resp
 
   const now = new Date().toISOString();
   const insert = createOwnerMembershipInsert(session.user.id, now);
-  await env.DB.prepare(insert.sql).bind(...insert.bindings).run();
+  // The earlier ownerExists check is only a fast-path/UI response. This
+  // conditional insert is the actual authorization boundary: D1 evaluates
+  // the no-owner predicate and inserts atomically.
+  const result = await env.DB.prepare(insert.sql).bind(...insert.bindings).run();
+  if (d1Changes(result) !== 1) {
+    return json({ error: "Setup already completed" }, 409);
+  }
 
   return json(buildAuthMeResponse({
     session,
@@ -595,11 +603,8 @@ export async function handleCreateSession(
     const failedAt = new Date().toISOString();
     const failure = sessionDirectoryFailureUpdate(sessionId, failedAt);
     await env.DB.prepare(failure.sql).bind(...failure.bindings).run();
-    workerLogSessionException(sessionId, "session.init.failed", error);
-    return json({
-      error: "Failed to initialize session",
-      detail: error instanceof Error ? error.message : String(error),
-    }, 500);
+    workerLogSessionExceptionForEnv(sessionId, "session.init.failed", error, env);
+    return json({ error: "Failed to initialize session" }, 500);
   }
 
   return json(buildCreateSessionResponse(sessionId, request.url, row), 201);
@@ -726,22 +731,31 @@ export async function handleLogs(env: Env, sessionId: string): Promise<Response>
       sessionId,
     );
     const logs = await sandbox.getProcessLogs("codevil-agent");
-    return json(logs, 200);
-  } catch (error) {
-    return json({
-      error: error instanceof Error ? error.message : String(error),
-    }, 500);
+    return json(redactSandboxDiagnosticResponse(logs, env), 200);
+  } catch {
+    return json({ error: "Failed to read sandbox logs" }, 500);
   }
 }
 
 export async function handleDiagnostics(env: Env, sessionId: string): Promise<Response> {
   try {
-    return json(await readSandboxDiagnostics(env.Sandbox, sessionId, "codevil-agent"), 200);
-  } catch (error) {
-    return json({
-      error: error instanceof Error ? error.message : String(error),
-    }, 500);
+    return json(redactSandboxDiagnosticResponse(
+      await readSandboxDiagnostics(
+        env.Sandbox,
+        sessionId,
+        "codevil-agent",
+        collectWorkerSecretValues(env),
+      ),
+      env,
+    ), 200);
+  } catch {
+    return json({ error: "Failed to read sandbox diagnostics" }, 500);
   }
+}
+
+/** Final HTTP boundary for sandbox-controlled diagnostic text. */
+export function redactSandboxDiagnosticResponse(data: unknown, env: Env): unknown {
+  return redactEvent(data, collectWorkerSecretValues(env));
 }
 
 export function json(data: unknown, status: number): Response {

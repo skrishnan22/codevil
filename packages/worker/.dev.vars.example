@@ -1,0 +1,24 @@
+# Copy to .dev.vars for local development. Never commit the copied file.
+# Generate independent random values for the internal secrets.
+CODEVIL_API_KEY=
+CODEVIL_SETUP_TOKEN=
+CODEVIL_PROXY_SIGNING_SECRET=
+BETTER_AUTH_SECRET=
+
+# OAuth and GitHub credentials.
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GITHUB_PAT=
+
+# Public local-development values. Use your deployed worker URL when testing
+# OAuth redirects against a remote Worker.
+BETTER_AUTH_URL=http://localhost:8787
+CODEVIL_WEB_ORIGIN=http://localhost:5173,http://localhost:8787
+
+# Optional email delivery.
+# EMAIL_PROVIDER=resend
+# RESEND_API_KEY=
+# RESEND_FROM=
+
+# Add only the LLM provider secret(s) configured for local testing.
+# ANTHROPIC_API_KEY=

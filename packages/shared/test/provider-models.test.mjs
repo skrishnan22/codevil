@@ -56,10 +56,11 @@ test("formatModelId title-cases hyphenated model ids", () => {
   assert.equal(formatModelId("gpt-5.4-mini"), "Gpt 5 4 Mini");
 });
 
-test("agentRunnableModelIds excludes unsupported sandbox models", () => {
+test("agentRunnableModelIds follows the maintained OpenCode Go catalog", () => {
   const runnable = agentRunnableModelIds("opencode-go");
   assert.equal(runnable?.has("kimi-k2.6"), true);
+  assert.equal(runnable?.has("kimi-k2.7-code"), true);
   assert.equal(runnable?.has("deepseek-v4-flash"), true);
   assert.equal(runnable?.has("mimo-v2-omni"), false);
-  assert.equal(runnable?.has("glm-5.2"), false);
+  assert.equal(runnable?.has("glm-5.2"), true);
 });

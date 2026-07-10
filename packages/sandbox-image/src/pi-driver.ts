@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { getModels, type KnownProvider, type Model } from "@mariozechner/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
+import { getModels, type KnownProvider, type Model } from "@earendil-works/pi-ai/compat";
 import {
   AuthStorage,
   createAgentSession,
@@ -11,12 +12,13 @@ import {
   type AgentSession,
   type ResourceLoader,
   type ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+} from "@earendil-works/pi-coding-agent";
 
 import {
   type CostInfo,
   isRecord,
+  type ProviderApi,
+  type ProviderPublicConfig,
 } from "@codevil/shared";
 
 import {
@@ -39,19 +41,70 @@ import type {
 
 const DEFAULT_CODEVIL_PI_AGENT_DIR = "/opt/codevil/pi-agent";
 
+/**
+ * Pi model objects are immutable catalog entries in practice.  Copying keeps the
+ * shared registry untouched while directing only this sandbox's requests through
+ * the Worker credential boundary.
+ */
+export function resolveProviderModel(model: Model<any>, providerConfig: ProviderPublicConfig = {}): Model<any> {
+  let baseUrl = model.baseUrl;
+  for (const [key, value] of Object.entries(providerConfig)) {
+    baseUrl = baseUrl.replaceAll(`{${key}}`, value);
+  }
+  if (/{CLOUDFLARE_(?:ACCOUNT|GATEWAY)_ID}/.test(baseUrl)) {
+    throw new Error(`Missing provider configuration for ${model.provider}`);
+  }
+  return { ...model, baseUrl };
+}
+
+function withProxyModel(model: Model<any>, provider: string, proxyBase: string, sessionId: string): Model<any> {
+  const original = new URL(model.baseUrl);
+  const proxy = new URL(`/sandbox-proxy/sessions/${encodeURIComponent(sessionId)}/llm/${encodeURIComponent(provider)}/${encodeURIComponent(model.api)}/`, proxyBase);
+  return {
+    ...model,
+    baseUrl: proxy.toString(),
+    headers: {
+      ...model.headers,
+      "x-codevil-proxy-target": original.toString(),
+    },
+  };
+}
+
+/**
+ * Pi needs these IDs in its provider-scoped API-key credential to resolve
+ * Cloudflare model URLs. The key is always the short-lived proxy capability,
+ * never the Worker-held provider key, and in-memory storage avoids persistence.
+ */
+function setSandboxCredential(
+  authStorage: AuthStorage,
+  provider: string,
+  key: string | undefined,
+  providerConfig: ProviderPublicConfig | undefined,
+): void {
+  if (key) {
+    authStorage.set(provider, {
+      type: "api_key",
+      key,
+      ...(providerConfig && Object.keys(providerConfig).length > 0 ? { env: providerConfig } : {}),
+    });
+    authStorage.setRuntimeApiKey(provider, key);
+  }
+}
+
 export class PiAgentDriver implements AgentDriver {
   private session: AgentSession | undefined;
   private authStorage: AuthStorage | undefined;
   private modelRegistry: ModelRegistry | undefined;
+  private proxyBase: string | undefined;
+  private proxySessionId: string | undefined;
+  private proxyTokens: Partial<Record<ProviderApi, string>> | undefined;
+  private provider: string | undefined;
+  private providerConfig: ProviderPublicConfig | undefined;
   private latestAssistantText = "";
   private streamedAssistantText = "";
 
   async start(options: AgentStartOptions): Promise<void> {
-    const authStorage = AuthStorage.create();
-    if (options.llmKey) {
-      authStorage.setRuntimeApiKey(options.provider, options.llmKey);
-    }
-
+    const authStorage = AuthStorage.inMemory();
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const provider = options.provider as KnownProvider;
     const model = modelRegistry.find(provider, options.model)
@@ -61,6 +114,11 @@ export class PiAgentDriver implements AgentDriver {
       throw new Error(`Model not found: ${options.provider}/${options.model}`);
     }
 
+    const proxyToken = options.proxyTokens?.[model.api as ProviderApi];
+    if (options.proxyBase && (!proxyToken || !options.proxySessionId)) throw new Error("Missing sandbox proxy capability for model API");
+    setSandboxCredential(authStorage, options.provider, proxyToken ?? options.llmKey, options.providerConfig);
+    const configuredModel = resolveProviderModel(model, options.providerConfig);
+    const proxiedModel = options.proxyBase ? withProxyModel(configuredModel, options.provider, options.proxyBase, options.proxySessionId!) : configuredModel;
     const customTools: ReturnType<typeof defineTool>[] = [
       createPullRequestTool(options.createPullRequest),
     ];
@@ -77,7 +135,7 @@ export class PiAgentDriver implements AgentDriver {
     const { session } = await createAgentSession({
       cwd: options.cwd,
       agentDir,
-      model,
+      model: proxiedModel,
       authStorage,
       modelRegistry,
       customTools,
@@ -111,6 +169,11 @@ export class PiAgentDriver implements AgentDriver {
     this.session = session;
     this.authStorage = authStorage;
     this.modelRegistry = modelRegistry;
+    this.proxyBase = options.proxyBase;
+    this.proxySessionId = options.proxySessionId;
+    this.proxyTokens = options.proxyTokens;
+    this.provider = options.provider;
+    this.providerConfig = options.providerConfig && { ...options.providerConfig };
   }
 
   async turn(prompt: string): Promise<TurnResult> {
@@ -144,11 +207,7 @@ export class PiAgentDriver implements AgentDriver {
   }
 
   async consolidateAnnotations(input: ConsolidationInput): Promise<ConsolidationResult> {
-    const authStorage = AuthStorage.create();
-    if (input.llmKey) {
-      authStorage.setRuntimeApiKey(input.provider, input.llmKey);
-    }
-
+    const authStorage = AuthStorage.inMemory();
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const provider = input.provider as KnownProvider;
     const model = modelRegistry.find(provider, input.model)
@@ -159,6 +218,11 @@ export class PiAgentDriver implements AgentDriver {
     }
 
     // Build the custom tools list: read-only file tools + ask_question when available.
+    const proxyToken = input.proxyTokens?.[model.api as ProviderApi];
+    if (input.proxyBase && (!proxyToken || !input.proxySessionId)) throw new Error("Missing sandbox proxy capability for model API");
+    setSandboxCredential(authStorage, input.provider, proxyToken ?? input.llmKey, input.providerConfig);
+    const configuredModel = resolveProviderModel(model, input.providerConfig);
+    const proxiedModel = input.proxyBase ? withProxyModel(configuredModel, input.provider, input.proxyBase, input.proxySessionId!) : configuredModel;
     const customTools: ReturnType<typeof defineTool>[] = [];
     if (input.askQuestion) {
       customTools.push(askQuestionTool(input.askQuestion));
@@ -173,7 +237,7 @@ export class PiAgentDriver implements AgentDriver {
     const { session } = await createAgentSession({
       cwd: input.cwd,
       agentDir,
-      model,
+      model: proxiedModel,
       authStorage,
       modelRegistry,
       customTools,
@@ -199,13 +263,34 @@ export class PiAgentDriver implements AgentDriver {
     const session = this.requireSession();
     const modelRegistry = this.modelRegistry;
     if (!modelRegistry) throw new Error("Model registry has not been initialized");
+    const authStorage = this.authStorage;
+    if (!authStorage) throw new Error("Auth storage has not been initialized");
 
     const knownProvider = provider as KnownProvider;
     const model = modelRegistry.find(knownProvider, modelId) ?? findKnownModel(knownProvider, modelId);
     if (!model) throw new Error(`Model not found: ${provider}/${modelId}`);
 
+    const proxyToken = this.proxyTokens?.[model.api as ProviderApi];
+    if (this.proxyBase && (!proxyToken || !this.proxySessionId)) {
+      throw new Error("Missing sandbox proxy capability for model API");
+    }
+    if (proxyToken) {
+      setSandboxCredential(authStorage, provider, proxyToken, this.providerConfig);
+    }
+    const proxiedModel = this.proxyBase
+      ? withProxyModel(resolveProviderModel(model, this.providerConfig), provider, this.proxyBase, this.proxySessionId!)
+      : resolveProviderModel(model, this.providerConfig);
+    this.provider = provider;
+
     session.setActiveToolsByName(["read", "bash", "edit", "write"]);
-    await session.setModel(model);
+    await session.setModel(proxiedModel);
+  }
+
+  refreshProxyCapabilities(tokens: Partial<Record<ProviderApi, string>>): void {
+    this.proxyTokens = tokens;
+    if (!this.authStorage || !this.provider) return;
+    const token = this.session?.model?.api && tokens[this.session.model.api as ProviderApi];
+    if (token) this.authStorage.setRuntimeApiKey(this.provider, token);
   }
 
   async execute(plan: string): Promise<CostInfo> {

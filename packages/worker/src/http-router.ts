@@ -150,9 +150,10 @@ export async function dispatchHttpRequest(
 
   const sandboxWsMatch = path.match(/^\/sessions\/([^/]+)\/sandbox\/ws$/);
   if (sandboxWsMatch && request.method === "GET") {
-    if (!authenticate(request, env.CODEVIL_API_KEY)) {
-      return json({ error: "Unauthorized" }, 401);
-    }
+    // Sandbox workers authenticate with the short-lived, session-bound
+    // sandbox_ws_token in the Orchestrator. The deployment API key must never
+    // be accepted here: it is neither available to the sandbox nor a valid
+    // replacement capability.
     return handleSandboxWebSocketUpgrade(request, env, sandboxWsMatch[1]);
   }
 

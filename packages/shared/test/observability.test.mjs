@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createTracer,
   createComponentLogger,
+  logException,
   newTraceId,
   newSpanId,
   setTracerSink,
@@ -93,6 +94,24 @@ test("span() wraps fn, sets OK on success and ERROR on throw", async () => {
   assert.equal(errLines[0].events[0].name, "exception");
 });
 
+test("span failure diagnostics never invoke hostile exception fields", async () => {
+  const hostile = {};
+  for (const key of ["name", "message", "stack", "detail"]) {
+    Object.defineProperty(hostile, key, {
+      enumerable: true,
+      get() { throw new Error(`hostile ${key} getter`); },
+    });
+  }
+
+  const lines = await withSinkAsync(async () => {
+    const tracer = createTracer({ component: "sandbox", trace_id: newTraceId() });
+    await assert.rejects(tracer.span("sandbox.hostile", {}, async () => { throw hostile; }));
+  });
+  const serialized = JSON.stringify(lines);
+  assert.doesNotMatch(serialized, /hostile .* getter/);
+  assert.match(serialized, /\[UNAVAILABLE\]/);
+});
+
 test("parent_span_id propagates from options.parent", () => {
   const lines = withSink(() => {
     const t = createTracer({ component: "orchestrator", trace_id: newTraceId() });
@@ -129,6 +148,26 @@ test("createComponentLogger attaches session_id to every log", () => {
     logger.log("INFO", "session.init.failed", { detail: "boom" });
   });
   assert.equal(lines[0].session_id, "ses_deadbeef");
+});
+
+test("logException never invokes hostile exception accessors", () => {
+  const error = {};
+  for (const key of ["name", "message", "stack", "detail"]) {
+    Object.defineProperty(error, key, {
+      enumerable: true,
+      get() {
+        throw new Error(`hostile ${key} getter`);
+      },
+    });
+  }
+
+  const lines = withSink(() => {
+    assert.doesNotThrow(() => logException(createComponentLogger("worker"), "request.failed", error));
+  });
+  assert.equal(lines[0].error, "[UNAVAILABLE]");
+  assert.equal(lines[0].name, "[UNAVAILABLE]");
+  assert.equal(lines[0].detail, "[UNAVAILABLE]");
+  assert.doesNotMatch(JSON.stringify(lines), /hostile .* getter/);
 });
 
 test("traceIdFromSessionId strips ses_ prefix", () => {

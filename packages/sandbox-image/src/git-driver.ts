@@ -2,7 +2,9 @@ import { mkdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { dirname } from "node:path";
 
-import type { GitCredential, GitDriver, PushBranchOptions } from "./runtime.js";
+import { normalizeGitHubRepoName } from "@codevil/shared";
+
+import type { GitDriver, PushBranchOptions } from "./runtime.js";
 
 export const DEFAULT_GIT_AUTHOR_NAME = "Codevil Coder";
 export const DEFAULT_GIT_AUTHOR_EMAIL = "coder@codevil.com";
@@ -16,43 +18,48 @@ export async function configureDefaultGitIdentity(): Promise<void> {
 }
 
 export class ShellGitDriver implements GitDriver {
+  private readonly proxyBase?: string;
+  private readonly proxySessionId?: string;
+  private gitProxyCapability?: string;
+
+  constructor(options: { proxyBase?: string; proxySessionId?: string; gitProxyCapability?: string } = {}) {
+    this.proxyBase = options.proxyBase;
+    this.proxySessionId = options.proxySessionId;
+    this.gitProxyCapability = options.gitProxyCapability;
+  }
+
+  refreshGitProxyCapability(capability: string | undefined): void { this.gitProxyCapability = capability; }
+
   async clone(
     repo: string,
     destination: string,
     onProgress: (line: string) => void,
-    credential?: GitCredential,
   ): Promise<void> {
     await mkdir(dirname(destination), { recursive: true });
-    await run("git", shallowCloneArgs(credential ? withCredential(repo, credential) : repo, destination), {
+    const target = this.proxyUrl(repo);
+    await run("git", this.withProxyHeader(shallowCloneArgs(target, destination)), {
       onStderr: onProgress,
     });
-    if (credential) {
-      await run("git", ["remote", "set-url", "origin", repo], { cwd: destination });
-    }
   }
 
   async refresh(
     repo: string,
     cwd: string,
     onProgress: (line: string) => void,
-    credential?: GitCredential,
     cleanExcludes: string[] = [],
   ): Promise<void> {
-    const fetchUrl = credential ? withCredential(repo, credential) : repo;
+    const fetchUrl = this.proxyUrl(repo);
     await run("git", ["remote", "set-url", "origin", fetchUrl], { cwd });
-    try {
-      await run("git", ["fetch", "--progress", "--depth", "1", "--prune", "--no-tags", "origin"], {
-        cwd,
-        onStderr: onProgress,
-      });
-      await run("git", ["remote", "set-head", "origin", "--auto"], { cwd, onStderr: onProgress });
-      await run("git", ["reset", "--hard", "refs/remotes/origin/HEAD"], { cwd, onStdout: onProgress });
-      await run("git", gitCleanArgs(cleanExcludes), { cwd, onStdout: onProgress });
-    } finally {
-      if (credential) {
-        await run("git", ["remote", "set-url", "origin", repo], { cwd });
-      }
-    }
+    await run("git", this.withProxyHeader(["fetch", "--progress", "--depth", "1", "--prune", "--no-tags", "origin"]), {
+      cwd,
+      onStderr: onProgress,
+    });
+    await run("git", this.withProxyHeader(["remote", "set-head", "origin", "--auto"]), {
+      cwd,
+      onStderr: onProgress,
+    });
+    await run("git", ["reset", "--hard", "refs/remotes/origin/HEAD"], { cwd, onStdout: onProgress });
+    await run("git", gitCleanArgs(cleanExcludes), { cwd, onStdout: onProgress });
   }
 
   async defaultBranch(cwd: string): Promise<string> {
@@ -64,13 +71,38 @@ export class ShellGitDriver implements GitDriver {
     await run("git", ["checkout", "-b", options.branch], { cwd: options.cwd });
     await run("git", ["add", "-A"], { cwd: options.cwd });
     await run("git", ["commit", "-m", options.commitMessage], { cwd: options.cwd });
-    if (options.credential) {
-      const origin = (await run("git", ["remote", "get-url", "origin"], { cwd: options.cwd })).stdout.trim();
-      await run("git", ["push", "-u", withCredential(origin, options.credential), options.branch], { cwd: options.cwd });
-      return;
-    }
+    await run("git", this.withProxyHeader(["push", "-u", "origin", options.branch]), { cwd: options.cwd });
+  }
 
-    await run("git", ["push", "-u", "origin", options.branch], { cwd: options.cwd });
+  private proxyUrl(repo: string): string {
+    if (!this.hasProxyConfiguration()) return repo;
+    this.assertCompleteProxyConfiguration();
+
+    const normalized = normalizeGitHubRepoName(repo);
+    if (!normalized) {
+      throw new Error("Git proxy only permits canonical GitHub repository URLs");
+    }
+    const [owner, name] = normalized.split("/");
+    return new URL(
+      `/sandbox-proxy/sessions/${encodeURIComponent(this.proxySessionId!)}/github/${encodeURIComponent(owner)}/${encodeURIComponent(name)}.git`,
+      this.proxyBase!,
+    ).toString();
+  }
+
+  private withProxyHeader(args: string[]): string[] {
+    if (!this.hasProxyConfiguration()) return args;
+    this.assertCompleteProxyConfiguration();
+    return ["-c", `http.extraHeader=Authorization: Basic ${Buffer.from(`x-access-token:${this.gitProxyCapability!}`).toString("base64")}`, ...args];
+  }
+
+  private hasProxyConfiguration(): boolean {
+    return Boolean(this.proxyBase || this.proxySessionId || this.gitProxyCapability);
+  }
+
+  private assertCompleteProxyConfiguration(): void {
+    if (!this.proxyBase || !this.proxySessionId || !this.gitProxyCapability) {
+      throw new Error("Git proxy configuration is incomplete");
+    }
   }
 }
 
@@ -84,13 +116,6 @@ export function gitCleanArgs(excludes: string[] = []): string[] {
     "-fdx",
     ...excludes.flatMap((pattern) => ["-e", pattern]),
   ];
-}
-
-function withCredential(repo: string, credential: GitCredential): string {
-  const url = new URL(repo);
-  url.username = credential.username;
-  url.password = credential.password;
-  return url.toString();
 }
 
 interface RunOptions {

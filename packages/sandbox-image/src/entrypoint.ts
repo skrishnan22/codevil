@@ -7,6 +7,7 @@ import {
   DOToSandboxMessageSchema,
   type EntrypointEnv,
   parseEntrypointEnv,
+  parseProviderPublicConfig,
   parseInbound,
 } from "@codevil/shared";
 
@@ -20,10 +21,14 @@ import {
 } from "./logging.js";
 import { PiAgentDriver } from "./pi-driver.js";
 import { SandboxRuntime } from "./runtime.js";
-import { readAndUnlinkSecret } from "./secrets.js";
 import { ReconnectingWebSocketClient } from "./socket-client.js";
 
 export type { EntrypointEnv } from "@codevil/shared";
+
+// Capabilities last 15 minutes. Refreshing over the existing authenticated DO
+// socket before that window closes lets long-lived keepalive sandboxes continue
+// without ever receiving a real provider credential.
+const PROXY_CAPABILITY_REFRESH_MS = 10 * 60 * 1_000;
 
 function isNodeENOENT(error: unknown): boolean {
   return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -70,7 +75,6 @@ export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): 
     }
 
     if (
-      message.type === "credential_response" ||
       message.type === "create_pr_response" ||
       message.type === "ask_question_response" ||
       message.type === "ask_question_cancelled"
@@ -98,36 +102,53 @@ export async function startEntrypoint(
   const env = loadEnv(rawEnv);
 
   if (!env.CODEVIL_DO_WS_URL) throw new Error("CODEVIL_DO_WS_URL is required");
+  if (!env.CODEVIL_PROXY_BASE || !env.CODEVIL_PROXY_TOKENS) {
+    throw new Error("Sandbox outbound proxy configuration is required");
+  }
 
-  const wsUrl = env.CODEVIL_DO_WS_URL;
+  let wsUrl = withSandboxWebSocketToken(env.CODEVIL_DO_WS_URL, env.CODEVIL_SANDBOX_WS_TOKEN);
   const sessionId = sessionIdFromWsUrl(wsUrl);
   if (sessionId) setSandboxTraceFromSession(sessionId);
 
   await configureDefaultGitIdentity();
 
-  const llmKey = await readAndUnlinkSecret(env.CODEVIL_LLM_KEY_FILE ?? "/run/secrets/llm_key");
   let connection: ReconnectingWebSocketClient;
+  let proxyCapabilityRefreshTimer: NodeJS.Timeout | undefined;
 
+  const proxyTokens = parseProxyTokens(env.CODEVIL_PROXY_TOKENS);
+  const providerConfig = parseProviderPublicConfig(env.CODEVIL_PROVIDER_CONFIG);
   const runtime = new SandboxRuntime({
     workspace: env.CODEVIL_WORKSPACE ?? "/workspace",
     provider: env.CODEVIL_PROVIDER ?? "anthropic",
-    llmKey,
+    providerConfig,
+    proxyTokens,
+    proxySessionId: sessionId,
+    proxyBase: env.CODEVIL_PROXY_BASE,
     send: (message: SandboxToDOMessage) => connection.send(JSON.stringify(message)),
     agentFactory: () => new PiAgentDriver(),
-    git: new ShellGitDriver(),
+    git: new ShellGitDriver({
+      proxyBase: env.CODEVIL_PROXY_BASE,
+      proxySessionId: sessionId,
+      gitProxyCapability: proxyTokens?.git,
+    }),
   });
   const dispatch = createSandboxMessageDispatcher(runtime);
 
   connection = new ReconnectingWebSocketClient({
     createSocket: () => {
       sandboxLogger().log("INFO", "sandbox.ws.connecting", { target: wsUrlForLog(wsUrl) });
-      return new WebSocket(wsUrl, {
-        headers: env.CODEVIL_API_KEY ? { Authorization: `Bearer ${env.CODEVIL_API_KEY}` } : undefined,
-      });
+      return new WebSocket(wsUrl);
     },
     onOpen: () => {
       sandboxLogger().log("INFO", "sandbox.ws.connected");
       connection.send(JSON.stringify({ type: "status", message: "Sandbox connected." } satisfies SandboxToDOMessage));
+      connection.send(JSON.stringify({ type: "proxy_capabilities_refresh_request" } satisfies SandboxToDOMessage));
+      if (!proxyCapabilityRefreshTimer) {
+        proxyCapabilityRefreshTimer = setInterval(() => {
+          connection.send(JSON.stringify({ type: "proxy_capabilities_refresh_request" } satisfies SandboxToDOMessage));
+        }, PROXY_CAPABILITY_REFRESH_MS);
+        proxyCapabilityRefreshTimer.unref();
+      }
     },
     onError: (error) => {
       sandboxLogException("sandbox.ws.error", error);
@@ -145,9 +166,28 @@ export async function startEntrypoint(
       }
       const message = parseInbound(DOToSandboxMessageSchema, raw, "do_to_sandbox");
       if (!message) return;
+      if (message.type === "proxy_capabilities" && message.sandbox_ws_token) {
+        wsUrl = withSandboxWebSocketToken(wsUrl, message.sandbox_ws_token);
+      }
       sandboxLogger().log("DEBUG", "sandbox.message.received", { message_type: message.type });
       dispatch(message);
     },
   });
   connection.start();
+}
+
+function withSandboxWebSocketToken(wsUrl: string, token: string | undefined): string {
+  if (!token) return wsUrl;
+  const url = new URL(wsUrl);
+  url.searchParams.set("sandbox_ws_token", token);
+  return url.toString();
+}
+
+function parseProxyTokens(value: string | undefined): Record<string, string> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  } catch { return undefined; }
 }

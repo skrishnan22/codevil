@@ -27,11 +27,17 @@ export function checkApiKeyPresent(env: Env): boolean {
   return typeof env.CODEVIL_API_KEY === "string" && env.CODEVIL_API_KEY.trim().length > 0;
 }
 
+export function checkProxySigningSecretPresent(env: Env): boolean {
+  return typeof env.CODEVIL_PROXY_SIGNING_SECRET === "string"
+    && env.CODEVIL_PROXY_SIGNING_SECRET.trim().length > 0;
+}
+
 export async function handleReady(env: Env): Promise<Response> {
   const d1 = await checkD1Reachable(env.DB);
   const auth_config = checkAuthConfigPresent(env);
   const api_key = checkApiKeyPresent(env);
-  const checks = { d1, auth_config, api_key };
-  const ok = d1 && auth_config && api_key;
+  const proxy_signing_secret = checkProxySigningSecretPresent(env);
+  const checks = { d1, auth_config, api_key, proxy_signing_secret };
+  const ok = d1 && auth_config && api_key && proxy_signing_secret;
   return json({ ok, checks }, ok ? 200 : 503);
 }

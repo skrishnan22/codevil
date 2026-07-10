@@ -5,7 +5,7 @@ export type CredentialValidation =
   | { status: "invalid"; message: string }
   | { status: "unavailable"; message: string };
 
-type ProviderValidationDefinition = Pick<LLMProviderDefinition, "displayName" | "validationUrl">;
+type ProviderValidationDefinition = Pick<LLMProviderDefinition, "displayName" | "validation">;
 
 export type ProviderValidationFetcher = (
   input: string | URL | Request,
@@ -28,6 +28,13 @@ export async function validateProviderCredential(
   fetcher: ProviderValidationFetcher = fetch,
   options: ProviderValidationOptions = {},
 ): Promise<CredentialValidation> {
+  if (!definition.validation) {
+    return {
+      status: "unavailable",
+      message: `Live credential validation is not available for ${definition.displayName}.`,
+    };
+  }
+
   const controller = new AbortController();
   const setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer = options.clearTimer ?? ((handle) => {
@@ -43,11 +50,11 @@ export async function validateProviderCredential(
       }, options.timeoutMs ?? DEFAULT_VALIDATION_TIMEOUT_MS);
     });
     const response = await Promise.race([
-      fetcher(definition.validationUrl, {
+      fetcher(definition.validation.url, {
         method: "GET",
         headers: {
           Accept: "application/json",
-          Authorization: `Bearer ${key}`,
+          [definition.validation.header]: `${definition.validation.prefix}${key}`,
         },
         signal: controller.signal,
       }),

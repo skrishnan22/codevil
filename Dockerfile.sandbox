@@ -1,6 +1,6 @@
 ARG CODEVIL_SANDBOX_PLATFORM=linux/amd64
 
-FROM --platform=$CODEVIL_SANDBOX_PLATFORM node:20-slim AS builder
+FROM --platform=$CODEVIL_SANDBOX_PLATFORM node:22-slim AS builder
 RUN npm install -g pnpm@10.28.1
 
 WORKDIR /app
@@ -16,16 +16,41 @@ RUN pnpm install --filter @codevil/sandbox-image... --prod=false \
 RUN rm -rf node_modules \
   && pnpm install --filter @codevil/sandbox-image... --prod
 
-FROM --platform=$CODEVIL_SANDBOX_PLATFORM docker.io/cloudflare/sandbox:0.12.1
+FROM --platform=$CODEVIL_SANDBOX_PLATFORM docker.io/cloudflare/sandbox:0.12.1 AS sandbox-runtime
 
-USER root
+FROM --platform=$CODEVIL_SANDBOX_PLATFORM node:22-slim
+
+COPY --from=sandbox-runtime /container-server/sandbox /sandbox
+ENTRYPOINT ["/sandbox"]
+
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gh ca-certificates \
+  && apt-get install -y --no-install-recommends \
+    gh \
+    ca-certificates \
+    git \
+    curl \
+    wget \
+    jq \
+    zip \
+    unzip \
+    file \
+    procps \
   && rm -rf /var/lib/apt/lists/* \
-  && npm install -g pnpm@10.28.1
+  && npm install -g bun@1 pnpm@10.28.1 \
+  && node --version \
+  && git --version \
+  && bun --version
 
 COPY --from=builder /app /app
 ENV CODEVIL_PI_AGENT_DIR=/opt/codevil/pi-agent
 COPY packages/sandbox-image/skills /opt/codevil/pi-agent/skills
+
+RUN groupadd --gid 10001 codevil \
+  && useradd --uid 10001 --gid codevil --create-home codevil \
+  && mkdir -p /workspace /run/secrets \
+  && chown -R codevil:codevil /app /workspace /run/secrets /opt/codevil
+
+USER codevil
+WORKDIR /workspace
 
 EXPOSE 5173 8000 8080 3001

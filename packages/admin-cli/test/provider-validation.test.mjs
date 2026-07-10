@@ -8,8 +8,11 @@ const definition = {
   aliases: [],
   displayName: "OpenAI Platform",
   secretName: "OPENAI_API_KEY",
-  validationUrl: "https://api.openai.com/v1/models",
-  keyHelpUrl: "https://platform.openai.com/api-keys",
+  validation: {
+    url: "https://api.openai.com/v1/models",
+    header: "authorization",
+    prefix: "Bearer ",
+  },
 };
 
 function createFetchResponse(status) {
@@ -38,12 +41,30 @@ test("sends the expected GET request with bearer authorization", async () => {
 
   assert.deepEqual(result, { status: "valid" });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, definition.validationUrl);
+  assert.equal(calls[0].url, definition.validation.url);
   assert.equal(calls[0].init?.method, "GET");
   assert.equal(calls[0].init?.signal instanceof AbortSignal, true);
   assert.deepEqual(Object.fromEntries(new Headers(calls[0].init?.headers).entries()), {
     accept: "application/json",
     authorization: "Bearer fake-key",
+  });
+});
+
+test("does not make a network request when the provider has no exact validation strategy", async () => {
+  let called = false;
+  const result = await validateProviderCredential(
+    { displayName: "Anthropic" },
+    "fake-key",
+    async () => {
+      called = true;
+      return createFetchResponse(200);
+    },
+  );
+
+  assert.equal(called, false);
+  assert.deepEqual(result, {
+    status: "unavailable",
+    message: "Live credential validation is not available for Anthropic.",
   });
 });
 

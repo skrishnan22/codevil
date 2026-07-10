@@ -1,24 +1,22 @@
 import type { ParticipantIdentity, SessionState } from "@codevil/shared";
 
 import type { Sandbox } from "@cloudflare/sandbox";
+import type { WorkerSecretEnv } from "../worker-env.js";
 
 export type { SessionMeta } from "@codevil/shared";
 
-export interface Env {
+export interface Env extends WorkerSecretEnv {
   Sandbox: DurableObjectNamespace<Sandbox>;
   DB: D1Database;
   BACKUP_BUCKET?: R2Bucket;
   CODEVIL_API_KEY: string;
+  CODEVIL_PROXY_SIGNING_SECRET: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_GATEWAY_ID?: string;
   CLOUDFLARE_R2_ACCOUNT_ID?: string;
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
   BACKUP_BUCKET_NAME?: string;
-  OPENCODE_API_KEY?: string;
-  OPENROUTER_API_KEY?: string;
-  OPENAI_API_KEY?: string;
-  CODEVIL_LLM_KEY?: string;
-  GITHUB_PAT?: string;
   CODEVIL_PREVIEW_ORIGIN?: string;
 }
 

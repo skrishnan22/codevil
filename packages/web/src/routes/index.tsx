@@ -26,9 +26,7 @@ export const Route = createFileRoute("/")({
 
 const MODEL_PREFS_KEY = "codevil_model_prefs";
 
-const SUPPORTED_PROVIDERS = LLM_PROVIDERS.filter((entry) =>
-  PROVIDERS_WITH_MODEL_CATALOG.includes(entry.id),
-);
+const SUPPORTED_PROVIDERS = LLM_PROVIDERS;
 
 const SUPPORTED_PROVIDER_IDS = new Set(SUPPORTED_PROVIDERS.map((entry) => entry.id));
 
@@ -125,6 +123,42 @@ function GithubGlyph() {
   );
 }
 
+function ModelField({
+  label,
+  value,
+  onChange,
+  options,
+  loading,
+  hasCatalog,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: ProviderModelOption[];
+  loading: boolean;
+  hasCatalog: boolean;
+}) {
+  return (
+    <label className="home-launcher-field">
+      <span>{label}</span>
+      {hasCatalog ? (
+        <select value={value} onChange={(event) => onChange(event.target.value)} disabled={loading || options.length === 0} required>
+          {loading ? <option value={value}>Loading models…</option> : options.map((model) => (
+            <option key={model.id} value={model.id}>{model.name}</option>
+          ))}
+        </select>
+      ) : (
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Enter a provider model ID"
+          required
+        />
+      )}
+    </label>
+  );
+}
+
 function HomePage() {
   const navigate = useNavigate();
   const [repo, setRepo] = useState("");
@@ -144,6 +178,7 @@ function HomePage() {
   const [modelOptions, setModelOptions] = useState<ProviderModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const providerHasCatalog = (PROVIDERS_WITH_MODEL_CATALOG as readonly string[]).includes(provider);
 
   useEffect(() => {
     const prefs = loadModelPrefs();
@@ -306,7 +341,7 @@ function HomePage() {
   const canCreate =
     !loading &&
     !modelsLoading &&
-    modelOptions.length > 0 &&
+    (!providerHasCatalog || modelOptions.length > 0) &&
     Boolean(repo.trim() && provider.trim() && planModel.trim() && execModel.trim());
 
   const counts = useMemo(() => {
@@ -453,40 +488,8 @@ function HomePage() {
                 ))}
               </select>
             </label>
-            <label className="home-launcher-field">
-              <span>Plan model</span>
-              <select
-                value={planModel}
-                onChange={(e) => setPlanModel(e.target.value)}
-                disabled={modelsLoading || modelOptions.length === 0}
-                required
-              >
-                {modelsLoading ? (
-                  <option value={planModel}>Loading models…</option>
-                ) : (
-                  modelOptions.map((model) => (
-                    <option key={model.id} value={model.id}>{model.name}</option>
-                  ))
-                )}
-              </select>
-            </label>
-            <label className="home-launcher-field">
-              <span>Exec model</span>
-              <select
-                value={execModel}
-                onChange={(e) => setExecModel(e.target.value)}
-                disabled={modelsLoading || modelOptions.length === 0}
-                required
-              >
-                {modelsLoading ? (
-                  <option value={execModel}>Loading models…</option>
-                ) : (
-                  modelOptions.map((model) => (
-                    <option key={model.id} value={model.id}>{model.name}</option>
-                  ))
-                )}
-              </select>
-            </label>
+            <ModelField label="Plan model" value={planModel} onChange={setPlanModel} options={modelOptions} loading={modelsLoading} hasCatalog={providerHasCatalog} />
+            <ModelField label="Exec model" value={execModel} onChange={setExecModel} options={modelOptions} loading={modelsLoading} hasCatalog={providerHasCatalog} />
           </div>
 
           {modelsError && <p className="home-error">{modelsError}</p>}

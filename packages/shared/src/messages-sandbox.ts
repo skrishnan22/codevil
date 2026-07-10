@@ -76,13 +76,6 @@ export const CreatePRMessageSchema = z.object({
   ...TraceContextFields,
 });
 
-export const CredentialResponseMessageSchema = z.object({
-  type: z.literal("credential_response"),
-  request_id: z.string(),
-  username: z.string().optional(),
-  password: z.string().optional(),
-  error: z.string().optional(),
-});
 
 export const CreatePRResponseMessageSchema = z.object({
   type: z.literal("create_pr_response"),
@@ -135,6 +128,14 @@ export const ProtocolErrorMessageSchema = z.object({
   message: z.string(),
 });
 
+/** Fresh short-lived outbound-proxy capabilities for the current sandbox. */
+export const ProxyCapabilitiesMessageSchema = z.object({
+  type: z.literal("proxy_capabilities"),
+  tokens: z.record(z.string(), z.string().min(1)),
+  /** Replacement WebSocket upgrade capability for a future reconnect. */
+  sandbox_ws_token: z.string().min(1).optional(),
+});
+
 export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   InitMessageSchema,
   AgentTurnMessageSchema,
@@ -142,7 +143,6 @@ export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   ExecuteMessageSchema,
   RefinePlanSandboxMessageSchema,
   CreatePRMessageSchema,
-  CredentialResponseMessageSchema,
   CreatePRResponseMessageSchema,
   PreviewStartSandboxMessageSchema,
   PreviewStopSandboxMessageSchema,
@@ -150,6 +150,7 @@ export const DOToSandboxMessageSchema = z.discriminatedUnion("type", [
   AskQuestionResponseSchema,
   AskQuestionCancelledSchema,
   ProtocolErrorMessageSchema,
+  ProxyCapabilitiesMessageSchema,
 ]);
 
 export type InitMessage = z.infer<typeof InitMessageSchema>;
@@ -158,13 +159,13 @@ export type PlanMessage = z.infer<typeof PlanMessageSchema>;
 export type ExecuteMessage = z.infer<typeof ExecuteMessageSchema>;
 export type RefinePlanSandboxMessage = z.infer<typeof RefinePlanSandboxMessageSchema>;
 export type CreatePRMessage = z.infer<typeof CreatePRMessageSchema>;
-export type CredentialResponseMessage = z.infer<typeof CredentialResponseMessageSchema>;
 export type CreatePRResponseMessage = z.infer<typeof CreatePRResponseMessageSchema>;
 export type PreviewStartSandboxMessage = z.infer<typeof PreviewStartSandboxMessageSchema>;
 export type PreviewStopSandboxMessage = z.infer<typeof PreviewStopSandboxMessageSchema>;
 export type ConsolidationAnnotation = z.infer<typeof ConsolidationAnnotationSchema>;
 export type ConsolidateAnnotationsMessage = z.infer<typeof ConsolidateAnnotationsMessageSchema>;
 export type ProtocolErrorMessage = z.infer<typeof ProtocolErrorMessageSchema>;
+export type ProxyCapabilitiesMessage = z.infer<typeof ProxyCapabilitiesMessageSchema>;
 export type DOToSandboxMessage = z.infer<typeof DOToSandboxMessageSchema>;
 
 // --- Sandbox → DO messages ---
@@ -187,6 +188,11 @@ export const SandboxCloneCompleteSchema = z.object({
 export const SandboxStatusSchema = z.object({
   type: z.literal("status"),
   message: z.string(),
+});
+
+/** Sent only on the already-authenticated sandbox WebSocket. */
+export const ProxyCapabilitiesRefreshRequestSchema = z.object({
+  type: z.literal("proxy_capabilities_refresh_request"),
 });
 
 export const SandboxCloneProgressSchema = z.object({
@@ -242,13 +248,6 @@ export const SandboxVerificationFailedSchema = z.object({
   last_error: z.string(),
 });
 
-export const CredentialRequestSchema = z.object({
-  type: z.literal("credential_request"),
-  request_id: z.string(),
-  protocol: z.literal("https"),
-  host: z.string(),
-  path: z.string().optional(),
-});
 
 export const BranchPushedSchema = z.object({
   type: z.literal("branch_pushed"),
@@ -328,6 +327,7 @@ export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [
   SandboxCloneStartedSchema,
   SandboxCloneCompleteSchema,
   SandboxStatusSchema,
+  ProxyCapabilitiesRefreshRequestSchema,
   SandboxCloneProgressSchema,
   SandboxPlanReadySchema,
   AgentTurnCompleteSchema,
@@ -336,7 +336,6 @@ export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [
   SandboxVerificationStartedSchema,
   SandboxVerificationRetryingSchema,
   SandboxVerificationFailedSchema,
-  CredentialRequestSchema,
   BranchPushedSchema,
   PRCreatedSchema,
   SandboxErrorSchema,
@@ -354,6 +353,7 @@ export type SandboxAgentEvent = z.infer<typeof SandboxAgentEventSchema>;
 export type SandboxCloneStarted = z.infer<typeof SandboxCloneStartedSchema>;
 export type SandboxCloneComplete = z.infer<typeof SandboxCloneCompleteSchema>;
 export type SandboxStatus = z.infer<typeof SandboxStatusSchema>;
+export type ProxyCapabilitiesRefreshRequest = z.infer<typeof ProxyCapabilitiesRefreshRequestSchema>;
 export type SandboxCloneProgress = z.infer<typeof SandboxCloneProgressSchema>;
 export type SandboxPlanReady = z.infer<typeof SandboxPlanReadySchema>;
 export type AgentTurnComplete = z.infer<typeof AgentTurnCompleteSchema>;
@@ -362,7 +362,6 @@ export type ExecutionComplete = z.infer<typeof ExecutionCompleteSchema>;
 export type SandboxVerificationStarted = z.infer<typeof SandboxVerificationStartedSchema>;
 export type SandboxVerificationRetrying = z.infer<typeof SandboxVerificationRetryingSchema>;
 export type SandboxVerificationFailed = z.infer<typeof SandboxVerificationFailedSchema>;
-export type CredentialRequest = z.infer<typeof CredentialRequestSchema>;
 export type BranchPushed = z.infer<typeof BranchPushedSchema>;
 export type PRCreated = z.infer<typeof PRCreatedSchema>;
 export type SandboxError = z.infer<typeof SandboxErrorSchema>;

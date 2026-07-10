@@ -7,11 +7,13 @@ import {
   deriveSessionTitle,
   normalizeCreateSessionBody,
   normalizeIdempotencyKey,
+  nextSessionDirectoryTimestamp,
   runSessionDirectoryUpdateWithRetry,
   sessionDirectoryInsert,
   sessionIdempotencyInsert,
   sessionIdempotencyLookup,
 } from "../dist/session-directory.js";
+import { DirectoryUpdateQueue } from "../dist/orchestrator/directory-update-queue.js";
 
 test("deriveSessionTitle uses owner/repo for GitHub URLs", () => {
   assert.equal(deriveSessionTitle("https://github.com/acme/app.git"), "acme/app");
@@ -147,6 +149,36 @@ test("buildCreateSessionResponse builds ws_url and summary", () => {
   assert.equal(response.summary.title, "acme/app");
 });
 
+test("nextSessionDirectoryTimestamp advances past an equal persisted baseline", () => {
+  assert.equal(
+    nextSessionDirectoryTimestamp(
+      "2026-07-10T00:00:00.000Z",
+      "2026-07-10T00:00:00.000Z",
+    ),
+    "2026-07-10T00:00:00.001Z",
+  );
+});
+
+test("nextSessionDirectoryTimestamp advances a restarted DO clock past persisted state", () => {
+  assert.equal(
+    nextSessionDirectoryTimestamp(
+      "2026-07-10T00:00:00.000Z",
+      "2026-07-10T00:00:05.000Z",
+    ),
+    "2026-07-10T00:00:05.001Z",
+  );
+});
+
+test("nextSessionDirectoryTimestamp advances past a future persisted baseline", () => {
+  assert.equal(
+    nextSessionDirectoryTimestamp(
+      "2026-07-10T00:00:00.000Z",
+      "2027-01-01T00:00:00.000Z",
+    ),
+    "2027-01-01T00:00:00.001Z",
+  );
+});
+
 test("runSessionDirectoryUpdateWithRetry succeeds on first attempt", async () => {
   let calls = 0;
   const db = {
@@ -222,4 +254,37 @@ test("runSessionDirectoryUpdateWithRetry calls onFailure after exhausting retrie
 
   assert.equal(calls, 2);
   assert.equal(failureError?.message, "persistent");
+});
+
+test("runSessionDirectoryUpdateWithRetry times out a non-settling attempt and lets a later queue item proceed", async () => {
+  const queue = new DirectoryUpdateQueue();
+  let attempts = 0;
+  const db = {
+    prepare() {
+      return {
+        bind() {
+          return {
+            run() {
+              attempts++;
+              return new Promise(() => {});
+            },
+          };
+        },
+      };
+    },
+  };
+  const calls = [];
+
+  const stalled = queue.enqueue(() => runSessionDirectoryUpdateWithRetry(
+    db,
+    "UPDATE sessions SET room_state = ?",
+    ["ready"],
+    { attempts: 2, backoffMs: 1, attemptTimeoutMs: 2, onFailure: () => calls.push("failed") },
+  ));
+  const later = queue.enqueue(async () => { calls.push("later"); });
+
+  await Promise.all([stalled, later]);
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(calls, ["failed", "later"]);
 });

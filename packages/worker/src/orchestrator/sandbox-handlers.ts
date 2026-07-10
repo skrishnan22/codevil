@@ -3,7 +3,8 @@ import type {
   DOToSandboxMessage,
   SandboxToDOMessage,
 } from "@codevil/shared";
-import { SandboxToDOMessageSchema, clientValidationErrorMessage, parseInbound } from "@codevil/shared";
+import { SandboxToDOMessageSchema, clientValidationErrorMessage, getProviderDefinition, parseInbound, safeExceptionAttributes, type ProviderApi } from "@codevil/shared";
+import { redactEvent } from "../redaction.js";
 import {
   buildSandboxWebSocketUrl,
   provisionSandbox,
@@ -14,8 +15,10 @@ import {
   type WorkspaceCacheSandbox,
 } from "../workspace-cache.js";
 import type { SandboxConnectionMode } from "../sandbox-connection.js";
-import { createDraftPullRequest, credentialRequestAllowed } from "../github.js";
-import { getProvisioningCredentialContext } from "../provider-credentials.js";
+import { createDraftPullRequest, normalizeGitHubRepoName } from "../github.js";
+import { getProvisioningCredentialContext, requireProviderPublicConfig } from "../provider-credentials.js";
+import { createSandboxGitProxyToken, createSandboxProxyToken } from "../sandbox-proxy.js";
+import { createSandboxWebSocketToken } from "../sandbox-ws-token.js";
 import { traceSandboxProvisioning } from "./provisioning.js";
 import {
   buildPreviewUrl,
@@ -46,7 +49,13 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
   const tracer = host.getTracer();
   try {
     const wsUrl = buildSandboxWebSocketUrl(host.meta.worker_url, host.meta.session_id);
+    // Validate the actual key at provisioning time, but never transfer it into the container.
     const provisioningContext = getProvisioningCredentialContext(host.workerEnv, host.meta.provider);
+    const providerDefinition = getProviderDefinition(host.meta.provider);
+    if (!providerDefinition) throw new Error("Unsupported LLM provider");
+    const providerConfig = requireProviderPublicConfig(host.workerEnv, host.meta.provider);
+    const proxyTokens = await issueProxyCapabilities(host);
+    const wsToken = await issueSandboxWebSocketCapability(host);
     await traceSandboxProvisioning({
       tracer: tracer!,
       secrets: host.redactionSecrets,
@@ -60,9 +69,11 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
           binding: host.workerEnv.Sandbox,
           sessionId: host.meta!.session_id,
           wsUrl,
-          apiKey: host.workerEnv.CODEVIL_API_KEY,
+          wsToken,
           provider: host.meta!.provider,
-          llmKey: provisioningContext.llmKey,
+          providerConfig,
+          proxyBase: host.meta!.worker_url,
+          proxyTokens,
           beforeStart: async (sandbox) => {
             const restored = await restoreWorkspaceCacheBeforeStart(host, sandbox as WorkspaceCacheSandbox);
             if (host.meta) {
@@ -78,7 +89,7 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
     host.updateDirectory({ room_state: "failed", sandbox_state: "failed" });
     host.appendAndBroadcast({
       type: "error",
-      message: error instanceof Error ? error.message : String(error),
+      message: "Sandbox provisioning failed. Check session diagnostics.",
     });
   }
 }
@@ -136,6 +147,17 @@ export async function dispatchSandboxSocketMessage(
   if (!host.meta) return;
 
   switch (parsed.type) {
+    case "proxy_capabilities_refresh_request":
+      try {
+        ws.send(JSON.stringify({
+          type: "proxy_capabilities",
+          tokens: await issueProxyCapabilities(host),
+          sandbox_ws_token: await issueSandboxWebSocketCapability(host),
+        } satisfies DOToSandboxMessage));
+      } catch {
+        ws.send(JSON.stringify({ type: "protocol_error", message: "Sandbox proxy capabilities are unavailable" } satisfies DOToSandboxMessage));
+      }
+      return;
     case "clone_started":
       handleSandboxCloneStarted(host);
       return;
@@ -171,9 +193,6 @@ export async function dispatchSandboxSocketMessage(
       return;
     case "ask_question_request":
       handleAskQuestionRequest(host, parsed);
-      return;
-    case "credential_request":
-      handleCredentialRequest(host, ws, parsed);
       return;
     case "branch_pushed":
       await handleBranchPushed(host, parsed.branch, parsed.base_branch, parsed.pr_title, parsed.pr_body);
@@ -225,6 +244,45 @@ export async function dispatchSandboxSocketMessage(
       return _exhaustive;
     }
   }
+}
+
+/** Issue fresh proxy capabilities only after the message has arrived on a DO-accepted sandbox socket. */
+export async function issueProxyCapabilities(host: OrchestratorHost): Promise<Partial<Record<ProviderApi | "git", string>>> {
+  host.loadMeta();
+  if (!host.meta) throw new Error("Session not initialized");
+  const providerDefinition = getProviderDefinition(host.meta.provider);
+  if (!providerDefinition) throw new Error("Unsupported LLM provider");
+  const llm = Object.fromEntries(await Promise.all(providerDefinition.authPolicies.map(async ({ api }) => [
+    api,
+    await createSandboxProxyToken(host.workerEnv.CODEVIL_PROXY_SIGNING_SECRET ?? "", {
+      sessionId: host.meta!.session_id,
+      provider: host.meta!.provider,
+      api,
+    }),
+  ]))) as Partial<Record<ProviderApi, string>>;
+  const primaryRepo = githubRepoName(host.meta.repo);
+  if (!primaryRepo) throw new Error("Session repository must be a github.com HTTPS repository");
+  return {
+    ...llm,
+    git: await createSandboxGitProxyToken(host.workerEnv.CODEVIL_PROXY_SIGNING_SECRET ?? "", {
+      sessionId: host.meta.session_id,
+      primaryRepo,
+    }),
+  };
+}
+
+function githubRepoName(repo: string): string | undefined {
+  return normalizeGitHubRepoName(repo);
+}
+
+/** Only call after the connection has passed the sandbox-only upgrade check. */
+export async function issueSandboxWebSocketCapability(host: OrchestratorHost): Promise<string> {
+  host.loadMeta();
+  if (!host.meta) throw new Error("Session not initialized");
+  return createSandboxWebSocketToken(
+    host.meta.session_id,
+    host.workerEnv.CODEVIL_PROXY_SIGNING_SECRET ?? "",
+  );
 }
 
 export function handleSandboxCloneStarted(host: OrchestratorHost): void {
@@ -488,38 +546,6 @@ export function handleAskQuestionRequest(
   });
 }
 
-export function handleCredentialRequest(
-  host: OrchestratorHost,
-  ws: WebSocket,
-  request: Extract<SandboxToDOMessage, { type: "credential_request" }>,
-): void {
-  if (!host.meta) return;
-
-  if (!host.workerEnv.GITHUB_PAT) {
-    ws.send(JSON.stringify({
-      type: "credential_response",
-      request_id: request.request_id,
-      error: "GitHub credentials are not configured.",
-    } satisfies DOToSandboxMessage));
-    return;
-  }
-
-  if (!credentialRequestAllowed(host.meta.repo, request)) {
-    ws.send(JSON.stringify({
-      type: "credential_response",
-      request_id: request.request_id,
-      error: "Credential request does not match this session repository.",
-    } satisfies DOToSandboxMessage));
-    return;
-  }
-
-  ws.send(JSON.stringify({
-    type: "credential_response",
-    request_id: request.request_id,
-    username: "x-access-token",
-    password: host.workerEnv.GITHUB_PAT,
-  } satisfies DOToSandboxMessage));
-}
 
 export async function handleCreatePullRequestRequest(
   host: OrchestratorHost,
@@ -551,7 +577,7 @@ export async function handleCreatePullRequestRequest(
     ws.send(JSON.stringify({
       type: "create_pr_response",
       request_id: request.request_id,
-      error: error instanceof Error ? error.message : String(error),
+      error: "Unable to create the pull request.",
     } satisfies DOToSandboxMessage));
   }
 }
@@ -579,7 +605,9 @@ export async function handleBranchPushed(
 
     completeActiveRun(host, prUrl);
   } catch (error) {
-    failActiveRunAndReturnReady(host, error instanceof Error ? error.message : String(error));
+    const details = redactEvent(safeExceptionAttributes(error), host.redactionSecrets);
+    host.getTracer()?.log("ERROR", "github.pull_request.failed", details);
+    failActiveRunAndReturnReady(host, "Unable to create the pull request.");
   }
 }
 

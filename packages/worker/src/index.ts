@@ -4,6 +4,9 @@ import {
   recordSandboxLifecycleEvent,
   SANDBOX_KEEPALIVE_STATE_KEY,
   SANDBOX_LIFECYCLE_EVENT_KEY,
+  lifecycleErrorEvent,
+  redactSandboxKeepAliveState,
+  stopDiagnostics,
   shouldDeferSandboxActivityExpiry,
   type SandboxKeepAliveState,
   type SandboxLifecycleEvent,
@@ -17,24 +20,34 @@ import {
   sandboxLifecycleLogger,
   withRequestId,
 } from "./logging.js";
+import { collectWorkerSecretValues } from "./worker-env.js";
+import { redactEvent } from "./redaction.js";
 import type { Env } from "./worker-env.js";
+import { handleSandboxProxy } from "./sandbox-proxy.js";
 
 export type { Env } from "./worker-env.js";
 
 // Subclass the Cloudflare Sandbox so Codevil can keep active agent sessions
 // alive and persist stop diagnostics across abnormal socket closures.
-export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
+export class Sandbox<RuntimeEnv extends Env = Env> extends BaseSandbox<RuntimeEnv> {
   override sleepAfter = "10m";
+  private readonly redactionSecrets: readonly string[];
+
+  constructor(ctx: DurableObjectState<{}>, env: RuntimeEnv) {
+    super(ctx, env);
+    // Sandbox lifecycle callbacks can run without an HTTP request first.
+    this.redactionSecrets = collectWorkerSecretValues(env);
+  }
 
   async setCodevilKeepAlive(active: boolean, reason = "unspecified"): Promise<void> {
-    const state: SandboxKeepAliveState = {
+    const state = redactSandboxKeepAliveState({
       active,
       reason,
       updated_at: new Date().toISOString(),
-    };
+    }, this.redactionSecrets);
     await this.ctx.storage.put(SANDBOX_KEEPALIVE_STATE_KEY, state);
     if (active) this.renewActivityTimeout();
-    sandboxLifecycleLogger(this.sessionId()).log("INFO", "sandbox.keepalive", {
+    sandboxLifecycleLogger(this.redactionSecrets, this.sessionId()).log("INFO", "sandbox.keepalive", {
       sandbox: { ...state },
     });
   }
@@ -68,12 +81,8 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
   }
 
   override async onError(error: unknown): Promise<void> {
-    await this.recordLifecycle({
-      type: "error",
-      at: new Date().toISOString(),
-      error: error instanceof Error ? error.message : String(error),
-    });
-    await Promise.resolve(super.onError(error));
+    await this.recordLifecycle(lifecycleErrorEvent(error, this.redactionSecrets));
+    await Promise.resolve(super.onError(redactEvent(error, this.redactionSecrets)));
   }
 
   override async onActivityExpired(): Promise<void> {
@@ -85,7 +94,7 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
         reason: keepAlive.reason,
       });
       this.renewActivityTimeout();
-      sandboxLifecycleLogger(this.sessionId()).log("INFO", "sandbox.activity_expired_deferred", {
+      sandboxLifecycleLogger(this.redactionSecrets, this.sessionId()).log("INFO", "sandbox.activity_expired_deferred", {
         sandbox: { ...keepAlive },
       });
       return;
@@ -99,10 +108,11 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
   }
 
   private async recordLifecycle(event: SandboxLifecycleEvent): Promise<void> {
-    sandboxLifecycleLogger(this.sessionId()).log("INFO", "sandbox.lifecycle", {
-      sandbox: { ...event },
+    const sanitized = redactEvent(event, this.redactionSecrets);
+    sandboxLifecycleLogger(this.redactionSecrets, this.sessionId()).log("INFO", "sandbox.lifecycle", {
+      sandbox: { ...sanitized },
     });
-    await recordSandboxLifecycleEvent(this.ctx.storage, event);
+    await recordSandboxLifecycleEvent(this.ctx.storage, sanitized, this.redactionSecrets);
   }
 
   private sessionId(): string | undefined {
@@ -125,19 +135,6 @@ export class Sandbox<Env = unknown> extends BaseSandbox<Env> {
     }
     return super.fetch(request);
   }
-}
-
-function stopDiagnostics(params: unknown): Pick<SandboxLifecycleEvent, "exit_code" | "reason"> {
-  if (!params || typeof params !== "object") return {};
-
-  const record = params as Record<string, unknown>;
-  const exitCode = record.exitCode;
-  const reason = record.reason;
-
-  return {
-    ...(typeof exitCode === "number" ? { exit_code: exitCode } : {}),
-    ...(typeof reason === "string" ? { reason } : {}),
-  };
 }
 
 export { Orchestrator };
@@ -181,6 +178,7 @@ function withCors(request: Request, env: Env, response: Response): Response {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const redactionSecrets = collectWorkerSecretValues(env);
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeadersFor(request, env) });
     }
@@ -191,6 +189,8 @@ export default {
     const applyCors = (response: Response) => withCors(request, env, response);
 
     try {
+      const proxyResponse = await handleSandboxProxy(request, env);
+      if (proxyResponse) return proxyResponse;
       const routed = await dispatchHttpRequest(request, env, { withCors });
       if (routed) {
         return observeRoutedResponse(routed, {
@@ -198,6 +198,7 @@ export default {
           method: request.method,
           path,
           startedAt,
+          secrets: redactionSecrets,
         });
       }
 
@@ -213,6 +214,7 @@ export default {
         path,
         startedAt,
         withCors: applyCors,
+        secrets: redactionSecrets,
       });
     }
   },

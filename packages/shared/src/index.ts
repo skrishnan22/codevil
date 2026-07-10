@@ -13,6 +13,8 @@ export {
 
 export { isRecord } from "./records.js";
 
+export { normalizeGitHubRepoName } from "./github.js";
+
 export type { CostInfo } from "./cost.js";
 export {
   CostInfoSchema,
@@ -46,11 +48,24 @@ export {
 
 export type {
   LLMProviderId,
+  DeferredProviderId,
+  LLMProviderCapability,
   LLMProviderDefinition,
+  ProviderApi,
+  ProviderAuthPolicy,
+  ProviderPublicConfig,
+  ProviderPublicConfigKey,
+  WorkerProviderSecretName,
 } from "./providers.js";
+
 export {
+  DEFERRED_PROVIDER_IDS,
+  LLM_PROVIDER_CAPABILITIES,
   LLM_PROVIDERS,
+  LLM_PROVIDER_IDS,
+  PROVIDER_APIS,
   getProviderDefinition,
+  getProviderOutboundAuthPolicy,
   LLMProviderIdSchema,
   KnownProviderSchema,
 } from "./providers.js";
@@ -200,7 +215,6 @@ export type {
   ExecuteMessage,
   RefinePlanSandboxMessage,
   CreatePRMessage,
-  CredentialResponseMessage,
   CreatePRResponseMessage,
   PreviewStartSandboxMessage,
   PreviewStopSandboxMessage,
@@ -209,11 +223,13 @@ export type {
   AskQuestionResponse,
   AskQuestionCancelled,
   ProtocolErrorMessage,
+  ProxyCapabilitiesMessage,
   DOToSandboxMessage,
   SandboxAgentEvent,
   SandboxCloneStarted,
   SandboxCloneComplete,
   SandboxStatus,
+  ProxyCapabilitiesRefreshRequest,
   SandboxCloneProgress,
   SandboxPlanReady,
   AgentTurnComplete,
@@ -222,7 +238,6 @@ export type {
   SandboxVerificationStarted,
   SandboxVerificationRetrying,
   SandboxVerificationFailed,
-  CredentialRequest,
   BranchPushed,
   PRCreated,
   SandboxError,
@@ -243,7 +258,6 @@ export {
   ExecuteMessageSchema,
   RefinePlanSandboxMessageSchema,
   CreatePRMessageSchema,
-  CredentialResponseMessageSchema,
   CreatePRResponseMessageSchema,
   PreviewStartSandboxMessageSchema,
   PreviewStopSandboxMessageSchema,
@@ -252,11 +266,13 @@ export {
   AskQuestionResponseSchema,
   AskQuestionCancelledSchema,
   ProtocolErrorMessageSchema,
+  ProxyCapabilitiesMessageSchema,
   DOToSandboxMessageSchema,
   SandboxAgentEventSchema,
   SandboxCloneStartedSchema,
   SandboxCloneCompleteSchema,
   SandboxStatusSchema,
+  ProxyCapabilitiesRefreshRequestSchema,
   SandboxCloneProgressSchema,
   SandboxPlanReadySchema,
   AgentTurnCompleteSchema,
@@ -265,7 +281,6 @@ export {
   SandboxVerificationStartedSchema,
   SandboxVerificationRetryingSchema,
   SandboxVerificationFailedSchema,
-  CredentialRequestSchema,
   BranchPushedSchema,
   PRCreatedSchema,
   SandboxErrorSchema,
@@ -457,6 +472,7 @@ export type { EntrypointEnv } from "./entrypoint-env.js";
 export {
   EntrypointEnvSchema,
   parseEntrypointEnv,
+  parseProviderPublicConfig,
   pickEntrypointEnvFields,
 } from "./entrypoint-env.js";
 
@@ -496,6 +512,9 @@ export {
   defaultTracerSink,
   emitLog,
   logException,
+  safeExceptionAttributes,
+  safeOwnDataProperty,
+  safePrimitiveString,
   setTracerSink,
   traceIdFromSessionId,
   newTraceId,

@@ -9,20 +9,6 @@ export { addCost, zeroCost };
 
 export const AGENT_PREVIEW_KEY = "agent";
 
-export function credentialRequestFromRepo(repo: string): { protocol: "https"; host: string; path: string } | null {
-  try {
-    const url = new URL(repo);
-    if (url.protocol !== "https:") return null;
-    return {
-      protocol: "https",
-      host: url.hostname,
-      path: url.pathname.replace(/^\/+/, ""),
-    };
-  } catch {
-    return null;
-  }
-}
-
 export function detectLibc(): "gnu" | "musl" | undefined {
   if (process.platform !== "linux") return undefined;
   if (

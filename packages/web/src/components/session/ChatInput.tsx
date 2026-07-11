@@ -104,7 +104,7 @@ export function ChatInput() {
           placeholder={
             conflictGate.disabled
               ? "Resolve the decision above to continue."
-              : "Message the room…"
+              : "Message the session…"
           }
           value={input}
           onChange={(e) => setInput(e.target.value)}

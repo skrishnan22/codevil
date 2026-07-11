@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildPreviewUrl,
   injectPreviewBaseHref,
+  isRetryablePreviewStatus,
   previewPathPrefix,
   rewriteHeadersForSandboxDevServer,
 } from "../dist/orchestrator/preview.js";
@@ -96,4 +97,12 @@ test("rewriteHeadersForSandboxDevServer leaves localhost Host unchanged", () => 
 
   assert.equal(rewritten.get("host"), "localhost:3001");
   assert.equal(rewritten.get("x-forwarded-host"), null);
+});
+
+test("isRetryablePreviewStatus matches transient upstream failures", () => {
+  assert.equal(isRetryablePreviewStatus(502), true);
+  assert.equal(isRetryablePreviewStatus(503), true);
+  assert.equal(isRetryablePreviewStatus(504), true);
+  assert.equal(isRetryablePreviewStatus(500), false);
+  assert.equal(isRetryablePreviewStatus(404), false);
 });

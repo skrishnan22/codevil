@@ -217,7 +217,7 @@ function formatAskMeta(question: QuestionViewModel): string {
   }
   if (question.answerableBy === "decider") return "session creator only";
   if (question.answerableBy === "assigned") return "assigned participant only";
-  return "anyone in room";
+  return "anyone in session";
 }
 
 // ─── Generic answered question ─────────────────────────────────────────────

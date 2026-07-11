@@ -130,4 +130,5 @@ export interface SandboxRuntimeOptions {
   verifier?: Verifier;
   commandRunner?: CommandRunner;
   credentialTimeoutMs?: number;
+  askQuestionTimeoutMs?: number;
 }

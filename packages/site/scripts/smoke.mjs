@@ -15,12 +15,12 @@ if (!existsSync(htmlPath)) {
 const html = await readFile(htmlPath, "utf8");
 
 const expectations = [
-  "Bring your team into the room",
+  "Bring your team into the session",
   "Deploy on Cloudflare",
   "Open the app",
-  "Multiplayer rooms",
+  "Multiplayer sessions",
   "Collaborative plan annotation",
-  "Ask the room",
+  "Ask the session",
   "Live preview",
   "Projected conversation",
   "wrangler deploy",

@@ -17,6 +17,7 @@ import {
 } from "../dist/runtime.js";
 import { createSandboxMessageDispatcher } from "../dist/entrypoint.js";
 import { PreviewManager } from "../dist/preview-manager.js";
+import { detectPackageManager } from "../dist/package-manager.js";
 import {
   DEPENDENCY_ARTIFACT_FORMAT_VERSION,
   computeDependencyFingerprint,
@@ -24,6 +25,11 @@ import {
   detectJavaScriptDependencyStrategy,
   writeDependencyArtifactMarker,
 } from "../dist/dependency-cache.js";
+
+function previewHttpServerCommand(port, trailing = "") {
+  const suffix = trailing ? `;${trailing}` : "";
+  return `node -e "require('http').createServer((req,res)=>{res.writeHead(200);res.end('ok')}).listen(${port},'127.0.0.1')${suffix}"`;
+}
 
 const zeroCost = {
   input_tokens: 0,
@@ -589,6 +595,30 @@ test("detectPreviewApps reads pnpm-workspace.yaml packages", async () => {
   }
 });
 
+test("detectPreviewApps uses the root package manager for workspace apps", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-pnpm-next-"));
+  try {
+    await writeFile(join(workspace, "package.json"), JSON.stringify({ name: "root", private: true }));
+    await writeFile(join(workspace, "pnpm-workspace.yaml"), "packages:\n  - 'apps/*'\n");
+    await writeFile(join(workspace, "pnpm-lock.yaml"), "");
+
+    await mkdir(join(workspace, "apps", "landing"), { recursive: true });
+    await writeFile(join(workspace, "apps", "landing", "package.json"), JSON.stringify({
+      name: "landing",
+      scripts: { dev: "next dev" },
+      dependencies: { next: "^16.0.0" },
+    }));
+
+    const apps = detectPreviewApps(workspace);
+
+    assert.equal(apps.length, 1);
+    assert.equal(apps[0].framework, "next");
+    assert.equal(apps[0].command, "pnpm dev -- --hostname 0.0.0.0 --port 3001");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("detectPreviewCommand remaps Next.js away from port 3000", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-next-"));
   try {
@@ -676,6 +706,21 @@ test("sandbox dispatcher lets create_pr_response resolve a tool call during an a
   assert.deepEqual(calls, ["agent_turn", "create_pr_response"]);
 });
 
+test("sandbox dispatcher consumes protocol_error without queueing", async () => {
+  const calls = [];
+  const runtime = {
+    async handleMessage(message) {
+      calls.push(message.type);
+    },
+  };
+  const dispatch = createSandboxMessageDispatcher(runtime);
+
+  dispatch({ type: "protocol_error", message: "Invalid message" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, []);
+});
+
 test("PreviewManager includes recent process output when startup times out", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-timeout-"));
   const errors = [];
@@ -758,8 +803,8 @@ test("PreviewManager honors command-specific readiness timeout", async () => {
   }
 });
 
-test("PreviewManager treats an accepted TCP connection as ready", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-tcp-ready-"));
+test("PreviewManager waits for HTTP readiness before marking ready", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-http-ready-"));
   const ready = [];
   const errors = [];
   const manager = new PreviewManager({
@@ -773,7 +818,7 @@ test("PreviewManager treats an accepted TCP connection as ready", async () => {
 
   try {
     await manager.start({
-      command: "node -e \"require('net').createServer(() => {}).listen(59998, '127.0.0.1')\"",
+      command: previewHttpServerCommand(59998),
       port: 59998,
     });
 
@@ -781,6 +826,170 @@ test("PreviewManager treats an accepted TCP connection as ready", async () => {
     assert.equal(ready.length, 1);
   } finally {
     await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager does not treat a TCP-only listener as ready", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-tcp-not-ready-"));
+  const ready = [];
+  const errors = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 500,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped() {},
+    onError: (message) => errors.push(message),
+  });
+
+  try {
+    await manager.start({
+      command: "node -e \"require('net').createServer(() => {}).listen(59998, '127.0.0.1')\"",
+      port: 59998,
+    });
+
+    assert.equal(ready.length, 0);
+    assert.match(errors[0], /Preview server did not become healthy on port 59998/);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager restarts when the requested command differs from the running preview", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-restart-"));
+  const ready = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 1_000,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped() {},
+    onError() {},
+  });
+
+  try {
+    await manager.start({
+      command: previewHttpServerCommand(59987),
+      port: 59987,
+    });
+    await manager.start({
+      command: previewHttpServerCommand(59986),
+      port: 59986,
+    });
+
+    assert.equal(ready.length, 2);
+    assert.equal(ready[0].port, 59987);
+    assert.equal(ready[1].port, 59986);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager auto-restarts after an unexpected exit while running", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-auto-restart-"));
+  const ready = [];
+  const stopped = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 2_000,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped: () => stopped.push(true),
+    onError() {},
+  });
+
+  try {
+    await manager.start({
+      command: previewHttpServerCommand(59984, "setTimeout(()=>process.exit(0),800)"),
+      port: 59984,
+    });
+    assert.equal(ready.length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    assert.ok(ready.length >= 2, "preview should auto-restart after crash");
+    assert.equal(stopped.length, 0, "auto-restart should not emit stopped");
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager does not auto-restart after the user stops preview", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-stop-blocks-restart-"));
+  const ready = [];
+  const stopped = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 2_000,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped: () => stopped.push(true),
+    onError() {},
+  });
+
+  try {
+    await manager.start({
+      command: previewHttpServerCommand(59983, "setTimeout(()=>process.exit(0),800)"),
+      port: 59983,
+    });
+    assert.equal(ready.length, 1);
+
+    setTimeout(() => {
+      void manager.stop();
+    }, 400);
+
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    assert.equal(ready.length, 1, "should not auto-restart after user stop");
+    assert.ok(stopped.length >= 1);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager stop terminates a running child within the grace period", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-stop-grace-"));
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 1_000,
+    onStarting() {},
+    onReady() {},
+    onStopped() {},
+    onError() {},
+  });
+
+  try {
+    await manager.start({
+      command: previewHttpServerCommand(59985, "setInterval(()=>{},1000)"),
+      port: 59985,
+    });
+
+    const started = Date.now();
+    await manager.stop();
+    assert.ok(Date.now() - started < 8_000, "stop should not hang waiting for child exit");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("detectPackageManager walks from app cwd up to repo root for lockfiles", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-package-manager-walk-"));
+  try {
+    await writeFile(join(workspace, "package.json"), JSON.stringify({ name: "root", private: true }));
+    await writeFile(join(workspace, "pnpm-lock.yaml"), "");
+
+    await mkdir(join(workspace, "apps", "web"), { recursive: true });
+    await writeFile(join(workspace, "apps", "web", "package.json"), JSON.stringify({ name: "web" }));
+
+    assert.equal(
+      detectPackageManager({ cwd: join(workspace, "apps", "web"), root: workspace }),
+      "pnpm",
+    );
+    assert.equal(detectPackageManager({ cwd: workspace }), "pnpm");
+  } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
@@ -1062,7 +1271,7 @@ test("preview_start uses the cached main-agent preview command without a discove
       plan: [
         "## Plan",
         "",
-        "{\"preview\":{\"cwd\":\".\",\"command\":\"node -e \\\"require('net').createServer(() => {}).listen(59997, '127.0.0.1')\\\"\",\"port\":59997}}",
+        "{\"preview\":{\"cwd\":\".\",\"command\":\"node -e \\\"require('http').createServer((req,res)=>{res.writeHead(200);res.end('ok')}).listen(59997,'127.0.0.1')\\\"\",\"port\":59997}}",
       ].join("\n"),
       cost: zeroCost,
     },
@@ -1087,7 +1296,7 @@ test("preview_start uses the cached main-agent preview command without a discove
     assert.equal(createdAgents, 1);
     assert.deepEqual(sent.at(-1), {
       type: "preview_ready",
-      command: "node -e \"require('net').createServer(() => {}).listen(59997, '127.0.0.1')\"",
+      command: previewHttpServerCommand(59997),
       port: 59997,
     });
 

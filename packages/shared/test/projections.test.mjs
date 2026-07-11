@@ -78,7 +78,7 @@ test("mapEventToChat: maps room_ready to a room-ready status message", () => {
   const messages = mapEventToChat(event, makeCtx());
   assert.equal(messages.length, 1);
   assert.equal(messages[0].variant, "status");
-  assert.equal(messages[0].content, "Room ready for github.com/acme/app");
+  assert.equal(messages[0].content, "Session ready for github.com/acme/app");
 });
 
 test("mapEventToChat: keeps participant join and leave noise out of conversation", () => {

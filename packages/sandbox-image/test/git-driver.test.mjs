@@ -10,6 +10,7 @@ import {
   configureDefaultGitIdentity,
   DEFAULT_GIT_AUTHOR_EMAIL,
   DEFAULT_GIT_AUTHOR_NAME,
+  runGitCommand,
   ShellGitDriver,
   shallowCloneArgs,
 } from "../dist/git-driver.js";
@@ -98,4 +99,11 @@ test("refresh preserves excluded dependency artifacts while cleaning other ignor
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("runGitCommand rejects when a command exceeds its timeout", async () => {
+  await assert.rejects(
+    () => runGitCommand("node", ["-e", "setTimeout(() => {}, 60_000)"], { timeoutMs: 100 }),
+    /node -e setTimeout\(\(\) => \{\}, 60_000\) timed out after 100ms/,
+  );
 });

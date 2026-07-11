@@ -92,7 +92,7 @@ export async function proxyPreviewRequest(
   });
   portedHeaders.set("cf-container-target-port", String(previewPort));
   const portedRequest = new Request(proxyRequest, { headers: portedHeaders });
-  const response = await sandbox.fetch(portedRequest);
+  const response = await fetchPreviewWithRetries(sandbox, portedRequest);
 
   if (response.status === 101) return response;
 
@@ -239,4 +239,42 @@ function prefixPreviewPath(path: string, baseHref: string): string {
 
 function normalizeOrigin(origin: string): string {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(origin) ? origin : `https://${origin}`;
+}
+
+const PREVIEW_PROXY_RETRY_BACKOFF_MS = [0, 200, 500];
+const PREVIEW_PROXY_MAX_ATTEMPTS = 3;
+
+async function fetchPreviewWithRetries(
+  sandbox: Sandbox,
+  request: Request,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < PREVIEW_PROXY_MAX_ATTEMPTS; attempt++) {
+    const backoffMs = PREVIEW_PROXY_RETRY_BACKOFF_MS[attempt] ?? 500;
+    if (backoffMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+
+    try {
+      const response = await sandbox.fetch(request);
+      if (response.status === 101 || !isRetryablePreviewStatus(response.status)) {
+        return response;
+      }
+      if (attempt === PREVIEW_PROXY_MAX_ATTEMPTS - 1) {
+        return response;
+      }
+      await response.body?.cancel();
+    } catch (error) {
+      lastError = error;
+      if (attempt === PREVIEW_PROXY_MAX_ATTEMPTS - 1) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Preview proxy failed.");
+}
+
+export function isRetryablePreviewStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
 }

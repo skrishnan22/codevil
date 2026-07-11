@@ -15,14 +15,13 @@ export const SessionStateSchema = z.enum([
   "completed",
   "failed",
   "timed_out",
-  "cost_exceeded",
 ]);
 
 export type SessionState = z.infer<typeof SessionStateSchema>;
 
 export const SESSION_STATES = SessionStateSchema.options;
 
-export type TerminalState = "completed" | "failed" | "timed_out" | "cost_exceeded";
+export type TerminalState = "completed" | "failed" | "timed_out";
 
 const transitions: Record<SessionState, readonly SessionState[]> = {
   initializing: ["provisioning_sandbox", "failed"],
@@ -39,7 +38,6 @@ const transitions: Record<SessionState, readonly SessionState[]> = {
   completed: [],
   failed: [],
   timed_out: [],
-  cost_exceeded: [],
 };
 
 export function isValidTransition(from: SessionState, to: SessionState): boolean {

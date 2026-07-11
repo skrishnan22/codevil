@@ -3,7 +3,7 @@ import type {
   DOToSandboxMessage,
   SandboxToDOMessage,
 } from "@codevil/shared";
-import { SandboxToDOMessageSchema, parseInbound } from "@codevil/shared";
+import { SandboxToDOMessageSchema, clientValidationErrorMessage, parseInbound } from "@codevil/shared";
 import {
   buildSandboxWebSocketUrl,
   provisionSandbox,
@@ -75,6 +75,7 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
     host.appendAndBroadcast({ type: "status", message: "Sandbox process started." });
   } catch (error) {
     host.transition("failed");
+    host.updateDirectory({ room_state: "failed", sandbox_state: "failed" });
     host.appendAndBroadcast({
       type: "error",
       message: error instanceof Error ? error.message : String(error),
@@ -122,11 +123,14 @@ export async function dispatchSandboxSocketMessage(
   try {
     raw = JSON.parse(message);
   } catch {
-    ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+    ws.send(JSON.stringify({ type: "protocol_error", message: "Invalid JSON" } satisfies DOToSandboxMessage));
     return;
   }
   const parsed = parseInbound(SandboxToDOMessageSchema, raw, "sandbox_to_do");
-  if (!parsed) return;
+  if (!parsed) {
+    ws.send(JSON.stringify({ type: "protocol_error", message: clientValidationErrorMessage(raw) } satisfies DOToSandboxMessage));
+    return;
+  }
 
   host.loadMeta();
   if (!host.meta) return;
@@ -237,7 +241,7 @@ export function handleSandboxCloneComplete(host: OrchestratorHost): void {
 
   if (host.transition("ready")) {
     host.updateDirectory({ room_state: "ready", sandbox_state: "ready" });
-    host.appendAndBroadcast({ type: "status", message: "Repository cloned. Room is ready." });
+    host.appendAndBroadcast({ type: "status", message: "Repository cloned. Session is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
     scheduleWorkspaceCacheSnapshot(host);
     if (!host.meta.active_run && host.meta.queued_runs.length > 0) {

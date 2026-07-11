@@ -272,10 +272,16 @@ export function extractAssistantDeltaFromEvent(event: unknown): string {
   return "";
 }
 
+// Pi SDK keeps _agentEventQueue private on AgentSession with no public flush/await API.
+// Reaching into it risks breakage on SDK upgrades; keep this guard defensive.
 async function waitForQueuedAgentEvents(session: AgentSession): Promise<void> {
   const maybeQueued = (session as unknown as { _agentEventQueue?: unknown })._agentEventQueue;
-  if (maybeQueued && typeof (maybeQueued as Promise<void>).then === "function") {
-    await maybeQueued;
+  if (maybeQueued != null && typeof (maybeQueued as Promise<unknown>).then === "function") {
+    try {
+      await maybeQueued;
+    } catch {
+      // A rejected queue should not block the caller.
+    }
   }
 }
 
@@ -362,9 +368,9 @@ export function askQuestionTool(
 ): ToolDefinition {
   return defineTool({
     name: "ask_question",
-    label: "Ask the room a question",
+    label: "Ask the session a question",
     description: [
-      "Pose a question to the room and block until a human answers or the question is cancelled.",
+      "Pose a question to the session and block until a human answers or the question is cancelled.",
       "Use this tool whenever you need human input to proceed — for example, when two participants have",
       "given contradictory feedback and you cannot determine which direction to take without guidance.",
       "The question can offer a fixed list of options (participants pick one or more) and/or allow a",

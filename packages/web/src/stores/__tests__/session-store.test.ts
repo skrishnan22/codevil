@@ -160,7 +160,7 @@ describe("session event state inference", () => {
     });
     const ignored = reducePreviewState(second, {
       type: "status",
-      message: "Repository cloned. Room is ready.",
+      message: "Repository cloned. Session is ready.",
     });
 
     expect(starting.outputLines).toEqual([]);
@@ -473,8 +473,8 @@ describe("session event state inference", () => {
           event: {
             type: "preview_ready",
             url: "https://preview.example/",
-            command: "pnpm dev",
-            port: 5173,
+            command: "python manage.py runserver 0.0.0.0:8000",
+            port: 8000,
           },
         }),
       });

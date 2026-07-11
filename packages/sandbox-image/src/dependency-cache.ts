@@ -16,6 +16,7 @@ import { arch as hostArch, platform as hostPlatform } from "node:os";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { detectLibc } from "./runtime-helpers.js";
+import { detectPackageManager } from "./package-manager.js";
 
 export const DEPENDENCY_ARTIFACT_FORMAT_VERSION = 1;
 export const DEPENDENCY_ARTIFACT_MARKER = "dependency-artifacts.json";
@@ -90,7 +91,7 @@ export interface DependencyArtifactMarker {
 export function detectJavaScriptDependencyStrategy(
   repoDir: string,
 ): JavaScriptDependencyStrategy | undefined {
-  const packageManager = detectPackageManager(repoDir);
+  const packageManager = detectPackageManager({ cwd: repoDir });
   if (!packageManager) return undefined;
 
   const installMode = packageManager === "yarn" && usesYarnPnp(repoDir)
@@ -236,30 +237,6 @@ export function repositoryHasInstallLifecycleScripts(repoDir: string): boolean {
     }
   }
   return false;
-}
-
-function detectPackageManager(repoDir: string): JavaScriptPackageManager | undefined {
-  const packageManager = readPackageManager(join(repoDir, "package.json"));
-  if (
-    packageManager === "npm"
-    || packageManager === "pnpm"
-    || packageManager === "yarn"
-    || packageManager === "bun"
-  ) {
-    return packageManager;
-  }
-
-  if (existsSync(join(repoDir, "pnpm-lock.yaml"))) return "pnpm";
-  if (
-    existsSync(join(repoDir, "package-lock.json"))
-    || existsSync(join(repoDir, "npm-shrinkwrap.json"))
-  ) return "npm";
-  if (existsSync(join(repoDir, "yarn.lock"))) return "yarn";
-  if (
-    existsSync(join(repoDir, "bun.lock"))
-    || existsSync(join(repoDir, "bun.lockb"))
-  ) return "bun";
-  return undefined;
 }
 
 function strategyFromMarker(

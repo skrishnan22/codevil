@@ -1,16 +1,20 @@
 import {
+  buildCreateSessionResponse,
   buildSessionSummary,
   legacyDirectoryGuardColumns,
   normalizeCreateSessionBody,
+  normalizeIdempotencyKey,
   recentSessionsSelect,
   sessionByIdSelect,
   sessionDirectoryFailureUpdate,
   sessionDirectoryInsert,
+  sessionIdempotencyInsert,
+  sessionIdempotencyLookup,
+  SESSION_IDEMPOTENCY_HEADER,
   type SessionDirectoryRow,
 } from "./session-directory.js";
 import { createCodevilAuth } from "./auth.js";
 import { workerLogSessionException } from "./logging.js";
-import { createSession } from "./session-service.js";
 import {
   activeMembershipByUserSelect,
   createOwnerMembershipInsert,
@@ -466,6 +470,37 @@ export async function handleCreateSession(
   env: Env,
   auth: AuthContext,
 ): Promise<Response> {
+  let idempotencyKey: string | null = null;
+  try {
+    idempotencyKey = normalizeIdempotencyKey(request.headers.get(SESSION_IDEMPOTENCY_HEADER));
+  } catch (error) {
+    return json({
+      error: "Invalid Idempotency-Key",
+      detail: error instanceof Error ? error.message : String(error),
+    }, 400);
+  }
+
+  if (idempotencyKey) {
+    const lookup = sessionIdempotencyLookup(auth.userId, idempotencyKey);
+    const existing = await env.DB
+      .prepare(lookup.sql)
+      .bind(...lookup.bindings)
+      .first<{ session_id: string }>();
+    if (existing) {
+      const select = sessionByIdSelect(existing.session_id);
+      const row = await env.DB
+        .prepare(select.sql)
+        .bind(...select.bindings)
+        .first<SessionDirectoryRow>();
+      if (row) {
+        return json(
+          buildCreateSessionResponse(existing.session_id, request.url, row),
+          200,
+        );
+      }
+    }
+  }
+
   let body: unknown;
   try {
     body = await request.json();
@@ -483,19 +518,91 @@ export async function handleCreateSession(
     }, 400);
   }
 
-  try {
-    const created = await createSession(env, request.url, normalized, {
-      id: auth.userId,
-      name: auth.name,
-      email: auth.email,
+  const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;
+  const now = new Date().toISOString();
+  const legacyGuards = legacyDirectoryGuardColumns();
+  const row: SessionDirectoryRow = {
+    id: sessionId,
+    repo: normalized.repo,
+    title: normalized.title,
+    provider: normalized.provider,
+    plan_model: normalized.plan_model,
+    exec_model: normalized.exec_model,
+    max_cost: legacyGuards.max_cost,
+    max_session_time: normalized.max_session_time,
+    max_idle_time: normalized.max_idle_time,
+    max_steps: legacyGuards.max_steps,
+    room_state: "initializing",
+    sandbox_state: "not_started",
+    created_by_id: auth.userId,
+    created_by_name: auth.name,
+    created_by_email: auth.email,
+    created_at: now,
+    updated_at: now,
+    last_event_at: now,
+  };
+  const insert = sessionDirectoryInsert(row);
+  const statements = [env.DB.prepare(insert.sql).bind(...insert.bindings)];
+  if (idempotencyKey) {
+    const idempotency = sessionIdempotencyInsert({
+      user_id: auth.userId,
+      idempotency_key: idempotencyKey,
+      session_id: sessionId,
+      created_at: now,
     });
-    return json(created, 201);
+    statements.push(env.DB.prepare(idempotency.sql).bind(...idempotency.bindings));
+  }
+
+  try {
+    await env.DB.batch(statements);
   } catch (error) {
+    if (idempotencyKey) {
+      const lookup = sessionIdempotencyLookup(auth.userId, idempotencyKey);
+      const existing = await env.DB
+        .prepare(lookup.sql)
+        .bind(...lookup.bindings)
+        .first<{ session_id: string }>();
+      if (existing) {
+        const select = sessionByIdSelect(existing.session_id);
+        const existingRow = await env.DB
+          .prepare(select.sql)
+          .bind(...select.bindings)
+          .first<SessionDirectoryRow>();
+        if (existingRow) {
+          return json(
+            buildCreateSessionResponse(existing.session_id, request.url, existingRow),
+            200,
+          );
+        }
+      }
+    }
+    throw error;
+  }
+
+  const doId = env.ORCHESTRATOR.idFromName(sessionId);
+  const stub = env.ORCHESTRATOR.get(doId);
+
+  try {
+    await stub.init(sessionId, normalized.title, normalized.repo, {
+      worker_url: new URL("/", request.url).toString().replace(/\/$/, ""),
+      provider: normalized.provider,
+      plan_model: normalized.plan_model,
+      exec_model: normalized.exec_model,
+      max_time: normalized.max_session_time,
+      created_by: { id: auth.userId, name: auth.name },
+    });
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    const failure = sessionDirectoryFailureUpdate(sessionId, failedAt);
+    await env.DB.prepare(failure.sql).bind(...failure.bindings).run();
+    workerLogSessionException(sessionId, "session.init.failed", error);
     return json({
       error: "Failed to initialize session",
       detail: error instanceof Error ? error.message : String(error),
     }, 500);
   }
+
+  return json(buildCreateSessionResponse(sessionId, request.url, row), 201);
 }
 
 export async function handleListSessions(

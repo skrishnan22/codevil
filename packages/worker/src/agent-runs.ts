@@ -12,6 +12,11 @@ export interface AgentRunQueueResult extends AgentRunQueueState {
   queued?: { run: AgentRun; position: number };
 }
 
+export interface EnqueueAgentRunOptions {
+  /** When false, queue even with no active run (session not ready). Default true. */
+  sessionReady?: boolean;
+}
+
 export function createAgentRun(input: {
   actor: AgentRun["actor"];
   text: string;
@@ -29,7 +34,22 @@ export function createAgentRun(input: {
   };
 }
 
-export function enqueueAgentRun(state: AgentRunQueueState, run: AgentRun): AgentRunQueueResult {
+export function enqueueAgentRun(
+  state: AgentRunQueueState,
+  run: AgentRun,
+  options: EnqueueAgentRunOptions = {},
+): AgentRunQueueResult {
+  const sessionReady = options.sessionReady ?? true;
+
+  if (!state.active && !sessionReady) {
+    const queue = [...state.queue, run];
+    return {
+      active: null,
+      queue,
+      queued: { run, position: queue.length },
+    };
+  }
+
   if (!state.active) {
     const started = startRun(run);
     return {

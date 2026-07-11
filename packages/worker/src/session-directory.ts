@@ -8,7 +8,7 @@ import {
   type SessionSummary,
 } from "@codevil/shared";
 
-/** Legacy D1 columns kept for schema compatibility; no longer configurable. */
+/** Legacy D1 guard columns retained for schema compatibility; cost enforcement removed in v1. */
 const LEGACY_DIRECTORY_MAX_COST = "";
 const LEGACY_DIRECTORY_MAX_STEPS = 0;
 
@@ -70,7 +70,7 @@ export function deriveSessionTitle(repo: string): string {
   const trimmed = repo.trim().replace(/\/$/, "").replace(/\.git$/, "");
   const match = trimmed.match(/(?:^|\/\/|@)github\.com[:/](?<owner>[^/\s]+)\/(?<repo>[^/\s]+)$/);
   if (match?.groups) return `${match.groups.owner}/${match.groups.repo}`;
-  return trimmed || "Untitled room";
+  return trimmed || "Untitled session";
 }
 
 export function buildSessionSummary(row: SessionDirectoryRow): SessionSummary {
@@ -138,9 +138,68 @@ export function sessionDirectoryInsert(row: SessionDirectoryRow): SqlStatement {
 }
 
 export function legacyDirectoryGuardColumns(): { max_cost: string; max_steps: number } {
+  // Written on session create for D1 schema compatibility only; not read for enforcement.
   return {
     max_cost: LEGACY_DIRECTORY_MAX_COST,
     max_steps: LEGACY_DIRECTORY_MAX_STEPS,
+  };
+}
+
+/** HTTP header carrying a client-generated idempotency token for POST /sessions. */
+export const SESSION_IDEMPOTENCY_HEADER = "Idempotency-Key";
+export const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
+
+export interface SessionIdempotencyRow {
+  user_id: string;
+  idempotency_key: string;
+  session_id: string;
+  created_at: string;
+}
+
+export function normalizeIdempotencyKey(raw: string | null): string | null {
+  if (raw === null) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    throw new Error(`Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`);
+  }
+  if (!/^[A-Za-z0-9._:-]+$/.test(trimmed)) {
+    throw new Error("Idempotency-Key must use only letters, numbers, and . _ : -");
+  }
+  return trimmed;
+}
+
+export function sessionIdempotencyLookup(
+  userId: string,
+  idempotencyKey: string,
+): SqlStatement {
+  return {
+    sql: `SELECT session_id, created_at
+      FROM session_idempotency
+      WHERE user_id = ? AND idempotency_key = ?`,
+    bindings: [userId, idempotencyKey],
+  };
+}
+
+export function sessionIdempotencyInsert(
+  row: SessionIdempotencyRow,
+): SqlStatement {
+  return {
+    sql: `INSERT INTO session_idempotency (user_id, idempotency_key, session_id, created_at)
+      VALUES (?, ?, ?, ?)`,
+    bindings: [row.user_id, row.idempotency_key, row.session_id, row.created_at],
+  };
+}
+
+export function buildCreateSessionResponse(
+  sessionId: string,
+  requestUrl: string,
+  row: SessionDirectoryRow,
+): { session_id: string; ws_url: string; summary: SessionSummary } {
+  return {
+    session_id: sessionId,
+    ws_url: new URL(`/sessions/${sessionId}/ws`, requestUrl).toString(),
+    summary: buildSessionSummary(row),
   };
 }
 
@@ -149,6 +208,35 @@ export function sessionDirectoryFailureUpdate(sessionId: string, now: string): S
     sql: "UPDATE sessions SET room_state = ?, sandbox_state = ?, updated_at = ?, last_event_at = ? WHERE id = ?",
     bindings: ["failed", "failed", now, now, sessionId],
   };
+}
+
+export async function runSessionDirectoryUpdateWithRetry(
+  db: D1Database,
+  sql: string,
+  bindings: unknown[],
+  options: {
+    attempts?: number;
+    backoffMs?: number;
+    onFailure: (error: unknown) => void;
+  },
+): Promise<void> {
+  const attempts = options.attempts ?? 3;
+  const backoffMs = options.backoffMs ?? 50;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      await db.prepare(sql).bind(...bindings).run();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, backoffMs * (attempt + 1)));
+      }
+    }
+  }
+
+  options.onFailure(lastError);
 }
 
 export function recentSessionsSelect(cutoffIso: string, limit: number): SqlStatement {

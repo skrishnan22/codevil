@@ -48,7 +48,7 @@ describe("mapEventToChat", () => {
     const messages = mapEventToChat(event, makeCtx());
     expect(messages).toHaveLength(1);
     expect(messages[0].variant).toBe("status");
-    expect(messages[0].content).toBe("Room ready for github.com/acme/app");
+    expect(messages[0].content).toBe("Session ready for github.com/acme/app");
   });
 
   it("keeps participant join and leave noise out of conversation", () => {
@@ -512,9 +512,9 @@ describe("mapEventToActivity", () => {
     );
 
     expect(labels).toEqual([
-      "Room created",
+      "Session created",
       "Provisioning sandbox",
-      "Room ready",
+      "Session ready",
     ]);
   });
 

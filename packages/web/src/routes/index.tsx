@@ -418,9 +418,9 @@ function HomePage() {
       <div className="home-page-inner">
         <section className="home-hero">
           <div className="home-eyebrow">New session</div>
-          <h1 className="home-hero-title">Start a room</h1>
+          <h1 className="home-hero-title">Start a session</h1>
           <p className="home-hero-sub">
-            Point Codevil at a repo, pick your models, and bring your team into a shared room with the agent.
+            Point Codevil at a repo, pick your models, and bring your team into a shared session with the agent.
           </p>
         </section>
 
@@ -498,7 +498,7 @@ function HomePage() {
               Press <kbd>⌘</kbd> <kbd>↵</kbd> to create
             </span>
             <button type="submit" className="home-launcher-create" disabled={!canCreate}>
-              {loading ? "Creating…" : "Create room"}
+              {loading ? "Creating…" : "Create session"}
               <span aria-hidden="true">→</span>
             </button>
           </div>
@@ -546,7 +546,7 @@ function HomePage() {
                   {sessions.length === 0 ? "No sessions yet" : `No ${FILTER_LABEL[filter].toLowerCase()} sessions`}
                 </div>
                 <div className="home-sessions-empty-copy">
-                  Point Codevil at a repository above to start a shared room with the agent.
+                  Point Codevil at a repository above to start a shared session with the agent.
                 </div>
               </div>
             </div>

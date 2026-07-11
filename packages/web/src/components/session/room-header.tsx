@@ -14,7 +14,7 @@ export function RoomHeader() {
   const title =
     messages.find((message) => message.role === "user")?.content.replace(/^@codevil\s*/i, "") ||
     storedSession?.title ||
-    "Waiting for room activity";
+    "Waiting for session activity";
   const people = participants.length > 0
     ? participants.map((participant) => ({ id: participant.id, name: participant.name }))
     : uniqueActors(messages).map((name) => ({ id: name, name }));
@@ -23,7 +23,7 @@ export function RoomHeader() {
 
   return (
     <header className="room-editorial">
-      <div className="room-editorial-kicker">ROOM · {PHASES[activeIndex] ?? "PLAN"}</div>
+      <div className="room-editorial-kicker">SESSION · {PHASES[activeIndex] ?? "PLAN"}</div>
       <h1 className="room-editorial-title">{title}</h1>
       <div className="room-editorial-meta">
         <span className="room-phase-bars" aria-label={`Phase ${activeIndex + 1} of ${PHASES.length}`}>
@@ -37,7 +37,7 @@ export function RoomHeader() {
         </span>
         <span className="room-phase-copy">{activeIndex + 1}/{PHASES.length} · {PHASES[activeIndex]}</span>
         <span className="room-editorial-meta-sep" aria-hidden="true">·</span>
-        <span className="room-avatars" aria-label={`${people.length + 1} in room`}>
+        <span className="room-avatars" aria-label={`${people.length + 1} in session`}>
           {people.map((person) => (
             <span
               key={person.id}
@@ -53,7 +53,7 @@ export function RoomHeader() {
             <span />
           </span>
         </span>
-        <span className="room-occupancy">{people.length + 1} in room</span>
+        <span className="room-occupancy">{people.length + 1} in session</span>
       </div>
     </header>
   );

@@ -390,7 +390,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           }, PENDING_EVENTS_DEBOUNCE_MS);
         }
 
-        if (shouldReloadPreviewAfterEvent(envelope.event) && get().preview.status === "ready") {
+        if (
+          shouldReloadPreviewAfterEvent(envelope.event)
+          && get().preview.status === "ready"
+          && !previewSupportsHmr(get().preview.command)
+        ) {
           clearPreviewReloadTimer();
           previewReloadTimer = setTimeout(() => {
             previewReloadTimer = null;
@@ -617,6 +621,12 @@ function shouldReloadPreviewAfterEvent(event: DOToCLIEvent): boolean {
       ? raw.tool
       : "";
   return isWriteTool(tool);
+}
+
+function previewSupportsHmr(command: string | null): boolean {
+  if (!command) return false;
+  const normalized = command.toLowerCase();
+  return normalized.includes("next") || normalized.includes("vite");
 }
 
 function isWriteTool(name: string): boolean {

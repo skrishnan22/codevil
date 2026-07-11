@@ -1,11 +1,14 @@
-import { createServer } from "node:http";
-import { connect as connectTcp } from "node:net";
+import { createServer, request as httpRequest } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import type { Readable } from "node:stream";
 
 import type { PreviewApp, PreviewFramework } from "@codevil/shared";
+
+import { sandboxLogException, sandboxLogger } from "./logging.js";
+import { detectPackageManager } from "./package-manager.js";
+import { PreviewCommandRejectedError, resolvePreviewSpawn } from "./preview-spawn.js";
 
 export interface PreviewCommand {
   command: string;
@@ -31,19 +34,52 @@ type PreviewState =
 
 const DEFAULT_PREVIEW_READINESS_TIMEOUT_MS = 30_000;
 const NEXT_PREVIEW_READINESS_TIMEOUT_MS = 120_000;
+const STOP_GRACE_MS = 5_000;
+const MAX_PREVIEW_AUTO_RESTARTS = 3;
+const HTTP_READINESS_POLL_MS = 500;
+const HTTP_READINESS_REQUEST_TIMEOUT_MS = 2_000;
+
+type PreviewStartSource = "user" | "auto-restart";
 
 export class PreviewManager {
   private state: PreviewState = { state: "idle" };
+  private autoRestartCount = 0;
+  private stopping = false;
+  private stopGeneration = 0;
 
   constructor(private readonly options: PreviewManagerOptions) {}
 
-  async start(command: PreviewCommand): Promise<void> {
+  async start(
+    command: PreviewCommand,
+    source: PreviewStartSource = "user",
+    restartGeneration?: number,
+  ): Promise<void> {
+    let startGeneration: number;
+    if (source === "auto-restart") {
+      if (this.stopping) return;
+      if (restartGeneration === undefined || restartGeneration !== this.stopGeneration) return;
+      startGeneration = restartGeneration;
+    } else {
+      this.stopping = false;
+      startGeneration = ++this.stopGeneration;
+    }
+
+    const aborted = (): boolean => this.stopping || startGeneration !== this.stopGeneration;
+
     if (this.state.state === "running" && !this.state.child.killed) {
-      this.options.onReady(this.state.command);
+      if (previewCommandsEqual(this.state.command, command)) {
+        this.options.onReady(this.state.command);
+        return;
+      }
+      await this.terminateChild();
+    }
+
+    if (this.state.state === "starting") {
+      sandboxLogger().log("WARN", "preview_start_ignored", { reason: "already_starting" });
       return;
     }
 
-    if (this.state.state === "starting") return;
+    if (aborted()) return;
 
     this.options.onStarting(command);
     const recentLogs: string[] = [];
@@ -56,10 +92,26 @@ export class PreviewManager {
       this.options.onLog?.(clipped);
     };
 
-    const child = spawn(command.command, {
+    let spawnSpec: ReturnType<typeof resolvePreviewSpawn>;
+    try {
+      spawnSpec = resolvePreviewSpawn(command.command);
+    } catch (error) {
+      const message = error instanceof PreviewCommandRejectedError
+        ? error.message
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      sandboxLogger().log("WARN", "preview_command_rejected", { message, command: command.command });
+      this.options.onError(message);
+      return;
+    }
+
+    if (aborted()) return;
+
+    const child = spawn(spawnSpec.executable, spawnSpec.argv, {
       cwd: resolvePreviewCwd(this.options.cwd, command.cwd),
       detached: process.platform !== "win32",
-      shell: true,
+      shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -88,10 +140,25 @@ export class PreviewManager {
     child.on("exit", () => {
       // Only react if this child is still the one we're tracking — a later
       // start() may have replaced it.
-      if (this.state.state !== "idle" && this.state.child === child) {
-        this.state = { state: "idle" };
-        this.options.onStopped();
+      if (this.state.state === "idle" || this.state.child !== child) return;
+
+      const wasRunning = this.state.state === "running";
+      const crashedCommand = this.state.command;
+      this.state = { state: "idle" };
+
+      if (!this.stopping && wasRunning && this.autoRestartCount < MAX_PREVIEW_AUTO_RESTARTS) {
+        this.autoRestartCount++;
+        const restartGeneration = this.stopGeneration;
+        sandboxLogger().log("INFO", "preview_auto_restart", {
+          attempt: this.autoRestartCount,
+          port: crashedCommand.port,
+        });
+        void this.start(crashedCommand, "auto-restart", restartGeneration);
+        return;
       }
+
+      this.autoRestartCount = 0;
+      this.options.onStopped();
     });
 
     try {
@@ -106,8 +173,14 @@ export class PreviewManager {
       // Cast defeats TS narrowing from the assignment above; `this.state` is
       // a mutable class field, so the narrow no longer holds across awaits.
       const after = this.state as PreviewState;
-      if (after.state === "idle" || after.child !== child) return;
+      if (after.state === "idle" || after.child !== child || aborted()) {
+        if (after.state !== "idle" && after.child === child) {
+          await this.terminateChild();
+        }
+        return;
+      }
       this.state = { state: "running", command, child };
+      this.autoRestartCount = 0;
       this.options.onReady(command);
     } catch (error) {
       await this.stop();
@@ -119,28 +192,44 @@ export class PreviewManager {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
+    this.stopGeneration++;
+    this.autoRestartCount = 0;
+
     if (this.state.state === "idle") {
       this.options.onStopped();
       return;
     }
 
+    await this.terminateChild();
+    this.options.onStopped();
+  }
+
+  private async terminateChild(): Promise<void> {
+    if (this.state.state === "idle") return;
+
     const child = this.state.child;
     this.state = { state: "idle" };
-    if (child.killed) {
-      this.options.onStopped();
-      return;
-    }
+    if (child.killed) return;
 
-    if (process.platform !== "win32" && child.pid) {
-      try {
-        process.kill(-child.pid, "SIGTERM");
-      } catch {
-        child.kill("SIGTERM");
-      }
-    } else {
-      child.kill("SIGTERM");
+    const exitPromise = new Promise<void>((resolve) => {
+      child.once("exit", () => resolve());
+    });
+
+    killPreviewProcessGroup(child, "SIGTERM");
+
+    await Promise.race([
+      exitPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, STOP_GRACE_MS)),
+    ]);
+
+    if (child.exitCode === null && child.signalCode === null) {
+      killPreviewProcessGroup(child, "SIGKILL");
+      await Promise.race([
+        exitPromise,
+        new Promise<void>((resolve) => setTimeout(resolve, STOP_GRACE_MS)),
+      ]);
     }
-    this.options.onStopped();
   }
 }
 
@@ -207,7 +296,12 @@ function detectAppInDirectory(root: string, dir: string): PreviewApp | undefined
     if (scriptName) {
       const scriptValue = scripts[scriptName] ?? "";
       const framework = detectFrameworkFromPackage(parsed, scriptValue);
-      const manager = detectPackageManager(dir, parsed.packageManager);
+      const manager = detectPackageManager({
+        cwd: dir,
+        root,
+        declared: parsed.packageManager,
+        fallback: "npm",
+      }) ?? "npm";
       const port = portForFramework(framework);
       return {
         key: keyFromDir(root, dir, parsed.name),
@@ -332,13 +426,20 @@ function readPackageJson(path: string): PackageJson {
   }
 }
 
-function detectPackageManager(cwd: string, packageManager?: string): "pnpm" | "npm" | "yarn" | "bun" {
-  const declared = packageManager?.split("@", 1)[0];
-  if (declared === "pnpm" || declared === "npm" || declared === "yarn" || declared === "bun") return declared;
-  if (existsSync(join(cwd, "pnpm-lock.yaml"))) return "pnpm";
-  if (existsSync(join(cwd, "yarn.lock"))) return "yarn";
-  if (existsSync(join(cwd, "bun.lock")) || existsSync(join(cwd, "bun.lockb"))) return "bun";
-  return "npm";
+function previewCommandsEqual(a: PreviewCommand, b: PreviewCommand): boolean {
+  return a.command === b.command && a.port === b.port && a.cwd === b.cwd;
+}
+
+function killPreviewProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {
+      child.kill(signal);
+    }
+  } else {
+    child.kill(signal);
+  }
 }
 
 function detectTarget(path: string, targets: string[]): string | undefined {
@@ -452,7 +553,7 @@ function waitForPortReady(port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const poll = () => {
-      checkTcp(port).then((ready) => {
+      checkHttp(port).then((ready) => {
         if (ready) {
           resolve();
           return;
@@ -463,7 +564,7 @@ function waitForPortReady(port: number, timeoutMs: number): Promise<void> {
           ));
           return;
         }
-        setTimeout(poll, 500);
+        setTimeout(poll, HTTP_READINESS_POLL_MS);
       });
     };
     poll();
@@ -481,22 +582,28 @@ function formatDuration(ms: number): string {
   return `${Number((ms / 1_000).toFixed(2))}s`;
 }
 
-function checkTcp(port: number): Promise<boolean> {
+function checkHttp(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = connectTcp({
-      host: "127.0.0.1",
-      port,
-      timeout: 1_000,
-    });
-    socket.on("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.on("timeout", () => {
-      socket.destroy();
+    const req = httpRequest(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: "/",
+        method: "GET",
+        timeout: HTTP_READINESS_REQUEST_TIMEOUT_MS,
+      },
+      (res) => {
+        res.resume();
+        const status = res.statusCode ?? 0;
+        resolve(status > 0 && status < 500);
+      },
+    );
+    req.on("timeout", () => {
+      req.destroy();
       resolve(false);
     });
-    socket.on("error", () => resolve(false));
+    req.on("error", () => resolve(false));
+    req.end();
   });
 }
 
@@ -514,6 +621,9 @@ function collectLines(stream: Readable | null, onLine: (line: string) => void): 
   stream.on("end", () => {
     if (buffered) onLine(buffered);
     buffered = "";
+  });
+  stream.on("error", (error) => {
+    sandboxLogException("preview_stream_error", error);
   });
 }
 

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ConsolidationCompleteSchema } from "../dist/index.js";
+import { ConsolidationCompleteSchema, DOToSandboxMessageSchema } from "../dist/index.js";
 
 test("consolidation_complete parses new prose path: {run_id, round, brief, cost}", () => {
   const parsed = ConsolidationCompleteSchema.parse({
@@ -31,4 +31,10 @@ test("consolidation_complete requires type, run_id, round, cost", () => {
     round: 0,
     cost: { input_tokens: 0, output_tokens: 0, total_cost_usd: 0 },
   }));
+});
+
+test("protocol_error round-trips through DOToSandboxMessageSchema", () => {
+  const raw = { type: "protocol_error", message: "Invalid message (type: bad)" };
+  const parsed = DOToSandboxMessageSchema.parse(raw);
+  assert.deepEqual(parsed, raw);
 });

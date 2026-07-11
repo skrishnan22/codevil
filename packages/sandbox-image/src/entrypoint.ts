@@ -64,6 +64,11 @@ export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): 
   });
 
   return (message: DOToSandboxMessage): void => {
+    if (message.type === "protocol_error") {
+      sandboxLogger().log("ERROR", "do_protocol_error", { message: message.message });
+      return;
+    }
+
     if (
       message.type === "credential_response" ||
       message.type === "create_pr_response" ||

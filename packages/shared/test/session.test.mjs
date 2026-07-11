@@ -23,7 +23,6 @@ const ALLOWED_TRANSITIONS = {
   completed: [],
   failed: [],
   timed_out: [],
-  cost_exceeded: [],
 };
 
 test("SESSION_STATES matches the transition table keys", () => {
@@ -62,8 +61,3 @@ test("ready can start a general agent turn", () => {
   assert.equal(isValidTransition("ready", "executing"), true);
 });
 
-test("cost_exceeded is terminal and currently unreachable", () => {
-  assert.equal(isTerminalState("cost_exceeded"), true);
-  const inbound = SESSION_STATES.filter((from) => isValidTransition(from, "cost_exceeded"));
-  assert.deepEqual(inbound, [], "cost_exceeded has no inbound transitions yet");
-});

@@ -311,3 +311,43 @@ test("askQuestionTool passes all params through to the callback", async () => {
   assert.equal(calls[0].allow_multiple, true);
   assert.equal(calls[0].answerable_by, "anyone");
 });
+
+test("ask_question times out with a cancelled outcome when the control plane never responds", async () => {
+  const { runtime } = makeRuntime({ askQuestionTimeoutMs: 50 });
+
+  const outcome = await runtime.askQuestion("run_timeout", {
+    question: "Still waiting?",
+    allow_freeform: false,
+    allow_multiple: false,
+    answerable_by: "decider",
+  });
+
+  assert.equal(outcome.cancelled, true);
+  assert.match(outcome.reason, /timed out/i);
+});
+
+test("ask_question ignores a late response after timeout", async () => {
+  const { runtime, sent } = makeRuntime({ askQuestionTimeoutMs: 50 });
+
+  const promise = runtime.askQuestion("run_late", {
+    question: "Pick one.",
+    allow_freeform: false,
+    allow_multiple: false,
+    answerable_by: "decider",
+  });
+
+  const req = sent.find((m) => m.type === "ask_question_request");
+  assert.ok(req, "expected an ask_question_request");
+
+  const outcome = await promise;
+  assert.equal(outcome.cancelled, true);
+
+  await assert.doesNotReject(
+    runtime.handleMessage({
+      type: "ask_question_response",
+      request_id: req.request_id,
+      option_ids: ["opt_late"],
+      answered_by: { id: "user_late", name: "Late" },
+    }),
+  );
+});

@@ -1,5 +1,7 @@
 # Codevil
 
+[![CI](https://github.com/skrishnan22/codevil/actions/workflows/ci.yml/badge.svg)](https://github.com/skrishnan22/codevil/actions/workflows/ci.yml)
+
 Codevil is a self-hosted AI coding agent platform. Each coding session runs in an isolated Cloudflare Sandbox and streams its progress to a collaborative web UI.
 
 ## Self-hosting
@@ -57,4 +59,8 @@ pnpm verify
 
 Some sandbox preview tests bind localhost ports. Run verification in an environment that permits local TCP listeners.
 
-See [SPEC.md](./SPEC.md) for the architecture and [CONTEXT.md](./CONTEXT.md) for domain terminology.
+## Contributing / Architecture
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — how to set up, verify, and open PRs
+- [docs/backend-architecture.md](./docs/backend-architecture.md) — layer-by-layer backend tour for new contributors
+- [CONTEXT.md](./CONTEXT.md) — domain vocabulary (Session, Agent Request, Agent Run, etc.)

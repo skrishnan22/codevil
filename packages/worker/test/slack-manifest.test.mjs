@@ -36,3 +36,11 @@ test("buildSlackManifest disables socket mode and interactivity", () => {
   assert.match(manifest, /socket_mode_enabled: false/);
   assert.match(manifest, /is_enabled: false/);
 });
+
+test("buildSlackManifest subscribes only to events handled by the adapter", () => {
+  const manifest = buildSlackManifest("https://worker.example.com");
+
+  assert.match(manifest, /- app_mention/);
+  assert.doesNotMatch(manifest, /message\.channels/);
+  assert.doesNotMatch(manifest, /message\.groups/);
+});

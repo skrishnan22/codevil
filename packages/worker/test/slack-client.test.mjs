@@ -40,8 +40,7 @@ test("postSlackMessage uses chat.postMessage", async () => {
       return { ok: true, data: { ok: true, ts: "171951.0001" } };
     },
     "xoxb-test",
-    "C123",
-    "hello",
+    { channel: "C123", text: "hello" },
   );
 
   assert.deepEqual(calls, [{
@@ -60,9 +59,7 @@ test("postSlackMessage supports injectable Slack API with thread timestamp", asy
       return { ok: true, data: { ok: true } };
     },
     "xoxb-test",
-    "C123",
-    "hello",
-    { threadTs: "171951.0001" },
+    { channel: "C123", text: "hello", threadTs: "171951.0001" },
   );
 
   assert.deepEqual(calls, [{

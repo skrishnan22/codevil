@@ -38,8 +38,21 @@ test("status reports missing Slack configuration without checking Slack API", as
       signingSecret: false,
       botUserId: false,
     },
-    missing: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"],
+    missing: ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET", "CODEVIL_SLACK_BOT_USER_ID"],
   });
+});
+
+test("status is not configured without the Slack bot user id", async () => {
+  const response = await handleSlackStatus({
+    SLACK_BOT_TOKEN: "xoxb-test",
+    SLACK_SIGNING_SECRET: "secret",
+  }, {
+    slackApi: async () => ({ ok: true, data: { ok: true } }),
+  });
+
+  const body = await response.json();
+  assert.equal(body.configured, false);
+  assert.deepEqual(body.missing, ["CODEVIL_SLACK_BOT_USER_ID"]);
 });
 
 test("status checks auth.test through injected Slack API when bot token exists", async () => {
@@ -97,7 +110,7 @@ test("status reports injected Slack API auth.test failures", async () => {
       signingSecret: false,
       botUserId: false,
     },
-    missing: ["SLACK_SIGNING_SECRET"],
+    missing: ["SLACK_SIGNING_SECRET", "CODEVIL_SLACK_BOT_USER_ID"],
     authTest: {
       ok: false,
       error: "invalid_auth",

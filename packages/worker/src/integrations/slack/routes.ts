@@ -245,6 +245,7 @@ function slackMissingEnv(env: Env): string[] {
   const missing: string[] = [];
   if (!env.SLACK_BOT_TOKEN) missing.push("SLACK_BOT_TOKEN");
   if (!env.SLACK_SIGNING_SECRET) missing.push("SLACK_SIGNING_SECRET");
+  if (!env.CODEVIL_SLACK_BOT_USER_ID) missing.push("CODEVIL_SLACK_BOT_USER_ID");
   return missing;
 }
 
@@ -355,7 +356,11 @@ async function postSlackReply(
 ): Promise<void> {
   if (!env.SLACK_BOT_TOKEN) return;
   const slackApi = deps.slackApi ?? createSlackWebApi();
-  await postSlackMessage(slackApi, env.SLACK_BOT_TOKEN, channelId, text, { threadTs });
+  await postSlackMessage(slackApi, env.SLACK_BOT_TOKEN, {
+    channel: channelId,
+    text,
+    threadTs,
+  });
 }
 
 function d1Changes(result: D1Result<unknown>): number {

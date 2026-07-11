@@ -60,41 +60,22 @@ export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
   };
 }
 
-export function postSlackMessage(
-  slackApi: SlackApi,
-  botToken: string,
-  channel: string,
-  text: string,
-  options?: { threadTs?: string },
-): Promise<SlackApiResult<unknown>>;
-export function postSlackMessage(
-  botToken: string | undefined,
-  channel: string,
-  text: string,
-  options?: { threadTs?: string },
-): Promise<SlackApiResult<unknown>>;
-export async function postSlackMessage(
-  first: SlackApi | string | undefined,
-  second: string,
-  third: string,
-  fourth: string | { threadTs?: string } = {},
-  fifth: { threadTs?: string } = {},
-): Promise<SlackApiResult<unknown>> {
-  if (typeof first === "function") {
-    const options = fifth;
-    return first(second, "chat.postMessage", {
-      channel: third,
-      text: typeof fourth === "string" ? fourth : "",
-      ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
-    }) as Promise<SlackApiResult<unknown>>;
-  }
+export interface SlackMessageInput {
+  channel: string;
+  text: string;
+  threadTs?: string;
+}
 
-  const options = typeof fourth === "object" ? fourth : {};
-  return slackApi(first, "chat.postMessage", {
-    channel: second,
-    text: third,
-    ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
-  });
+export function postSlackMessage(
+  api: SlackApi,
+  botToken: string,
+  input: SlackMessageInput,
+): Promise<SlackApiResult<unknown>> {
+  return api(botToken, "chat.postMessage", {
+    channel: input.channel,
+    text: input.text,
+    ...(input.threadTs ? { thread_ts: input.threadTs } : {}),
+  }) as Promise<SlackApiResult<unknown>>;
 }
 
 function isSlackOk(data: unknown): data is { ok: true } {

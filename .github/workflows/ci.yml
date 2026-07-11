@@ -44,3 +44,5 @@ jobs:
           persist-credentials: false
 
       - run: docker build -f Dockerfile.sandbox -t codevil-sandbox:ci .
+
+      - run: node packages/sandbox-image/test/sandbox-image-smoke.mjs

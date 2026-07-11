@@ -3,7 +3,7 @@ import type {
   DOToSandboxMessage,
   SandboxToDOMessage,
 } from "@codevil/shared";
-import { SandboxToDOMessageSchema, clientValidationErrorMessage, getProviderDefinition, parseInbound, safeExceptionAttributes, type ProviderApi } from "@codevil/shared";
+import { SandboxToDOMessageSchema, clientValidationErrorMessage, getProviderDefinition, parseInbound, safeExceptionAttributes, type ProviderApi, type ProviderAuthPolicy } from "@codevil/shared";
 import { redactEvent } from "../redaction.js";
 import {
   buildSandboxWebSocketUrl,
@@ -250,25 +250,47 @@ export async function dispatchSandboxSocketMessage(
 export async function issueProxyCapabilities(host: OrchestratorHost): Promise<Partial<Record<ProviderApi | "git", string>>> {
   host.loadMeta();
   if (!host.meta) throw new Error("Session not initialized");
+
   const providerDefinition = getProviderDefinition(host.meta.provider);
   if (!providerDefinition) throw new Error("Unsupported LLM provider");
-  const llm = Object.fromEntries(await Promise.all(providerDefinition.authPolicies.map(async ({ api }) => [
-    api,
-    await createSandboxProxyToken(host.workerEnv.CODEVIL_PROXY_SIGNING_SECRET ?? "", {
-      sessionId: host.meta!.session_id,
-      provider: host.meta!.provider,
-      api,
-    }),
-  ]))) as Partial<Record<ProviderApi, string>>;
-  const primaryRepo = githubRepoName(host.meta.repo);
+
+  const signingSecret = host.workerEnv.CODEVIL_PROXY_SIGNING_SECRET ?? "";
+  const { session_id: sessionId, provider, repo } = host.meta;
+
+  const llmTokens = await createLlmProxyTokensForSession(signingSecret, {
+    sessionId,
+    provider,
+    authPolicies: providerDefinition.authPolicies,
+  });
+
+  const primaryRepo = githubRepoName(repo);
   if (!primaryRepo) throw new Error("Session repository must be a github.com HTTPS repository");
-  return {
-    ...llm,
-    git: await createSandboxGitProxyToken(host.workerEnv.CODEVIL_PROXY_SIGNING_SECRET ?? "", {
-      sessionId: host.meta.session_id,
-      primaryRepo,
-    }),
-  };
+
+  const gitToken = await createSandboxGitProxyToken(signingSecret, {
+    sessionId,
+    primaryRepo,
+  });
+
+  return { ...llmTokens, git: gitToken };
+}
+
+async function createLlmProxyTokensForSession(
+  signingSecret: string,
+  params: {
+    sessionId: string;
+    provider: string;
+    authPolicies: readonly ProviderAuthPolicy[];
+  },
+): Promise<Partial<Record<ProviderApi, string>>> {
+  const tokens: Partial<Record<ProviderApi, string>> = {};
+  await Promise.all(params.authPolicies.map(async ({ api }) => {
+    tokens[api] = await createSandboxProxyToken(signingSecret, {
+      sessionId: params.sessionId,
+      provider: params.provider,
+      api,
+    });
+  }));
+  return tokens;
 }
 
 function githubRepoName(repo: string): string | undefined {

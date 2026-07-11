@@ -4,12 +4,12 @@ import {
   type ProviderApi,
 } from "@codevil/shared";
 import { resolveProviderCredential } from "./provider-credentials.js";
-import type { Env } from "./worker-env.js";
+import { createCapabilityToken, verifyCapabilityToken } from "./capability-token.js";
+import { workerLog } from "./logging.js";
+import { collectWorkerSecretValues, type Env } from "./worker-env.js";
 
 const TOKEN_TTL_SECONDS = 15 * 60;
 const PROXY_TARGET_HEADER = "x-codevil-proxy-target";
-const TOKEN_VERSION = "v1";
-const GIT_TOKEN_VERSION = "git1";
 
 export interface SandboxProxyClaims {
   /**
@@ -21,41 +21,61 @@ export interface SandboxProxyClaims {
   sessionId: string;
   provider: string;
   api: ProviderApi;
-  exp: number;
 }
 
 /** Deliberately separate from LLM capabilities: it authorizes Git only. */
 export interface SandboxGitProxyClaims {
   sessionId: string;
   primaryRepo: string;
-  exp: number;
 }
 
 /** Issue a short-lived, HMAC-authenticated sandbox-only capability. */
 export async function createSandboxProxyToken(
   secret: string,
-  claims: Omit<SandboxProxyClaims, "exp">,
+  claims: SandboxProxyClaims,
   now = Date.now(),
 ): Promise<string> {
-  if (!secret.trim()) throw new Error("CODEVIL_PROXY_SIGNING_SECRET is not configured");
-  const payload: SandboxProxyClaims = { ...claims, exp: Math.floor(now / 1000) + TOKEN_TTL_SECONDS };
-  const encoded = base64url(JSON.stringify(payload));
-  const signed = `${TOKEN_VERSION}.${encoded}`;
-  return `${signed}.${await signature(secret, signed)}`;
+  return createCapabilityToken(secret, { audience: "sandbox_llm", claims, nowSeconds: Math.floor(now / 1000), ttlSeconds: TOKEN_TTL_SECONDS });
 }
 
-export async function createSandboxGitProxyToken(secret: string, claims: Omit<SandboxGitProxyClaims, "exp">, now = Date.now()): Promise<string> {
-  if (!secret.trim()) throw new Error("CODEVIL_PROXY_SIGNING_SECRET is not configured");
+export async function createSandboxGitProxyToken(secret: string, claims: SandboxGitProxyClaims, now = Date.now()): Promise<string> {
   if (!isRepoName(claims.primaryRepo)) throw new Error("Invalid primary Git repository");
-  const payload: SandboxGitProxyClaims = { ...claims, exp: Math.floor(now / 1000) + TOKEN_TTL_SECONDS };
-  const encoded = base64url(JSON.stringify(payload));
-  const signed = `${GIT_TOKEN_VERSION}.${encoded}`;
-  return `${signed}.${await signature(secret, signed)}`;
+  return createCapabilityToken(secret, { audience: "sandbox_git", claims, nowSeconds: Math.floor(now / 1000), ttlSeconds: TOKEN_TTL_SECONDS });
 }
 
-export async function handleSandboxProxy(request: Request, env: Env): Promise<Response | null> {
+export interface SandboxProxyTelemetry {
+  kind: "llm" | "git";
+  provider?: string;
+  api?: ProviderApi;
+  operation?: "read" | "write";
+  outcome: "success" | "rejected" | "failed";
+  status: number;
+  statusClass: string;
+  durationMs: number;
+}
+
+export async function handleSandboxProxy(
+  request: Request,
+  env: Env,
+  emit: (event: SandboxProxyTelemetry) => void = (event) => {
+    workerLog(event.outcome === "failed" ? "ERROR" : "DEBUG", "sandbox.proxy", { proxy: event }, collectWorkerSecretValues(env));
+  },
+): Promise<Response | null> {
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/sandbox-proxy/")) return null;
+  const startedAt = Date.now();
+  const response = await handleSandboxProxyRequest(request, env);
+  const llm = url.pathname.match(/^\/sandbox-proxy\/sessions\/[^/]+\/llm\/([^/]+)\/([^/]+)/);
+  const git = url.pathname.match(/^\/sandbox-proxy\/sessions\/[^/]+\/github\/[^/]+\/[^/]+(?:\.git)?\/(.*)$/);
+  const event: SandboxProxyTelemetry = llm
+    ? { kind: "llm", ...(safeTelemetryId(llm[1]) ? { provider: llm[1] } : {}), ...(isProviderApi(llm[2]) ? { api: llm[2] } : {}), outcome: proxyOutcome(response.status), status: response.status, statusClass: `${Math.floor(response.status / 100)}xx`, durationMs: Date.now() - startedAt }
+    : { kind: "git", ...(git ? { operation: gitSmartHttpOperation(request, git[1]) } : {}), outcome: proxyOutcome(response.status), status: response.status, statusClass: `${Math.floor(response.status / 100)}xx`, durationMs: Date.now() - startedAt };
+  try { emit(event); } catch { /* observability must not affect proxying */ }
+  return response;
+}
+
+async function handleSandboxProxyRequest(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
   const secret = env.CODEVIL_PROXY_SIGNING_SECRET?.trim();
   if (!secret) return proxyError("Sandbox proxy is not configured", 503);
 
@@ -67,7 +87,12 @@ export async function handleSandboxProxy(request: Request, env: Env): Promise<Re
     if (!isProviderApi(api)) return proxyError("Invalid provider API", 400);
     return proxyLlm(request, env, claims, provider, api, suffix);
   }
-  const git = url.pathname.match(/^\/sandbox-proxy\/sessions\/([^/]+)\/github\/([^/]+)\/([^/]+)\.git(?:\/(.*))?$/);
+  // `url.*.insteadOf` can replace the GitHub host/path prefix, but it cannot
+  // add a `.git` suffix. Accept that one canonical Git spelling as well as the
+  // explicit `.git` spelling. Both are normalized by proxyGit before reaching
+  // GitHub, and neither admits an arbitrary path outside smart HTTP.
+  const git = url.pathname.match(/^\/sandbox-proxy\/sessions\/([^/]+)\/github\/([^/]+)\/([^/]+)\.git(?:\/(.*))?$/)
+    ?? url.pathname.match(/^\/sandbox-proxy\/sessions\/([^/]+)\/github\/([^/]+)\/([^/]+)(?:\/(.*))?$/);
   if (git) {
     const [, sessionId, owner, repo, suffix = ""] = git;
     const claims = await verifyGitRequestToken(request, secret);
@@ -76,6 +101,12 @@ export async function handleSandboxProxy(request: Request, env: Env): Promise<Re
   }
   return proxyError("Not found", 404);
 }
+
+function proxyOutcome(status: number): SandboxProxyTelemetry["outcome"] {
+  if (status >= 200 && status < 400) return "success";
+  return status >= 500 ? "failed" : "rejected";
+}
+function safeTelemetryId(value: string): boolean { return /^[A-Za-z0-9_-]{1,64}$/.test(value); }
 
 async function proxyGit(request: Request, env: Env, claims: SandboxGitProxyClaims, owner: string, repo: string, suffix: string): Promise<Response> {
   if (!isRepoPart(owner) || !isRepoPart(repo) || !isSafeGitSuffix(suffix)) return proxyError("Invalid Git repository path", 400);
@@ -113,29 +144,16 @@ async function proxyLlm(request: Request, env: Env, claims: SandboxProxyClaims, 
 async function verifyRequestToken(request: Request, secret: string, kind: "llm"): Promise<SandboxProxyClaims | undefined> {
   const token = proxyToken(request.headers);
   if (!token) return undefined;
-  const parts = token.split(".");
-  if (parts.length !== 3) return undefined;
-  const [version, encoded, supplied] = parts;
-  const signed = `${version}.${encoded}`;
-  if (version !== TOKEN_VERSION || !encoded || !supplied || !await timingSafeEqual(await signature(secret, signed), supplied)) return undefined;
-  try {
-    const claims = JSON.parse(unbase64url(encoded)) as SandboxProxyClaims;
-    if (!claims || !isSessionId(claims.sessionId) || typeof claims.provider !== "string" || !isProviderApi(claims.api) || !Number.isInteger(claims.exp) || claims.exp <= Math.floor(Date.now() / 1000)) return undefined;
-    return claims;
-  } catch { return undefined; }
+  const envelope = await verifyCapabilityToken<SandboxProxyClaims>(token, secret, { audience: "sandbox_llm", maxLifetimeSeconds: TOKEN_TTL_SECONDS });
+  const claims = envelope?.claims;
+  return claims && isSessionId(claims.sessionId) && typeof claims.provider === "string" && isProviderApi(claims.api) ? claims : undefined;
 }
 async function verifyGitRequestToken(request: Request, secret: string): Promise<SandboxGitProxyClaims | undefined> {
   const token = gitCapabilityFromBasic(request.headers);
   if (!token) return undefined;
-  const parts = token.split(".");
-  if (parts.length !== 3) return undefined;
-  const [version, encoded, supplied] = parts;
-  const signed = `${version}.${encoded}`;
-  if (version !== GIT_TOKEN_VERSION || !encoded || !supplied || !await timingSafeEqual(await signature(secret, signed), supplied)) return undefined;
-  try {
-    const claims = JSON.parse(unbase64url(encoded)) as SandboxGitProxyClaims;
-    return claims && isSessionId(claims.sessionId) && isRepoName(claims.primaryRepo) && Number.isInteger(claims.exp) && claims.exp > Math.floor(Date.now() / 1000) ? claims : undefined;
-  } catch { return undefined; }
+  const envelope = await verifyCapabilityToken<SandboxGitProxyClaims>(token, secret, { audience: "sandbox_git", maxLifetimeSeconds: TOKEN_TTL_SECONDS });
+  const claims = envelope?.claims;
+  return claims && isSessionId(claims.sessionId) && isRepoName(claims.primaryRepo) ? claims : undefined;
 }
 function gitCapabilityFromBasic(headers: Headers): string | undefined {
   const raw = headers.get("authorization")?.trim();
@@ -214,7 +232,3 @@ function appendSafeRelativePath(target: URL, suffix: string, search: string): UR
   return upstream;
 }
 function proxyError(error: string, status: number): Response { return Response.json({ error }, { status }); }
-function base64url(value: string): string { return btoa(value).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
-function unbase64url(value: string): string { return atob(value.replaceAll("-", "+").replaceAll("_", "/") + "===".slice((value.length + 3) % 4)); }
-async function signature(secret: string, value: string): Promise<string> { const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return base64url(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value))))); }
-async function timingSafeEqual(a: string, b: string): Promise<boolean> { if (a.length !== b.length) return false; let diff = 0; for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i); return diff === 0; }

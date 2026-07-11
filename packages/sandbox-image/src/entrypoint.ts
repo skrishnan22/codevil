@@ -60,6 +60,7 @@ export interface SandboxMessageRuntime {
 export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): (message: DOToSandboxMessage) => void {
   let mainQueue = Promise.resolve();
   let previewQueue = Promise.resolve();
+  let capabilityQueue = Promise.resolve();
 
   const enqueue = (
     queue: Promise<void>,
@@ -71,6 +72,11 @@ export function createSandboxMessageDispatcher(runtime: SandboxMessageRuntime): 
   return (message: DOToSandboxMessage): void => {
     if (message.type === "protocol_error") {
       sandboxLogger().log("ERROR", "do_protocol_error", { message: message.message });
+      return;
+    }
+
+    if (message.type === "proxy_capabilities") {
+      capabilityQueue = enqueue(capabilityQueue, () => runtime.handleMessage(message));
       return;
     }
 

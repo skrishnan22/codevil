@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModels } from "@earendil-works/pi-ai/compat";
+import { LLM_PROVIDER_CAPABILITIES, getProviderOutboundAuthPolicy } from "@codevil/shared";
 
 import {
   PiAgentDriver,
@@ -12,6 +13,22 @@ import {
   consolidationPrompt,
   resolveProviderModel,
 } from "../dist/pi-driver.js";
+
+test("Codevil outbound policy covers every model in the pinned Pi catalog", () => {
+  const gaps = [];
+  for (const provider of LLM_PROVIDER_CAPABILITIES) {
+    for (const model of getModels(provider.id)) {
+      const resolved = model.baseUrl
+        .replaceAll("{CLOUDFLARE_ACCOUNT_ID}", "account")
+        .replaceAll("{CLOUDFLARE_GATEWAY_ID}", "gateway");
+      const hostname = new URL(resolved).hostname;
+      if (!getProviderOutboundAuthPolicy(provider.id, hostname, model.api)) {
+        gaps.push(`${provider.id}/${model.id}: ${model.api} at ${hostname}`);
+      }
+    }
+  }
+  assert.deepEqual(gaps, [], `Review Pi provider policy drift:\n${gaps.join("\n")}`);
+});
 
 test("extracts plan text from Pi agent_end messages", () => {
   const text = extractAssistantTextFromEvent({

@@ -85,3 +85,16 @@ test("oversized structural state does not advance a checkpoint or delete its rep
   assert.equal(sql.events.length, 1);
   assert.equal(log.getSnapshotCursor(), 0, "reconnect falls back to the prior durable checkpoint");
 });
+
+test("event tail count is hydrated once instead of queried on every append", () => {
+  const sql = createEventSql();
+  const log = createLog(sql);
+  log.hydrateFromSql();
+
+  for (let index = 0; index < 3; index++) {
+    log.appendAndBroadcast({ type: "status", message: `event ${index}` });
+  }
+
+  const countQueries = sql.calls.filter(({ query }) => query.includes("SELECT COUNT(*) AS count FROM events"));
+  assert.equal(countQueries.length, 1);
+});

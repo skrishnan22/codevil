@@ -80,6 +80,7 @@ _Avoid_: Login link, magic link
 - **Activity** may summarize or link into the **Tool Trace**.
 - **Conversation** includes **User Messages**, **Assistant Replies**, and promoted session events, not every raw **Assistant Stream** or **Tool Trace** entry.
 - A **Team** is the implicit boundary of one self-hosted Codevil deployment.
+- A deployment's GitHub credential is a **Team-level** integration: Sessions may read any repository visible to that credential, while Git writes remain scoped to the Session's primary repository.
 - An **Auth User** becomes a **Member** only through an active **Membership**.
 - A **Membership** has one **Role**.
 - An **Owner** is a Member.
@@ -103,3 +104,11 @@ _Avoid_: Login link, magic link
 - "agent message" was used for both live assistant streaming text and finalized assistant output. Resolved: use **Assistant Stream** for live Pi text and **Assistant Reply** for finalized text after `agent_end`.
 - "team" can sound like a tenant row in SaaS products. Resolved: in Codevil v1, **Team** is implicit and means the people with active Membership in one self-hosted deployment.
 - "plan" was used as both an optional agent artifact and a required approval gate. Resolved: **Plan** is optional in the default web flow and does not imply approval.
+
+## Security Boundaries
+
+- Provider credentials and the GitHub PAT remain in the Worker. A sandbox receives only short-lived, audience-bound capabilities for LLM, Git, and sandbox-WebSocket access.
+- Codevil's provider host/API/header registry is an independent credential-release policy, not a dynamically trusted copy of Pi configuration. Compatibility tests compare it with the pinned Pi model catalog and require human review when Pi changes hosts or protocols.
+- Capability rotation bypasses the serialized Agent Run queue so long-running work cannot prevent renewal.
+- The deployment PAT is a Team-level integration. Sessions may read any repository visible to it so an Agent Run can consult related repositories; Git writes remain limited to the Session's primary repository.
+- CodeQL and dependency-review workflows remain disabled while the repository is private. Restore them and enable GitHub Code Scanning and Dependency Graph when the repository becomes public.

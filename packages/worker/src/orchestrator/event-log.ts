@@ -31,6 +31,7 @@ export class SessionEventLog {
   private snapshotAlarmScheduled = false;
   private lastPersistedSnapshot: SessionSnapshot = emptySessionSnapshot();
   private lastPersistedSnapshotCursor = 0;
+  private eventsSincePersistedSnapshot = 0;
 
   constructor(
     private readonly sql: SqlStorage,
@@ -110,6 +111,7 @@ export class SessionEventLog {
     );
     this.snapshotCursor = row.id;
     this.snapshotDirty = true;
+    this.eventsSincePersistedSnapshot += 1;
 
     const envelope = JSON.stringify({ cursor: row.id, event: stored });
     for (const ws of this.getCliWebSockets()) {
@@ -119,7 +121,7 @@ export class SessionEventLog {
     // Persist synchronously on terminal events; otherwise debounce via alarm.
     if (
       this.snapshotTerminalEventTypes.has(stored.type) ||
-      shouldCompactEventTail(this.countEventsSinceSnapshot())
+      shouldCompactEventTail(this.eventsSincePersistedSnapshot)
     ) {
       this.persistSnapshot();
     } else {
@@ -145,6 +147,7 @@ export class SessionEventLog {
       );
       this.lastPersistedSnapshot = prepared.snapshot;
       this.lastPersistedSnapshotCursor = this.snapshotCursor;
+      this.eventsSincePersistedSnapshot = 0;
       this.snapshotDirty = false;
     } catch (error) {
       this.getTracer()?.log("ERROR", "snapshot.persist.failed", {
@@ -152,15 +155,6 @@ export class SessionEventLog {
       });
       // Do NOT rethrow — persistence failure is recoverable on the next alarm.
     }
-  }
-
-  private countEventsSinceSnapshot(): number {
-    // Events are the seven-day canonical history; snapshots only accelerate
-    // reconnects and must never make display history disappear.
-    return this.sql.exec(
-      "SELECT COUNT(*) AS count FROM events WHERE id > ?",
-      this.lastPersistedSnapshotCursor,
-    ).one().count as number;
   }
 
   scheduleSnapshotPersist(): void {
@@ -217,5 +211,11 @@ export class SessionEventLog {
         // Leave defaults; next append will rebuild from scratch.
       }
     }
+    // Events are the seven-day canonical history; hydrate the uncheckpointed
+    // tail once, then maintain it in memory on the hot append path.
+    this.eventsSincePersistedSnapshot = this.sql.exec(
+      "SELECT COUNT(*) AS count FROM events WHERE id > ?",
+      this.lastPersistedSnapshotCursor,
+    ).one().count as number;
   }
 }

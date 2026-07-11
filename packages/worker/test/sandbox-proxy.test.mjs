@@ -18,6 +18,20 @@ test("LLM proxy rejects invalid provider target before any upstream request", as
   assert.equal(response.status, 403);
 });
 
+test("proxy telemetry reports normalized metadata without request paths or credentials", async () => {
+  const telemetry = [];
+  const token = await createSandboxProxyToken(secret, { sessionId: "ses_s1", provider: "openai", api: "openai-responses" });
+  const response = await handleSandboxProxy(new Request("https://worker.test/sandbox-proxy/sessions/ses_s1/llm/openai/openai-responses/responses?secret=query", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "x-codevil-proxy-target": "https://evil.test/private/path" },
+  }), env, (event) => telemetry.push(event));
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(telemetry.map(({ durationMs, ...event }) => event), [{ kind: "llm", provider: "openai", api: "openai-responses", outcome: "rejected", status: 403, statusClass: "4xx" }]);
+  assert.ok(telemetry[0].durationMs >= 0);
+  assert.doesNotMatch(JSON.stringify(telemetry), /responses\?|evil|private|real-provider-key|cap1/);
+});
+
 test("expired and provider-mismatched capabilities are rejected", async () => {
   const expired = await createSandboxProxyToken(secret, { sessionId: "ses_s1", provider: "openai", api: "openai-responses" }, 0);
   const response = await handleSandboxProxy(new Request("https://worker.test/sandbox-proxy/sessions/ses_s1/llm/anthropic/anthropic-messages/messages", {
@@ -131,6 +145,26 @@ test("Git proxy permits PAT-authenticated reads of any repository without exposi
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("Git proxy canonicalizes the exact bare clone route to the .git upstream", async () => {
+  const token = await createSandboxGitProxyToken(secret, { sessionId: "ses_s1", primaryRepo: "primary/app" });
+  const cap = Buffer.from(`x-access-token:${token}`).toString("base64");
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => { calls.push({ url: String(input), init }); return new Response("pack"); };
+  try {
+    for (const repository of ["https://worker.test/sandbox-proxy/sessions/ses_s1/github/other/private", "https://worker.test/sandbox-proxy/sessions/ses_s1/github/other/private.git"]) {
+      const response = await handleSandboxProxy(new Request(`${repository}/info/refs?service=git-upload-pack`, {
+        headers: { authorization: `Basic ${cap}` },
+      }), env);
+      assert.equal(response.status, 200, repository);
+    }
+    assert.deepEqual(calls.map((call) => call.url), [
+      "https://github.com/other/private.git/info/refs?service=git-upload-pack",
+      "https://github.com/other/private.git/info/refs?service=git-upload-pack",
+    ]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Git proxy permits writes only to the signed primary repository and rejects suffix/authority attacks", async () => {
   const token = await createSandboxGitProxyToken(secret, { sessionId: "ses_s1", primaryRepo: "primary/app" });
   const cap = Buffer.from(`x-access-token:${token}`).toString("base64");
@@ -146,6 +180,10 @@ test("Git proxy permits writes only to the signed primary repository and rejects
     for (const path of ["/sandbox-proxy/sessions/ses_s1/github/primary/app.git//evil", "/sandbox-proxy/sessions/ses_s1/github/primary/app.git/%2F%2Fevil"]) {
       const response = await handleSandboxProxy(new Request(`https://worker.test${path}`, { headers }), env);
       assert.ok([400, 404].includes(response.status));
+    }
+    for (const path of ["/sandbox-proxy/sessions/ses_s1/github/primary/app/objects/aa/bb", "/sandbox-proxy/sessions/ses_s1/github/primary/app/extra/info/refs?service=git-upload-pack"]) {
+      const response = await handleSandboxProxy(new Request(`https://worker.test${path}`, { headers }), env);
+      assert.ok([400, 404].includes(response.status), path);
     }
     assert.equal(calls, 1);
   } finally { globalThis.fetch = originalFetch; }

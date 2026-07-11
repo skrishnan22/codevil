@@ -66,8 +66,8 @@ test("authenticated sandbox capability refresh returns new session-bound short-l
 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].type, "proxy_capabilities");
-  assert.match(sent[0].tokens["openai-responses"], /^v1\.[^.]+\.[^.]+$/);
-  assert.match(sent[0].sandbox_ws_token, /^sws1\.[^.]+\.[^.]+$/);
+  assert.match(sent[0].tokens["openai-responses"], /^cap1\.[^.]+\.[^.]+$/);
+  assert.match(sent[0].sandbox_ws_token, /^cap1\.[^.]+\.[^.]+$/);
   assert.ok((await issueProxyCapabilities(host))["openai-responses"]);
 });
 
@@ -93,7 +93,7 @@ test("proxy capability refresh normalizes an HTTPS primary repository without .g
 
     assert.equal(sent[0].type, "proxy_capabilities");
     const capability = sent[0].tokens.git;
-    assert.match(capability, /^git1\.[^.]+\.[^.]+$/);
+    assert.match(capability, /^cap1\.[^.]+\.[^.]+$/);
     const authorization = `Basic ${Buffer.from(`x-access-token:${capability}`).toString("base64")}`;
     const response = await handleSandboxProxy(new Request(
       "https://worker.test/sandbox-proxy/sessions/ses_test/github/acme/app.git/info/refs?service=git-upload-pack",

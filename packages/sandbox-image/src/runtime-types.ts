@@ -110,7 +110,7 @@ export interface GitDriver {
   defaultBranch(cwd: string): Promise<string>;
   pushBranch(options: PushBranchOptions): Promise<void>;
   /** Replace the short-lived Git proxy capability; never a GitHub PAT. */
-  refreshGitProxyCapability?(capability: string | undefined): void;
+  refreshGitProxyCapability?(capability: string | undefined): Promise<void> | void;
 }
 
 export interface PushBranchOptions {

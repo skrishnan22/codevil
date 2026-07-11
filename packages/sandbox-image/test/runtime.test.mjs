@@ -693,6 +693,26 @@ test("sandbox dispatcher lets create_pr_response resolve a tool call during an a
   assert.deepEqual(calls, ["agent_turn", "create_pr_response"]);
 });
 
+test("sandbox dispatcher applies proxy capability rotation while main work is blocked", async () => {
+  const calls = [];
+  let releaseTurn;
+  const runtime = {
+    async handleMessage(message) {
+      calls.push(message.type);
+      if (message.type === "agent_turn") await new Promise((resolve) => { releaseTurn = resolve; });
+    },
+  };
+  const dispatch = createSandboxMessageDispatcher(runtime);
+
+  dispatch({ type: "agent_turn", run_id: "run_1", prompt: "slow", model: "coder" });
+  await new Promise((resolve) => setImmediate(resolve));
+  dispatch({ type: "proxy_capabilities", tokens: { "anthropic-messages": "fresh" }, sandbox_ws_token: "fresh-ws" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, ["agent_turn", "proxy_capabilities"]);
+  releaseTurn();
+});
+
 test("sandbox dispatcher consumes protocol_error without queueing", async () => {
   const calls = [];
   const runtime = {

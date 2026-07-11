@@ -33,7 +33,7 @@ test("builds sandbox process env with only short-lived per-Pi-API proxy capabili
     proxyBase: "https://codevil.example.com",
     proxyTokens: { "anthropic-messages": "sandbox-capability" },
   }), {
-    CODEVIL_DO_WS_URL: "wss://codevil.example.com/sessions/ses_123/sandbox/ws?sandbox_ws_token=sandbox-ws-capability",
+    CODEVIL_DO_WS_URL: "wss://codevil.example.com/sessions/ses_123/sandbox/ws",
     CODEVIL_SANDBOX_WS_TOKEN: "sandbox-ws-capability",
     CODEVIL_WORKSPACE: "/workspace",
     CODEVIL_PROVIDER: "anthropic",

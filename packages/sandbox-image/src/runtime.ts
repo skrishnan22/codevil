@@ -132,7 +132,7 @@ export class SandboxRuntime {
     try {
       if (message.type === "proxy_capabilities") {
         this.proxyTokens = message.tokens as ProxyCapabilities;
-        this.git.refreshGitProxyCapability?.(message.tokens.git);
+        await this.git.refreshGitProxyCapability?.(message.tokens.git);
         await this.agent?.refreshProxyCapabilities?.(this.proxyTokens);
         return;
       }

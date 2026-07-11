@@ -144,10 +144,8 @@ export function buildSandboxWebSocketUrl(workerUrl: string, sessionId: string): 
 }
 
 export function sandboxProcessEnv(options: SandboxProcessEnvOptions): Record<string, string> {
-  const wsUrl = new URL(options.wsUrl);
-  wsUrl.searchParams.set("sandbox_ws_token", options.wsToken);
   return {
-    CODEVIL_DO_WS_URL: wsUrl.toString(),
+    CODEVIL_DO_WS_URL: options.wsUrl,
     CODEVIL_SANDBOX_WS_TOKEN: options.wsToken,
     CODEVIL_WORKSPACE: "/workspace",
     CODEVIL_PROVIDER: options.provider,

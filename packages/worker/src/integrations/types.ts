@@ -53,6 +53,10 @@ export interface ExternalConversationRef {
   external_conversation_id: string;
 }
 
+export interface ExternalConversationDestination extends ExternalConversationRef {
+  session_id: string;
+}
+
 export function externalParticipantId(provider: IntegrationProvider, externalActorId: string): string {
   return `external:${provider}:${externalActorId}`;
 }

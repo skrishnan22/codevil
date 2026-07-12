@@ -213,6 +213,22 @@ export function externalSessionLinkBySessionSelect(sessionId: string): SqlStatem
   };
 }
 
+export function externalConversationDestinationBySessionSelect(sessionId: string): SqlStatement {
+  return {
+    sql: `SELECT
+        integrations.provider,
+        external_session_links.integration_id,
+        external_session_links.external_channel_id,
+        external_session_links.external_conversation_id,
+        external_session_links.session_id
+      FROM external_session_links
+      JOIN integrations ON integrations.id = external_session_links.integration_id
+      WHERE external_session_links.session_id = ?
+      LIMIT 1`,
+    bindings: [sessionId],
+  };
+}
+
 export function dedupeEventInsert(
   externalEventId: string,
   integrationIdValue: string,

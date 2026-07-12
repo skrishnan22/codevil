@@ -68,6 +68,7 @@ export { traceIdFromSessionId } from "./orchestrator/session-guards.js";
 import { runOrchestratorSchemaMigrations } from "./orchestrator/schema-migrations.js";
 import type { OrchestratorHost } from "./orchestrator/host.js";
 import { SessionEventLog } from "./orchestrator/event-log.js";
+import { notifyExternalConversation } from "./integrations/notify-external-conversation.js";
 import { loadSessionMeta, saveSessionMeta } from "./orchestrator/session-meta.js";
 import { sessionWideEventGroup } from "./orchestrator/session-telemetry.js";
 import {
@@ -698,8 +699,18 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     saveSessionMeta(this.sql, this.meta);
   }
 
-  appendAndBroadcast(event: DOToCLIEvent): void {
-    this.eventLog.appendAndBroadcast(event);
+  appendAndBroadcast(event: DOToCLIEvent): number | null {
+    const cursor = this.eventLog.appendAndBroadcast(event);
+    if (cursor !== null && this.meta) {
+      this.ctx.waitUntil(notifyExternalConversation({
+        env: this.workerEnv,
+        sessionId: this.meta.session_id,
+        workerOrigin: this.meta.worker_url,
+        cursor,
+        event: redactEvent(event, this.redactionSecrets),
+      }));
+    }
+    return cursor;
   }
 
   sendToSandbox(message: DOToSandboxMessage): void {

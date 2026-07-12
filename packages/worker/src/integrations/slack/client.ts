@@ -12,14 +12,7 @@ export async function slackApi<T>(
 ): Promise<SlackApiResult<T>> {
   if (!botToken) return { ok: false, error: "missing_bot_token" };
 
-  const response = await fetch(`https://slack.com/api/${method}`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${botToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body ?? {}),
-  });
+  const response = await fetch(`https://slack.com/api/${method}`, slackRequestInit(botToken, method, body));
 
   let data: unknown = null;
   try {
@@ -45,14 +38,7 @@ export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
     method: string,
     body?: Record<string, unknown>,
   ): Promise<SlackApiResult<T>> {
-    const response = await fetcher(`https://slack.com/api/${method}`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${botToken}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body ?? {}),
-    });
+    const response = await fetcher(`https://slack.com/api/${method}`, slackRequestInit(botToken, method, body));
     let data: unknown = null;
     try {
       data = await response.json<Record<string, unknown>>();
@@ -105,6 +91,27 @@ export function postSlackMessage(
 
 function isSlackOk(data: unknown): data is { ok: true } {
   return typeof data === "object" && data !== null && (data as { ok?: unknown }).ok === true;
+}
+
+function slackRequestInit(
+  botToken: string,
+  method: string,
+  body?: Record<string, unknown>,
+): RequestInit {
+  const values = body ?? {};
+  const formEncoded = method === "conversations.replies";
+  return {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${botToken}`,
+      "content-type": formEncoded
+        ? "application/x-www-form-urlencoded; charset=utf-8"
+        : "application/json",
+    },
+    body: formEncoded
+      ? new URLSearchParams(Object.entries(values).map(([key, value]) => [key, String(value)] as [string, string])).toString()
+      : JSON.stringify(values),
+  };
 }
 
 function slackError(data: unknown): string | null {

@@ -4,13 +4,12 @@ import test from "node:test";
 import { externalNotificationIntent } from "../dist/integrations/notification-intents.js";
 import { notifyExternalConversation } from "../dist/integrations/notify-external-conversation.js";
 
-test("externalNotificationIntent maps curated Agent Run milestones", () => {
+test("externalNotificationIntent maps conversational Agent Run events", () => {
   assert.deepEqual(externalNotificationIntent({
-    type: "agent_run_started",
+    type: "agent_response",
     run_id: "run_1",
-    actor: { id: "U1", name: "Ada" },
-    text: "Fix auth",
-  }), { type: "run_started", runId: "run_1" });
+    text: "I updated the README.",
+  }), { type: "agent_response", runId: "run_1", text: "I updated the README." });
 
   assert.deepEqual(externalNotificationIntent({
     type: "approval_requested",
@@ -18,7 +17,7 @@ test("externalNotificationIntent maps curated Agent Run milestones", () => {
     plan: "Plan",
     cost: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0, cost: 0 },
     refinement_round: 0,
-  }), { type: "approval_requested", runId: "run_1" });
+  }), { type: "approval_requested", runId: "run_1", plan: "Plan" });
 
   assert.deepEqual(externalNotificationIntent({
     type: "question_raised",
@@ -33,16 +32,6 @@ test("externalNotificationIntent maps curated Agent Run milestones", () => {
   }), { type: "question_asked", runId: "run_1", question: "Which database?" });
 
   assert.deepEqual(externalNotificationIntent({
-    type: "agent_run_completed",
-    run_id: "run_1",
-    pr_url: "https://github.com/acme/app/pull/7",
-  }), {
-    type: "run_completed",
-    runId: "run_1",
-    pullRequestUrl: "https://github.com/acme/app/pull/7",
-  });
-
-  assert.deepEqual(externalNotificationIntent({
     type: "agent_run_failed",
     run_id: "run_1",
     message: "Tests failed",
@@ -54,7 +43,8 @@ test("externalNotificationIntent ignores noisy events", () => {
     { type: "status", message: "Cloning" },
     { type: "clone_progress", line: "Receiving objects" },
     { type: "agent_event", event: { type: "tool_execution_start" } },
-    { type: "agent_response", run_id: "run_1", text: "Done" },
+    { type: "agent_run_started", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: "Fix auth" },
+    { type: "agent_run_completed", run_id: "run_1" },
   ]) {
     assert.equal(externalNotificationIntent(event), null);
   }
@@ -92,10 +82,9 @@ test("notifyExternalConversation posts mapped events to the linked Slack thread"
     workerOrigin: "https://codevil.example/",
     cursor: 12,
     event: {
-      type: "agent_run_started",
+      type: "agent_response",
       run_id: "run_1",
-      actor: { id: "U1", name: "Ada" },
-      text: "Fix auth",
+      text: "I fixed the auth flow.",
     },
   }, {
     slackApi: async (token, method, body) => {
@@ -113,7 +102,7 @@ test("notifyExternalConversation posts mapped events to the linked Slack thread"
     body: {
       channel: "C123",
       thread_ts: "171951.0001",
-      text: "Codevil started working. Open session: https://codevil.example/sessions/ses_123",
+      text: "I fixed the auth flow.",
     },
   }]);
 });

@@ -5,10 +5,10 @@ import { renderSlackNotification } from "../dist/integrations/slack/render.js";
 
 const sessionUrl = "https://codevil.example/sessions/ses_123";
 
-test("renderSlackNotification renders concise lifecycle milestones", () => {
+test("renderSlackNotification renders conversational messages", () => {
   assert.equal(
-    renderSlackNotification({ type: "run_started", runId: "run_1" }, sessionUrl),
-    `Codevil started working. Open session: ${sessionUrl}`,
+    renderSlackNotification({ type: "agent_response", runId: "run_1", text: "I fixed the auth flow." }, sessionUrl),
+    "I fixed the auth flow.",
   );
   assert.equal(
     renderSlackNotification({
@@ -20,11 +20,11 @@ test("renderSlackNotification renders concise lifecycle milestones", () => {
   );
   assert.equal(
     renderSlackNotification({
-      type: "run_completed",
+      type: "approval_requested",
       runId: "run_1",
-      pullRequestUrl: "https://github.com/acme/app/pull/7",
+      plan: "Update the auth flow.",
     }, sessionUrl),
-    `Codevil finished the Agent Run. Pull request: https://github.com/acme/app/pull/7 Open session: ${sessionUrl}`,
+    `Codevil needs plan approval:\n\nUpdate the auth flow.\n\nOpen session: ${sessionUrl}`,
   );
 });
 

@@ -1,4 +1,5 @@
 import { json } from "../../http-handlers.js";
+import { workerLog } from "../../logging.js";
 import { createSession, type CreateSessionResult } from "../../session-service.js";
 import type { Env } from "../../worker-env.js";
 import { extractGithubRepoUrl, resolveRepoForExternalRequest } from "../repo-resolution.js";
@@ -191,6 +192,11 @@ export async function handleSlackEvent(
     rootConversationId,
   );
   if (!thread.ok) {
+    workerLog("WARN", "slack.thread.read.failed", {
+      error: thread.error,
+      channel_id: channelId,
+      thread_ts: rootConversationId,
+    });
     await postSlackReply(
       env,
       deps,

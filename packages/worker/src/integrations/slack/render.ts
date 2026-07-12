@@ -8,16 +8,12 @@ export function renderSlackNotification(
 ): string {
   const openSession = `Open session: ${sessionUrl}`;
   switch (intent.type) {
-    case "run_started":
-      return `Codevil started working. ${openSession}`;
+    case "agent_response":
+      return boundedText(intent.text);
     case "approval_requested":
-      return `Codevil needs plan approval. ${openSession}`;
+      return `Codevil needs plan approval:\n\n${boundedText(intent.plan)}\n\n${openSession}`;
     case "question_asked":
       return `Codevil needs input: ${boundedText(intent.question)} ${openSession}`;
-    case "run_completed":
-      return intent.pullRequestUrl
-        ? `Codevil finished the Agent Run. Pull request: ${intent.pullRequestUrl} ${openSession}`
-        : `Codevil finished the Agent Run. ${openSession}`;
     case "run_failed":
       return `Codevil could not complete the Agent Run: ${boundedText(intent.message)} ${openSession}`;
   }

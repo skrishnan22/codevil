@@ -46,6 +46,19 @@ test("Slack Web API client converts non-JSON responses into safe failures", asyn
   });
 });
 
+test("Slack thread reads use form-encoded request arguments", async () => {
+  const requests = [];
+  const slackApi = createSlackWebApi(async (url, init) => {
+    requests.push({ url, init });
+    return Response.json({ ok: true, messages: [] });
+  });
+
+  await fetchSlackThreadReplies(slackApi, "xoxb-test", "C123", "171951.0001");
+
+  assert.equal(requests[0].init.headers["content-type"], "application/x-www-form-urlencoded; charset=utf-8");
+  assert.equal(requests[0].init.body, "channel=C123&ts=171951.0001&limit=100");
+});
+
 test("postSlackMessage uses chat.postMessage", async () => {
   const calls = [];
   const result = await postSlackMessage(

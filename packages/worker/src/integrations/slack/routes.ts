@@ -250,10 +250,6 @@ export async function handleSlackEvent(
     planFirst: false,
   });
 
-  if (existingLink) {
-    await runStatement(env.DB, externalSessionLinkHandledUpdate(existingLink.id, messageTs, handledAt));
-  }
-
   if (!submit.ok) {
     await postSlackReply(
       env,
@@ -263,6 +259,10 @@ export async function handleSlackEvent(
       rootConversationId,
     );
     return json({ ok: true }, 200);
+  }
+
+  if (existingLink) {
+    await runStatement(env.DB, externalSessionLinkHandledUpdate(existingLink.id, messageTs, handledAt));
   }
 
   await postSlackReply(

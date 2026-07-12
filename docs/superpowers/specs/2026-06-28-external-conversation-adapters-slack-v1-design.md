@@ -3,6 +3,8 @@
 **Date:** 2026-06-28
 **Status:** Design approved, ready for implementation plan
 
+**Implementation slice (2026-07-12):** The first deployable release binds one Slack workspace to one self-hosted Codevil deployment using static Worker secrets. It implements tagged-only Agent Requests, bounded Slack thread context, channel repository defaults, and curated Agent Run milestone posts. Slack-started runs use the default execute flow. OAuth, buttons/modals, account linking, and Slack-native approval/question responses remain deferred; the provider-neutral persistence and notification boundaries below remain the path for those additions.
+
 ---
 
 ## Overview
@@ -207,7 +209,7 @@ Setup is manifest-based and Owner-driven. Codevil v1 does not implement Slack OA
 3. The Owner creates a Slack app from the generated manifest.
 4. The Owner installs the Slack app into the intended Slack workspace.
 5. The Owner stores `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` as Cloudflare Worker secrets.
-6. The Owner optionally stores `CODEVIL_SLACK_BOT_USER_ID` as a Cloudflare Worker secret when the bot user id is known.
+6. The Owner stores `CODEVIL_SLACK_BOT_USER_ID` as a Cloudflare Worker secret.
 7. The Owner verifies setup from Codevil, which checks manifest route availability and configured secrets.
 8. A channel default is configured in Slack using:
 

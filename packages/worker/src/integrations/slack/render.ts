@@ -1,6 +1,7 @@
 import type { ExternalNotificationIntent } from "../notification-intents.js";
 
 const MAX_EXTERNAL_TEXT_LENGTH = 500;
+const MAX_AGENT_RESPONSE_LENGTH = 4_000;
 
 export function renderSlackNotification(
   intent: ExternalNotificationIntent,
@@ -32,5 +33,5 @@ function renderSlackMrkdwn(value: string): string {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "<$2|$1>")
     .replace(/^[ \t]*[-*]\s+/gm, "• ")
     .replace(/\n{3,}/g, "\n\n")
-    .slice(0, MAX_EXTERNAL_TEXT_LENGTH);
+    .slice(0, MAX_AGENT_RESPONSE_LENGTH);
 }

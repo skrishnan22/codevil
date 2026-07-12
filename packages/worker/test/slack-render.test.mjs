@@ -43,3 +43,13 @@ test("renderSlackNotification bounds external text", () => {
   assert.match(rendered, /^Codevil could not complete the Agent Run: x+/);
   assert.match(rendered, /Open session:/);
 });
+
+test("renderSlackNotification preserves longer agent responses", () => {
+  const rendered = renderSlackNotification({
+    type: "agent_response",
+    runId: "run_1",
+    text: "x".repeat(1_200),
+  }, sessionUrl);
+
+  assert.equal(rendered.length, 1_200);
+});

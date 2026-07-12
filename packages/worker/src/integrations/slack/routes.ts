@@ -234,12 +234,10 @@ export async function handleSlackEvent(
   }
 
   let sessionId = existingLink?.session_id;
-  let createdSession = false;
   if (!sessionId) {
     try {
       const created = await (deps.createSession ?? createSession)(env, request.url, { repo: repo!.repoUrl }, actor);
       sessionId = created.session_id;
-      createdSession = true;
       await runStatement(env.DB, externalSessionLinkInsert({
         id: externalSessionLinkId(integrationIdValue, channelId, rootConversationId),
         integration_id: integrationIdValue,
@@ -299,15 +297,6 @@ export async function handleSlackEvent(
     await runStatement(env.DB, externalSessionLinkHandledUpdate(existingLink.id, messageTs, handledAt));
   }
 
-  await postSlackReply(
-    env,
-    deps,
-    channelId,
-    createdSession
-      ? `Started Codevil session ${sessionId}.`
-      : `Continuing Codevil session ${sessionId}.`,
-    rootConversationId,
-  );
   return json({ ok: true }, 200);
 }
 

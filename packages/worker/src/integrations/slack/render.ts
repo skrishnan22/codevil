@@ -9,7 +9,7 @@ export function renderSlackNotification(
   const openSession = `Open session: ${sessionUrl}`;
   switch (intent.type) {
     case "agent_response":
-      return boundedText(intent.text);
+      return renderSlackMrkdwn(intent.text);
     case "approval_requested":
       return `Codevil needs plan approval:\n\n${boundedText(intent.plan)}\n\n${openSession}`;
     case "question_asked":
@@ -21,4 +21,16 @@ export function renderSlackNotification(
 
 function boundedText(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, MAX_EXTERNAL_TEXT_LENGTH);
+}
+
+function renderSlackMrkdwn(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .replace(/^#{1,6}\s+(.+)$/gm, "*$1*")
+    .replace(/\*\*(.+?)\*\*/gs, "*$1*")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "<$2|$1>")
+    .replace(/^[ \t]*[-*]\s+/gm, "• ")
+    .replace(/\n{3,}/g, "\n\n")
+    .slice(0, MAX_EXTERNAL_TEXT_LENGTH);
 }

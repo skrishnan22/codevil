@@ -316,13 +316,9 @@ test("event creates a session, links the Slack thread, and submits the stripped 
       planFirst: false,
     },
   }]);
-  assert.equal(postCalls.length, 2);
+  assert.equal(postCalls.length, 1);
   assert.equal(postCalls[0].method, "conversations.replies");
   assert.deepEqual(postCalls[0].payload, { channel: "C123", ts: "171951.0002", limit: 100 });
-  assert.equal(postCalls[1].method, "chat.postMessage");
-  assert.equal(postCalls[1].payload.channel, "C123");
-  assert.equal(postCalls[1].payload.thread_ts, "171951.0002");
-  assert.match(postCalls[1].payload.text, /Started Codevil session ses_new/);
   assert.match(db.records[0].sql, /^INSERT OR IGNORE INTO external_message_dedupe/i);
   assert.match(db.records[1].sql, /^INSERT INTO integrations/i);
   assert.match(db.records[2].sql, /^INSERT INTO integration_external_actors/i);
@@ -488,9 +484,8 @@ test("event continues an existing linked session and updates the handled message
       planFirst: false,
     },
   }]);
-  assert.equal(postCalls.length, 2);
+  assert.equal(postCalls.length, 1);
   assert.equal(postCalls[0].method, "conversations.replies");
-  assert.match(postCalls[1].payload.text, /Continuing Codevil session ses_existing/);
   assert.match(db.records[5].sql, /^UPDATE external_session_links/i);
   assert.deepEqual(db.records[5].bindings, [
     "171951.0003",

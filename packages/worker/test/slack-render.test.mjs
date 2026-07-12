@@ -7,8 +7,12 @@ const sessionUrl = "https://codevil.example/sessions/ses_123";
 
 test("renderSlackNotification renders conversational messages", () => {
   assert.equal(
-    renderSlackNotification({ type: "agent_response", runId: "run_1", text: "I fixed the auth flow." }, sessionUrl),
-    "I fixed the auth flow.",
+    renderSlackNotification({
+      type: "agent_response",
+      runId: "run_1",
+      text: "## Summary\n\n**What changed:** see [the diff](https://github.com/acme/app/commit/abc).\n\n- Updated `apps/web`",
+    }, sessionUrl),
+    "*Summary*\n\n*What changed:* see <https://github.com/acme/app/commit/abc|the diff>.\n\n• Updated `apps/web`",
   );
   assert.equal(
     renderSlackNotification({

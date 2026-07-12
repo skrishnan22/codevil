@@ -1,9 +1,9 @@
-export type SlackApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
+export type SlackApiResult<T> = { ok: true; data: T } | { ok: false; error: string; data?: unknown };
 export type SlackApi = <T = Record<string, unknown>>(
   botToken: string,
   method: string,
   body?: Record<string, unknown>,
-) => Promise<SlackApiResult<T> | { ok: false; error: string; data: Record<string, unknown> }>;
+) => Promise<SlackApiResult<T>>;
 
 export async function slackApi<T>(
   botToken: string | undefined,
@@ -44,7 +44,7 @@ export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
     botToken: string,
     method: string,
     body?: Record<string, unknown>,
-  ): Promise<SlackApiResult<T> | { ok: false; error: string; data: Record<string, unknown> }> {
+  ): Promise<SlackApiResult<T>> {
     const response = await fetcher(`https://slack.com/api/${method}`, {
       method: "POST",
       headers: {
@@ -53,7 +53,12 @@ export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
       },
       body: JSON.stringify(body ?? {}),
     });
-    const data = await response.json<Record<string, unknown>>();
+    let data: unknown = null;
+    try {
+      data = await response.json<Record<string, unknown>>();
+    } catch {
+      // Slack may return a non-JSON gateway or rate-limit response.
+    }
     if (!response.ok) return { ok: false, error: slackError(data) ?? `http_${response.status}`, data };
     if (!isSlackOk(data)) return { ok: false, error: slackError(data) ?? "slack_not_ok", data };
     return { ok: true, data: data as T };

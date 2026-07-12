@@ -246,3 +246,14 @@ export function dedupeEventInsert(
     bindings: [`emd_${integrationIdValue}_${externalEventId}`, integrationIdValue, externalEventId, externalMessageId, handledAt],
   };
 }
+
+export function externalMessageDedupeDelete(
+  integrationIdValue: string,
+  externalEventId: string,
+): SqlStatement {
+  return {
+    sql: `DELETE FROM external_message_dedupe
+      WHERE integration_id = ? AND external_event_id = ?`,
+    bindings: [integrationIdValue, externalEventId],
+  };
+}

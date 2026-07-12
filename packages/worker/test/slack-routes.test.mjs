@@ -339,6 +339,68 @@ test("event creates a session, links the Slack thread, and submits the stripped 
   ]);
 });
 
+test("event releases its dedupe claim when session initialization fails", async () => {
+  const db = fakeD1({
+    firstRows: [
+      { default_repo_url: "https://github.com/acme/default" },
+      null,
+    ],
+    runResults: [
+      { meta: { changes: 1 } },
+      { success: true },
+      { success: true },
+      { success: true },
+    ],
+  });
+  const postCalls = [];
+  const body = JSON.stringify({
+    type: "event_callback",
+    event_id: "EvInitFailure",
+    team_id: "T123",
+    event: {
+      type: "app_mention",
+      user: "U123",
+      channel: "C123",
+      ts: "171951.0004",
+      text: "<@U999> investigate https://github.com/acme/repo",
+    },
+  });
+
+  const response = await handleSlackEvent(await signedSlackJsonRequest(body), {
+    SLACK_SIGNING_SECRET: "secret",
+    SLACK_BOT_TOKEN: "xoxb-test",
+    CODEVIL_SLACK_BOT_USER_ID: "U999",
+    DB: db,
+    ORCHESTRATOR: fakeOrchestrator(() => ({ submitAgentRequest: async () => ({ ok: true }) })),
+  }, {
+    slackApi: async (token, method, payload) => {
+      postCalls.push({ token, method, payload });
+      if (method === "conversations.replies") {
+        return {
+          ok: true,
+          data: {
+            messages: [{
+              ts: "171951.0004",
+              user: "U123",
+              text: "<@U999> investigate https://github.com/acme/repo",
+            }],
+          },
+        };
+      }
+      return { ok: true, data: { ok: true } };
+    },
+    createSession: async () => {
+      throw new Error("orchestrator init failed");
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true });
+  assert.match(db.records.at(-1).sql, /^DELETE FROM external_message_dedupe/i);
+  assert.equal(postCalls.at(-1).method, "chat.postMessage");
+  assert.match(postCalls.at(-1).payload.text, /couldn't start Codevil/);
+});
+
 test("event continues an existing linked session and updates the handled message id", async () => {
   const db = fakeD1({
     firstRows: [

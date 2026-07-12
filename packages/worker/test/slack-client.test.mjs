@@ -33,6 +33,19 @@ test("Slack Web API client returns Slack error envelopes", async () => {
   });
 });
 
+test("Slack Web API client converts non-JSON responses into safe failures", async () => {
+  const slackApi = createSlackWebApi(async () => new Response("gateway unavailable", {
+    status: 502,
+    headers: { "content-type": "text/html" },
+  }));
+
+  assert.deepEqual(await slackApi("xoxb-test", "auth.test"), {
+    ok: false,
+    error: "http_502",
+    data: null,
+  });
+});
+
 test("postSlackMessage uses chat.postMessage", async () => {
   const calls = [];
   const result = await postSlackMessage(

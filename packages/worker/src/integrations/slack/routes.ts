@@ -9,6 +9,7 @@ import {
   externalActorRowId,
   externalParticipantId,
   externalSessionLinkHandledUpdate,
+  externalMessageDedupeDelete,
   externalSessionLinkId,
   externalSessionLinkInsert,
   externalSessionLinkSelect,
@@ -136,9 +137,10 @@ export async function handleSlackEvent(
   if (!containsBotMention(event.text, botUserId)) return json({ ok: true }, 200);
 
   const integrationIdValue = integrationId("slack", teamId);
+  const externalEventId = eventCallback.data.event_id ?? `${channelId}:${messageTs}`;
   const handledAt = new Date().toISOString();
   const dedupe = dedupeEventInsert(
-    eventCallback.data.event_id ?? `${channelId}:${messageTs}`,
+    externalEventId,
     integrationIdValue,
     messageTs,
     handledAt,
@@ -228,29 +230,55 @@ export async function handleSlackEvent(
   let sessionId = existingLink?.session_id;
   let createdSession = false;
   if (!sessionId) {
-    const created = await (deps.createSession ?? createSession)(env, request.url, { repo: repo!.repoUrl }, actor);
-    sessionId = created.session_id;
-    createdSession = true;
-    await runStatement(env.DB, externalSessionLinkInsert({
-      id: externalSessionLinkId(integrationIdValue, channelId, rootConversationId),
-      integration_id: integrationIdValue,
-      external_channel_id: channelId,
-      external_conversation_id: rootConversationId,
-      session_id: sessionId,
-      last_handled_message_id: messageTs,
-      created_by_external_actor_id: userId,
-      created_at: handledAt,
-      updated_at: handledAt,
-    }));
+    try {
+      const created = await (deps.createSession ?? createSession)(env, request.url, { repo: repo!.repoUrl }, actor);
+      sessionId = created.session_id;
+      createdSession = true;
+      await runStatement(env.DB, externalSessionLinkInsert({
+        id: externalSessionLinkId(integrationIdValue, channelId, rootConversationId),
+        integration_id: integrationIdValue,
+        external_channel_id: channelId,
+        external_conversation_id: rootConversationId,
+        session_id: sessionId,
+        last_handled_message_id: messageTs,
+        created_by_external_actor_id: userId,
+        created_at: handledAt,
+        updated_at: handledAt,
+      }));
+    } catch {
+      await releaseDedupe(env.DB, integrationIdValue, externalEventId);
+      await postSlackReply(
+        env,
+        deps,
+        channelId,
+        "I couldn't start Codevil right now. Please try again.",
+        rootConversationId,
+      );
+      return json({ ok: true }, 200);
+    }
   }
 
-  const submit = await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).submitAgentRequest({
-    text: agentRequestText,
-    actor,
-    planFirst: false,
-  });
+  let submit;
+  try {
+    submit = await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).submitAgentRequest({
+      text: agentRequestText,
+      actor,
+      planFirst: false,
+    });
+  } catch {
+    await releaseDedupe(env.DB, integrationIdValue, externalEventId);
+    await postSlackReply(
+      env,
+      deps,
+      channelId,
+      "I couldn't hand that off to Codevil right now. Please try again.",
+      rootConversationId,
+    );
+    return json({ ok: true }, 200);
+  }
 
   if (!submit.ok) {
+    await releaseDedupe(env.DB, integrationIdValue, externalEventId);
     await postSlackReply(
       env,
       deps,
@@ -374,6 +402,14 @@ function plainText(text: string, status = 200): Response {
 
 async function runStatement(db: D1Database, statement: { sql: string; bindings: unknown[] }): Promise<void> {
   await db.prepare(statement.sql).bind(...statement.bindings).run();
+}
+
+async function releaseDedupe(
+  db: D1Database,
+  integrationIdValue: string,
+  externalEventId: string,
+): Promise<void> {
+  await runStatement(db, externalMessageDedupeDelete(integrationIdValue, externalEventId));
 }
 
 async function firstRow<T>(

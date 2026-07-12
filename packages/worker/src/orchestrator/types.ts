@@ -20,6 +20,7 @@ export interface Env {
   CODEVIL_LLM_KEY?: string;
   GITHUB_PAT?: string;
   CODEVIL_PREVIEW_ORIGIN?: string;
+  SLACK_BOT_TOKEN?: string;
 }
 
 export interface InitOptions {

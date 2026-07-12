@@ -3,6 +3,8 @@
 **Date:** 2026-06-28
 **Status:** Design approved, ready for implementation plan
 
+**Implementation slice (2026-07-12):** The first deployable release binds one Slack workspace to one self-hosted Codevil deployment using static Worker secrets. It implements tagged-only Agent Requests, bounded Slack thread context, channel repository defaults, and curated Agent Run milestone posts. Slack-started runs use the default execute flow. OAuth, buttons/modals, account linking, and Slack-native approval/question responses remain deferred; the provider-neutral persistence and notification boundaries below remain the path for those additions.
+
 ---
 
 ## Overview
@@ -12,6 +14,8 @@ Codevil should support Slack as a conversational UI without making the core orch
 The v1 Slack integration lets a user mention `@codevil` in a Slack message or thread. Codevil creates or continues one Codevil Session for that Slack thread, resolves the repository from an explicit GitHub repo URL or a channel default, and posts progress back into the same Slack thread. Normal Slack replies are ignored unless they mention `@codevil`.
 
 The design deliberately uses provider-neutral persistence and adapter boundaries so future integrations such as Discord, Teams, Linear, or GitHub comments can reuse the same core flow with different provider adapters.
+
+References to other products or repositories inform product shape only. Codevil must not copy source code or public interfaces from reference repos. Implementation should use Codevil-native terms and boundaries: **Session**, **Agent Request**, **Agent Run**, **Conversation**, **Activity**, **Tool Trace**, **Team**, **Member**, and **Owner**.
 
 ## Goals
 
@@ -78,7 +82,8 @@ Add Slack-facing routes to the Worker:
 ```text
 /slack/events
 /slack/commands
-/slack/oauth/callback
+/integrations/slack/manifest
+/integrations/slack/status
 ```
 
 `/slack/events` handles Slack Events API payloads, verifies Slack request signatures, ignores unsupported events, and dispatches valid app mentions or thread mentions into the integration service.
@@ -91,9 +96,13 @@ Add Slack-facing routes to the Worker:
 /codevil clear-repo
 ```
 
-`/slack/oauth/callback` completes Slack installation from Codevil team settings and stores the installation mapping.
+`/integrations/slack/manifest` returns a self-hosted Slack app manifest tailored to the deployed Worker origin.
+
+`/integrations/slack/status` verifies whether the Worker has the required Slack secrets and can identify the configured bot user.
 
 Slack modal routes and interaction handlers are deferred until a later version.
+
+Codevil v1 does not implement Slack OAuth install. There is no `/slack/oauth/callback` route in v1.
 
 ## Provider-Neutral Data Model
 
@@ -105,7 +114,6 @@ Represents one external provider installation.
 
 ```text
 id
-team_id
 provider                  -- "slack" for v1
 external_workspace_id     -- Slack team/workspace id
 external_workspace_name
@@ -115,9 +123,9 @@ created_at
 updated_at
 ```
 
-For v1, there is exactly one Slack installation per Codevil team. A Slack installation maps to exactly one Codevil team.
+For v1, there is exactly one self-hosted Slack app installation per Codevil deployment/team context. The installation maps to exactly one Codevil team.
 
-Secrets such as Slack bot tokens and signing secrets should be stored using the existing secret/config pattern where possible. If token persistence in D1 is required for OAuth installs, it must be treated as sensitive data and isolated from general metadata.
+Secrets such as Slack bot tokens and signing secrets are stored as Cloudflare Worker secrets, not in D1 metadata. If a later OAuth version persists tokens in D1, it must treat them as sensitive data and isolate them from general metadata.
 
 ### `integration_external_actors`
 
@@ -194,13 +202,16 @@ The integration service should check this table before creating sessions, sendin
 
 ## Slack Setup and Onboarding
 
-Setup is admin-driven:
+Setup is manifest-based and Owner-driven. Codevil v1 does not implement Slack OAuth install.
 
-1. A Codevil team admin opens Codevil settings and goes to Integrations → Slack.
-2. The admin clicks “Add to Slack”.
-3. Slack OAuth installs the app into one Slack workspace.
-4. Codevil stores the Slack workspace → Codevil team mapping in `integrations`.
-5. The admin configures default repos in Slack channels using:
+1. A Codevil Owner opens Codevil settings and goes to Integrations → Slack.
+2. The Owner generates the Slack manifest from Codevil.
+3. The Owner creates a Slack app from the generated manifest.
+4. The Owner installs the Slack app into the intended Slack workspace.
+5. The Owner stores `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` as Cloudflare Worker secrets.
+6. The Owner stores `CODEVIL_SLACK_BOT_USER_ID` as a Cloudflare Worker secret.
+7. The Owner verifies setup from Codevil, which checks manifest route availability and configured secrets.
+8. A channel default is configured in Slack using:
 
 ```text
 /codevil set-repo https://github.com/org/repo

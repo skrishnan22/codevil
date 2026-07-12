@@ -26,4 +26,7 @@ export interface Env {
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
   CODEVIL_APP_NAME?: string;
+  SLACK_BOT_TOKEN?: string;
+  SLACK_SIGNING_SECRET?: string;
+  CODEVIL_SLACK_BOT_USER_ID?: string;
 }

@@ -29,13 +29,14 @@ cd packages/worker
 pnpm exec wrangler secret bulk .env.production
 ```
 
-Deploy the Worker and apply its remote D1 migrations:
+Apply the remote D1 migrations, then deploy the Worker:
 
 ```sh
 cd ../..
-pnpm deploy
 cd packages/worker
 pnpm exec wrangler d1 migrations apply DB --remote
+cd ../..
+pnpm deploy
 ```
 
 Wrangler creates and binds the D1 database automatically. The Worker, web UI, Durable Objects, and sandbox container ship as one deployment. Return to the repository root and configure one or more LLM providers:
@@ -50,6 +51,46 @@ pnpm providers
 In the Google OAuth client, add the deployed Worker origin as an authorized JavaScript origin and add `<worker-origin>/api/auth/callback/google` as an authorized redirect URI. Google OAuth is required even if GitHub is configured.
 
 Open the Worker URL, sign in with Google, claim the first owner account using `CODEVIL_SETUP_TOKEN`, and invite the rest of the team.
+
+## Slack integration
+
+The first Slack integration supports one statically configured Slack workspace per Codevil deployment. Any non-bot member of that workspace can configure a channel repository and invoke Codevil, but an Agent Request is created only when `@codevil` is explicitly mentioned.
+
+After deploying Codevil, sign in as an Owner and open:
+
+```text
+<worker-origin>/integrations/slack/manifest
+```
+
+Create a Slack app from that YAML manifest and install it into the intended workspace. The manifest configures:
+
+- `app_mention` events at `<worker-origin>/slack/events`;
+- `/codevil` commands at `<worker-origin>/slack/commands`;
+- `app_mentions:read`, `commands`, `chat:write`, channel/group history and read scopes, and `users:read`.
+
+Copy the app's Bot User OAuth Token and Signing Secret. Obtain the bot user ID from Slack's `auth.test` response (`user_id`) or the Slack app settings, then upload all three values as Worker secrets:
+
+```sh
+cd packages/worker
+pnpm exec wrangler secret put SLACK_BOT_TOKEN
+pnpm exec wrangler secret put SLACK_SIGNING_SECRET
+pnpm exec wrangler secret put CODEVIL_SLACK_BOT_USER_ID
+cd ../..
+pnpm deploy
+```
+
+As a signed-in Owner, open `<worker-origin>/integrations/slack/status`. It must report `configured: true`, and `authTest.ok` must be `true`.
+
+Invite the Codevil app to a Slack channel, configure its default repository, and tag it:
+
+```text
+/codevil set-repo https://github.com/<owner>/<repo>
+@codevil inspect the README and summarize the project
+```
+
+The first mention creates one Codevil Session for the Slack thread. Later untagged replies provide discussion context but do not trigger work; the next tagged reply sends that intervening context as a new Agent Request. Slack receives curated start, input-needed, completion, failure, and pull-request milestones. Detailed Activity and Tool Trace output remain in the Codevil web UI.
+
+OAuth installation, Slack buttons/modals, Slack-to-Codevil account linking, and Slack-native approval or question responses are deferred. Slack-started Agent Runs therefore use Codevil's default execute flow rather than waiting for plan approval.
 
 ## Verification
 

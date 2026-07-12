@@ -28,7 +28,13 @@ import {
   stripBotMention,
 } from "./parser.js";
 import { verifySlackSignature } from "./signature.js";
-import { createSlackWebApi, postSlackMessage, type SlackApi } from "./client.js";
+import {
+  createSlackWebApi,
+  fetchSlackThreadReplies,
+  postSlackMessage,
+  type SlackApi,
+} from "./client.js";
+import { formatSlackAgentRequest } from "./context.js";
 import { buildSlackManifest } from "./manifest.js";
 
 export interface SlackStatusDeps {
@@ -125,6 +131,7 @@ export async function handleSlackEvent(
   const botUserId = env.CODEVIL_SLACK_BOT_USER_ID;
 
   if (!teamId || !channelId || !userId || !messageTs) return json({ ok: true }, 200);
+  if (!botUserId) return json({ ok: true }, 200);
   if (event.bot_id || (botUserId && userId === botUserId)) return json({ ok: true }, 200);
   if (!containsBotMention(event.text, botUserId)) return json({ ok: true }, 200);
 
@@ -173,8 +180,37 @@ export async function handleSlackEvent(
     env.DB,
     externalSessionLinkSelect(integrationIdValue, channelId, rootConversationId),
   );
+  if (!env.SLACK_BOT_TOKEN) return json({ ok: true }, 200);
+  const slackApi = deps.slackApi ?? createSlackWebApi();
+  const thread = await fetchSlackThreadReplies(
+    slackApi,
+    env.SLACK_BOT_TOKEN,
+    channelId,
+    rootConversationId,
+  );
+  if (!thread.ok) {
+    await postSlackReply(
+      env,
+      deps,
+      channelId,
+      "I couldn't read this Slack thread. Please try tagging me again.",
+      rootConversationId,
+    );
+    return json({ ok: true }, 200);
+  }
+  const threadMessages = thread.data.messages.some((message) => message.ts === messageTs)
+    ? thread.data.messages
+    : [...thread.data.messages, { ts: messageTs, user: userId, text: event.text }];
+  const agentRequestText = formatSlackAgentRequest({
+    messages: threadMessages,
+    requesterId: userId,
+    explicitRequestTs: messageTs,
+    lastHandledMessageId: existingLink?.last_handled_message_id,
+    botUserId,
+  });
   const repo = resolveRepoForExternalRequest({
     text: strippedText,
+    contextText: threadMessages.map((message) => message.text ?? "").join("\n"),
     channelDefaultRepoUrl: channelRow?.default_repo_url ?? null,
   });
 
@@ -209,9 +245,9 @@ export async function handleSlackEvent(
   }
 
   const submit = await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).submitAgentRequest({
-    text: strippedText,
+    text: agentRequestText,
     actor,
-    planFirst: true,
+    planFirst: false,
   });
 
   if (existingLink) {

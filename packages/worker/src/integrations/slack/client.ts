@@ -66,6 +66,26 @@ export interface SlackMessageInput {
   threadTs?: string;
 }
 
+export interface SlackThreadMessage {
+  ts: string;
+  user?: string;
+  bot_id?: string;
+  text?: string;
+}
+
+export function fetchSlackThreadReplies(
+  api: SlackApi,
+  botToken: string,
+  channel: string,
+  threadTs: string,
+): Promise<SlackApiResult<{ messages: SlackThreadMessage[] }>> {
+  return api(botToken, "conversations.replies", {
+    channel,
+    ts: threadTs,
+    limit: 100,
+  }) as Promise<SlackApiResult<{ messages: SlackThreadMessage[] }>>;
+}
+
 export function postSlackMessage(
   api: SlackApi,
   botToken: string,

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createSlackWebApi,
+  fetchSlackThreadReplies,
   postSlackMessage,
 } from "../dist/integrations/slack/client.js";
 
@@ -67,4 +68,24 @@ test("postSlackMessage supports injectable Slack API with thread timestamp", asy
     method: "chat.postMessage",
     body: { channel: "C123", text: "hello", thread_ts: "171951.0001" },
   }]);
+});
+
+test("fetchSlackThreadReplies requests the Slack thread", async () => {
+  const calls = [];
+  const result = await fetchSlackThreadReplies(
+    async (token, method, body) => {
+      calls.push({ token, method, body });
+      return { ok: true, data: { messages: [] } };
+    },
+    "xoxb-test",
+    "C123",
+    "171951.0001",
+  );
+
+  assert.deepEqual(calls, [{
+    token: "xoxb-test",
+    method: "conversations.replies",
+    body: { channel: "C123", ts: "171951.0001", limit: 100 },
+  }]);
+  assert.deepEqual(result, { ok: true, data: { messages: [] } });
 });

@@ -48,8 +48,8 @@ test("renderSlackNotification preserves longer agent responses", () => {
   const rendered = renderSlackNotification({
     type: "agent_response",
     runId: "run_1",
-    text: "x".repeat(1_200),
+    text: "x".repeat(5_000),
   }, sessionUrl);
 
-  assert.equal(rendered.length, 1_200);
+  assert.equal(rendered.length, 5_000);
 });

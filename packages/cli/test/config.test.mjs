@@ -30,12 +30,12 @@ test("writes and reads config from ~/.codevil/config", async () => {
   }
 });
 
-test("defaults new configs to OpenCode Go Kimi", () => {
+test("defaults new configs to OpenCode Go DeepSeek V4 Flash", () => {
   const config = createConfig("https://codevil.example.com/", "secret");
 
   assert.equal(config.defaults.provider, "opencode-go");
-  assert.equal(config.defaults.plan_model, "kimi-k2.6");
-  assert.equal(config.defaults.exec_model, "kimi-k2.6");
+  assert.equal(config.defaults.plan_model, "deepseek-v4-flash");
+  assert.equal(config.defaults.exec_model, "deepseek-v4-flash");
 });
 
 test("persists configured default models", () => {

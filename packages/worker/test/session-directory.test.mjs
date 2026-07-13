@@ -39,6 +39,16 @@ test("normalizeCreateSessionBody accepts repo-only creation and defaults runtime
   assert.equal(result.max_session_time, "30m");
 });
 
+test("normalizeCreateSessionBody defaults repo-only sessions to DeepSeek V4 Flash", () => {
+  const result = normalizeCreateSessionBody({
+    repo: "github.com/acme/app",
+  });
+
+  assert.equal(result.provider, "opencode-go");
+  assert.equal(result.plan_model, "deepseek-v4-flash");
+  assert.equal(result.exec_model, "deepseek-v4-flash");
+});
+
 test("normalizeCreateSessionBody rejects prompt-based creation", () => {
   assert.throws(() => {
     normalizeCreateSessionBody({

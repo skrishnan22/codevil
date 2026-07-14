@@ -6,6 +6,7 @@ import {
   handleAbort,
   handleAgentRequest,
   handleApprove,
+  handleQuestionAnswer,
   handleRefine,
 } from "../dist/orchestrator/cli-handlers.js";
 import { actor, createFakeHost } from "./helpers/fake-host.mjs";
@@ -192,3 +193,61 @@ test("handleRefine rejects when session is not awaiting approval", () => {
   assert.match(error.message, /Cannot refine in state: executing/);
   assert.equal(sandboxMessages.length, 0);
 });
+
+test("handleQuestionAnswer keeps web authorization before the shared mutation", () => {
+  const row = questionRow();
+  const { host, broadcasts, sandboxMessages } = questionHost(row);
+
+  handleQuestionAnswer(
+    host,
+    { type: "question_answer", request_id: "question_1", option_ids: ["pg"] },
+    { id: "member", name: "Member" },
+    "member",
+    "member",
+  );
+
+  assert.equal(row.status, "open");
+  assert.equal(sandboxMessages.length, 0);
+  assert.match(broadcasts[0].message, /session creator/);
+});
+
+function questionRow() {
+  return {
+    request_id: "question_1",
+    run_id: "run_1",
+    question: "Which database?",
+    status: "open",
+    options_json: JSON.stringify([{ id: "pg", label: "PostgreSQL" }]),
+    allow_freeform: 0,
+    allow_multiple: 0,
+    answer_json: null,
+    answered_by_id: null,
+    answered_by_name: null,
+    answered_at: null,
+    answerable_by: "decider",
+    assigned_to_id: null,
+    assigned_to_name: null,
+  };
+}
+
+function questionHost(row) {
+  const broadcasts = [];
+  const sandboxMessages = [];
+  return {
+    broadcasts,
+    sandboxMessages,
+    host: {
+      meta: { created_by: { id: "creator", name: "Creator" } },
+      sql: {
+        exec(sql, ...bindings) {
+          if (sql.includes("SELECT") && sql.includes("FROM questions")) {
+            return row.request_id === bindings[0] ? [{ ...row }] : [];
+          }
+          return [];
+        },
+      },
+      appendAndBroadcast(event) { broadcasts.push(event); },
+      sendToSandbox(message) { sandboxMessages.push(message); },
+    },
+  };
+}

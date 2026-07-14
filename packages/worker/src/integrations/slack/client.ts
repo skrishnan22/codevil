@@ -69,6 +69,15 @@ export interface SlackPostedMessage {
   channel?: string;
 }
 
+export interface SlackUser {
+  id: string;
+  name?: string;
+  real_name?: string;
+  profile?: { display_name?: string; real_name?: string };
+  is_bot?: boolean;
+  is_app_user?: boolean;
+}
+
 export interface SlackThreadMessage {
   ts: string;
   user?: string;
@@ -100,6 +109,35 @@ export function postSlackMessage(
     ...(input.blocks ? { blocks: input.blocks } : {}),
     ...(input.threadTs ? { thread_ts: input.threadTs } : {}),
   }) as Promise<SlackApiResult<SlackPostedMessage>>;
+}
+
+export function updateSlackMessage(
+  api: SlackApi,
+  botToken: string,
+  input: SlackMessageContent & { channel: string; ts: string },
+): Promise<SlackApiResult<unknown>> {
+  return api(botToken, "chat.update", {
+    channel: input.channel,
+    ts: input.ts,
+    text: input.text,
+    ...(input.blocks ? { blocks: input.blocks } : {}),
+  }) as Promise<SlackApiResult<unknown>>;
+}
+
+export function postSlackEphemeral(
+  api: SlackApi,
+  botToken: string,
+  input: { channel: string; user: string; text: string },
+): Promise<SlackApiResult<unknown>> {
+  return api(botToken, "chat.postEphemeral", input) as Promise<SlackApiResult<unknown>>;
+}
+
+export function fetchSlackUser(
+  api: SlackApi,
+  botToken: string,
+  user: string,
+): Promise<SlackApiResult<{ ok: true; user: SlackUser }>> {
+  return api(botToken, "users.info", { user }) as Promise<SlackApiResult<{ ok: true; user: SlackUser }>>;
 }
 
 function isSlackOk(data: unknown): data is { ok: true } {

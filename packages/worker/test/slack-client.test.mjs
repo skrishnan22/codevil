@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  createSlackWebApi,
-  fetchSlackThreadReplies,
-  postSlackMessage,
-} from "../dist/integrations/slack/client.js";
+import * as slackClient from "../dist/integrations/slack/client.js";
+
+const { createSlackWebApi, fetchSlackThreadReplies, postSlackMessage } = slackClient;
 
 test("Slack Web API client posts JSON and returns ok data", async () => {
   const requests = [];
@@ -142,4 +140,51 @@ test("fetchSlackThreadReplies requests the Slack thread", async () => {
     body: { channel: "C123", ts: "171951.0001", limit: 100 },
   }]);
   assert.deepEqual(result, { ok: true, data: { messages: [] } });
+});
+
+test("Slack client helpers update, notify, and resolve users", async () => {
+  assert.equal(typeof slackClient.updateSlackMessage, "function");
+  assert.equal(typeof slackClient.postSlackEphemeral, "function");
+  assert.equal(typeof slackClient.fetchSlackUser, "function");
+  const calls = [];
+  const api = async (token, method, body) => {
+    calls.push({ token, method, body });
+    return { ok: true, data: { ok: true } };
+  };
+
+  await slackClient.updateSlackMessage(api, "xoxb-test", {
+    channel: "C123",
+    ts: "171951.0002",
+    text: "Answered",
+    blocks: [{ type: "markdown", text: "**Answered**" }],
+  });
+  await slackClient.postSlackEphemeral(api, "xoxb-test", {
+    channel: "C123",
+    user: "U123",
+    text: "Already answered",
+  });
+  await slackClient.fetchSlackUser(api, "xoxb-test", "U123");
+
+  assert.deepEqual(calls, [
+    {
+      token: "xoxb-test",
+      method: "chat.update",
+      body: {
+        channel: "C123",
+        ts: "171951.0002",
+        text: "Answered",
+        blocks: [{ type: "markdown", text: "**Answered**" }],
+      },
+    },
+    {
+      token: "xoxb-test",
+      method: "chat.postEphemeral",
+      body: { channel: "C123", user: "U123", text: "Already answered" },
+    },
+    {
+      token: "xoxb-test",
+      method: "users.info",
+      body: { user: "U123" },
+    },
+  ]);
 });

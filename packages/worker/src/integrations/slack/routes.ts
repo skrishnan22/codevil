@@ -41,6 +41,7 @@ import { buildSlackManifest } from "./manifest.js";
 import {
   isSlackQuestionSelectionAction,
   parseSlackQuestionAction,
+  processSlackQuestionAction,
   type SlackQuestionAction,
 } from "./actions.js";
 
@@ -64,7 +65,7 @@ export interface SlackActionDeps {
   processAction?: (
     action: SlackQuestionAction,
     env: Env,
-    deps: SlackActionDeps,
+    deps: { slackApi?: SlackApi; workerOrigin?: string },
   ) => Promise<void>;
 }
 
@@ -343,8 +344,11 @@ export async function handleSlackAction(
   const action = parseSlackQuestionAction(payload);
   if (!action) return json({ error: "Unsupported Slack action" }, 400);
 
-  const process = deps.processAction ?? (async () => {});
-  const processing = process(action, env, deps);
+  const process = deps.processAction ?? processSlackQuestionAction;
+  const processing = process(action, env, {
+    slackApi: deps.slackApi,
+    workerOrigin: new URL(request.url).origin,
+  });
   if (deps.waitUntil) deps.waitUntil(processing);
   else await processing;
   return json({ ok: true }, 200);

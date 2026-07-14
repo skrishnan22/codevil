@@ -1,4 +1,23 @@
 import { z } from "zod";
+import { workerLogForSession } from "../../logging.js";
+import type { Env } from "../../worker-env.js";
+import {
+  externalActorRowId,
+  externalParticipantId,
+  externalSessionLinkSelect,
+  integrationId,
+  upsertExternalActor,
+} from "../store.js";
+import type { ExternalSessionLinkRow } from "../types.js";
+import {
+  createSlackWebApi,
+  fetchSlackUser,
+  postSlackEphemeral,
+  updateSlackMessage,
+  type SlackApi,
+  type SlackUser,
+} from "./client.js";
+import { renderAnsweredSlackQuestion } from "./render.js";
 
 const SlackBlockActionSchema = z.object({
   type: z.literal("block_actions"),
@@ -35,6 +54,11 @@ export interface SlackQuestionAction {
   actionTs: string;
 }
 
+export interface SlackActionProcessDeps {
+  slackApi?: SlackApi;
+  workerOrigin?: string;
+}
+
 export function parseSlackQuestionAction(payload: unknown): SlackQuestionAction | null {
   const parsed = SlackBlockActionSchema.safeParse(payload);
   if (!parsed.success) return null;
@@ -65,6 +89,123 @@ export function parseSlackQuestionAction(payload: unknown): SlackQuestionAction 
 export function isSlackQuestionSelectionAction(payload: unknown): boolean {
   const parsed = SlackBlockActionSchema.safeParse(payload);
   return parsed.success && parsed.data.actions[0]?.action_id === "codevil_question_select";
+}
+
+export async function processSlackQuestionAction(
+  action: SlackQuestionAction,
+  env: Env,
+  deps: SlackActionProcessDeps = {},
+): Promise<void> {
+  if (!env.SLACK_BOT_TOKEN || action.userId === env.CODEVIL_SLACK_BOT_USER_ID) return;
+  const api = deps.slackApi ?? createSlackWebApi();
+  const integrationIdValue = integrationId("slack", action.teamId);
+  const linkStatement = externalSessionLinkSelect(integrationIdValue, action.channelId, action.threadTs);
+  const link = await env.DB
+    .prepare(linkStatement.sql)
+    .bind(...linkStatement.bindings)
+    .first<ExternalSessionLinkRow>();
+  if (!link) {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "This Slack thread is not linked to a Codevil session.");
+    return;
+  }
+
+  const profile = await fetchSlackUser(api, env.SLACK_BOT_TOKEN, action.userId);
+  if (profile.ok && (profile.data.user.is_bot || profile.data.user.is_app_user)) return;
+  const displayName = profile.ok ? slackDisplayName(profile.data.user, action.userId) : action.userId;
+  const now = new Date().toISOString();
+  const actorStatement = upsertExternalActor({
+    id: externalActorRowId(integrationIdValue, action.userId),
+    integration_id: integrationIdValue,
+    external_actor_id: action.userId,
+    display_name: displayName,
+    email: null,
+    linked_auth_user_id: null,
+    metadata_json: "{}",
+    created_at: now,
+    updated_at: now,
+  });
+  await env.DB.prepare(actorStatement.sql).bind(...actorStatement.bindings).run();
+
+  const actor = { id: externalParticipantId("slack", action.userId), name: displayName };
+  let result;
+  try {
+    result = await env.ORCHESTRATOR
+      .get(env.ORCHESTRATOR.idFromName(link.session_id))
+      .answerQuestionFromIntegration({
+        requestId: action.requestId,
+        optionIndexes: action.optionIndexes,
+        actor,
+        idempotencyKey: [
+          action.teamId,
+          action.userId,
+          action.channelId,
+          action.messageTs,
+          action.actionTs,
+          action.requestId,
+        ].join(":"),
+      });
+  } catch {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "I couldn't submit that answer. Please try again.");
+    return;
+  }
+
+  if (!result.ok) {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, result.error);
+    return;
+  }
+
+  const origin = (deps.workerOrigin ?? env.BETTER_AUTH_URL ?? env.CODEVIL_WEB_ORIGIN ?? "").replace(/\/+$/, "");
+  const sessionUrl = `${origin}/sessions/${link.session_id}`;
+  const answeredByText = slackAnswererText(result.answeredBy);
+  const update = await updateSlackMessage(api, env.SLACK_BOT_TOKEN, {
+    channel: action.channelId,
+    ts: action.messageTs,
+    ...renderAnsweredSlackQuestion({
+      question: result.question,
+      selectedLabels: result.selectedLabels,
+      answeredByText,
+      sessionUrl,
+    }),
+  });
+  if (!update.ok) {
+    workerLogForSession(link.session_id, "WARN", "slack.question.update.failed", {
+      error: update.error,
+      channel_id: action.channelId,
+      message_ts: action.messageTs,
+    });
+  }
+  if (result.status === "already_answered") {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "This question was already answered.");
+  }
+}
+
+function slackDisplayName(user: SlackUser, fallback: string): string {
+  return user.profile?.display_name?.trim()
+    || user.real_name?.trim()
+    || user.name?.trim()
+    || fallback;
+}
+
+function slackAnswererText(actor: { id: string; name: string }): string {
+  const slackId = actor.id.match(/^external:slack:([A-Z0-9]+)$/)?.[1];
+  return slackId ? `<@${slackId}>` : escapeSlackText(actor.name);
+}
+
+function escapeSlackText(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function notifyActionFailure(
+  api: SlackApi,
+  botToken: string,
+  action: SlackQuestionAction,
+  text: string,
+): Promise<void> {
+  await postSlackEphemeral(api, botToken, {
+    channel: action.channelId,
+    user: action.userId,
+    text,
+  });
 }
 
 function parseQuestionActionValue(value: string | undefined): z.infer<typeof QuestionActionValueSchema> | null {

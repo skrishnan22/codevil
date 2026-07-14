@@ -78,3 +78,27 @@ test("renderSlackNotification preserves longer agent responses", () => {
   assert.equal(rendered.length, 1);
   assert.equal(rendered[0].blocks[0].text.length, 5_000);
 });
+
+test("renderSlackNotification splits long fenced code without breaking fences", () => {
+  const markdown = [
+    "# Generated source",
+    "",
+    "```ts",
+    ...Array.from({ length: 1_000 }, (_, index) => `const value${index} = ${index};`),
+    "```",
+  ].join("\n");
+
+  const rendered = renderSlackNotification({
+    type: "agent_response",
+    runId: "run_1",
+    text: markdown,
+  }, sessionUrl);
+
+  assert.ok(rendered.length > 1);
+  for (const message of rendered) {
+    assert.ok(message.blocks[0].text.length <= 11_500);
+    assert.equal((message.blocks[0].text.match(/```/g) ?? []).length % 2, 0);
+  }
+  assert.match(rendered[1].blocks[0].text, /^```ts\n/);
+  assert.match(rendered.at(-1).blocks[0].text, /const value999 = 999;/);
+});

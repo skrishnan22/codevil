@@ -2,6 +2,7 @@ import type { ExternalNotificationIntent } from "../notification-intents.js";
 import type { SlackMessageContent } from "./client.js";
 
 const MAX_EXTERNAL_TEXT_LENGTH = 500;
+const MAX_SLACK_MARKDOWN_CHARS = 11_500;
 
 export function renderSlackNotification(
   intent: ExternalNotificationIntent,
@@ -11,10 +12,10 @@ export function renderSlackNotification(
   switch (intent.type) {
     case "agent_response": {
       const markdown = intent.text.replace(/\r\n?/g, "\n").trim();
-      return [{
-        text: markdownFallback(markdown),
-        blocks: [{ type: "markdown", text: markdown }],
-      }];
+      return splitSlackMarkdown(markdown).map((chunk) => ({
+        text: markdownFallback(chunk),
+        blocks: [{ type: "markdown", text: chunk }],
+      }));
     }
     case "approval_requested":
       return [{ text: `Codevil needs plan approval:\n\n${boundedText(intent.plan)}\n\n${openSession}` }];
@@ -23,6 +24,47 @@ export function renderSlackNotification(
     case "run_failed":
       return [{ text: `Codevil could not complete the Agent Run: ${boundedText(intent.message)} ${openSession}` }];
   }
+}
+
+function splitSlackMarkdown(markdown: string): string[] {
+  if (markdown.length <= MAX_SLACK_MARKDOWN_CHARS) return [markdown];
+
+  const lines = markdown.split("\n").flatMap((line) => {
+    if (line.length <= 10_000) return [line];
+    const parts: string[] = [];
+    for (let offset = 0; offset < line.length; offset += 10_000) {
+      parts.push(line.slice(offset, offset + 10_000));
+    }
+    return parts;
+  });
+  const chunks: string[] = [];
+  let current = "";
+  let openFence: string | null = null;
+
+  const pushCurrent = (): void => {
+    if (!current) return;
+    const closed = openFence ? `${current}\n\`\`\`` : current;
+    chunks.push(closed);
+    current = openFence ?? "";
+  };
+
+  for (const line of lines) {
+    const separator = current ? "\n" : "";
+    const reserveForFenceClose = openFence ? 4 : 0;
+    if (current && current.length + separator.length + line.length + reserveForFenceClose > MAX_SLACK_MARKDOWN_CHARS) {
+      pushCurrent();
+    }
+
+    current += `${current ? "\n" : ""}${line}`;
+    if (/^\s*```/.test(line)) {
+      openFence = openFence ? null : line.trim();
+    }
+  }
+
+  if (current) {
+    chunks.push(openFence ? `${current}\n\`\`\`` : current);
+  }
+  return chunks;
 }
 
 function boundedText(value: string): string {

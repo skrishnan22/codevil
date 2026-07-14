@@ -66,7 +66,10 @@ Create a Slack app from that YAML manifest and install it into the intended work
 
 - `app_mention` events at `<worker-origin>/slack/events`;
 - `/codevil` commands at `<worker-origin>/slack/commands`;
+- interactive question actions at `<worker-origin>/slack/actions`;
 - `app_mentions:read`, `commands`, `chat:write`, channel/group history and read scopes, and `users:read`.
+
+If the Slack app already exists, regenerate the manifest and update the app configuration so **Interactivity** is enabled with `<worker-origin>/slack/actions` as its request URL. No additional OAuth scope or secret is required.
 
 Copy the app's Bot User OAuth Token and Signing Secret. Obtain the bot user ID from Slack's `auth.test` response (`user_id`) or the Slack app settings, then upload all three values as Worker secrets:
 
@@ -88,9 +91,11 @@ Invite the Codevil app to a Slack channel, configure its default repository, and
 @codevil inspect the README and summarize the project
 ```
 
-The first mention creates one Codevil Session for the Slack thread. Later untagged replies provide discussion context but do not trigger work; the next tagged reply sends that intervening context as a new Agent Request. Slack receives curated start, input-needed, completion, failure, and pull-request milestones. Detailed Activity and Tool Trace output remain in the Codevil web UI.
+The first mention creates one Codevil Session for the Slack thread. Later untagged replies provide discussion context but do not trigger work; the next tagged reply sends that intervening context as a new Agent Request. Slack receives curated start, input-needed, completion, failure, and pull-request milestones. Agent replies use Slack's native Markdown blocks, including tables, headings, lists, links, emphasis, and fenced code. Long replies are split into ordered messages without clipping or breaking code fences. Detailed Activity and Tool Trace output remain in the Codevil web UI.
 
-OAuth installation, Slack buttons/modals, Slack-to-Codevil account linking, and Slack-native approval or question responses are deferred. Slack-started Agent Runs therefore use Codevil's default execute flow rather than waiting for plan approval.
+Option-based agent questions include Slack-native controls. Single-choice questions use buttons or a select menu; multiple-choice questions use checkboxes or a multi-select menu. Any human participant in the linked Slack conversation can answer, and the first valid answer wins. The accepted answer replaces the controls and attributes the result with the answerer's current Slack mention, such as `@krish`.
+
+Free-form-only questions and optional free-form notes use **Open session**. Slack modals, OAuth installation, Slack-to-Codevil account linking, and Slack-native plan approval or refinement remain deferred. Slack-started Agent Runs therefore use Codevil's default execute flow rather than waiting for plan approval.
 
 ## Verification
 

@@ -103,6 +103,7 @@ test("notifyExternalConversation posts mapped events to the linked Slack thread"
       channel: "C123",
       thread_ts: "171951.0001",
       text: "I fixed the auth flow.",
+      blocks: [{ type: "markdown", text: "I fixed the auth flow." }],
     },
   }]);
 });

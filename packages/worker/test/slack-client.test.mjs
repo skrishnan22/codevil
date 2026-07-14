@@ -96,6 +96,34 @@ test("postSlackMessage supports injectable Slack API with thread timestamp", asy
   }]);
 });
 
+test("postSlackMessage forwards Slack blocks", async () => {
+  const calls = [];
+  await postSlackMessage(
+    async (token, method, body) => {
+      calls.push({ token, method, body });
+      return { ok: true, data: { ok: true, ts: "171951.0002" } };
+    },
+    "xoxb-test",
+    {
+      channel: "C123",
+      text: "Result",
+      blocks: [{ type: "markdown", text: "**Result**" }],
+      threadTs: "171951.0001",
+    },
+  );
+
+  assert.deepEqual(calls, [{
+    token: "xoxb-test",
+    method: "chat.postMessage",
+    body: {
+      channel: "C123",
+      text: "Result",
+      blocks: [{ type: "markdown", text: "**Result**" }],
+      thread_ts: "171951.0001",
+    },
+  }]);
+});
+
 test("fetchSlackThreadReplies requests the Slack thread", async () => {
   const calls = [];
   const result = await fetchSlackThreadReplies(

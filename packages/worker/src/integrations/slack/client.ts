@@ -5,6 +5,13 @@ export type SlackApi = <T = Record<string, unknown>>(
   body?: Record<string, unknown>,
 ) => Promise<SlackApiResult<T>>;
 
+export type SlackBlock = Record<string, unknown> & { type: string };
+
+export interface SlackMessageContent {
+  text: string;
+  blocks?: SlackBlock[];
+}
+
 export async function slackApi<T>(
   botToken: string | undefined,
   method: string,
@@ -51,10 +58,15 @@ export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
   };
 }
 
-export interface SlackMessageInput {
+export interface SlackMessageInput extends SlackMessageContent {
   channel: string;
-  text: string;
   threadTs?: string;
+}
+
+export interface SlackPostedMessage {
+  ok: true;
+  ts: string;
+  channel?: string;
 }
 
 export interface SlackThreadMessage {
@@ -81,12 +93,13 @@ export function postSlackMessage(
   api: SlackApi,
   botToken: string,
   input: SlackMessageInput,
-): Promise<SlackApiResult<unknown>> {
+): Promise<SlackApiResult<SlackPostedMessage>> {
   return api(botToken, "chat.postMessage", {
     channel: input.channel,
     text: input.text,
+    ...(input.blocks ? { blocks: input.blocks } : {}),
     ...(input.threadTs ? { thread_ts: input.threadTs } : {}),
-  }) as Promise<SlackApiResult<unknown>>;
+  }) as Promise<SlackApiResult<SlackPostedMessage>>;
 }
 
 function isSlackOk(data: unknown): data is { ok: true } {

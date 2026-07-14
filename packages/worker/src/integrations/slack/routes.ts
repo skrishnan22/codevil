@@ -38,6 +38,11 @@ import {
 } from "./client.js";
 import { formatSlackAgentRequest } from "./context.js";
 import { buildSlackManifest } from "./manifest.js";
+import {
+  isSlackQuestionSelectionAction,
+  parseSlackQuestionAction,
+  type SlackQuestionAction,
+} from "./actions.js";
 
 export interface SlackStatusDeps {
   slackApi?: SlackApi;
@@ -51,6 +56,16 @@ export interface SlackEventDeps {
     input: { repo: string },
     createdBy: { id: string; name: string; email?: string | null },
   ) => Promise<CreateSessionResult>;
+}
+
+export interface SlackActionDeps {
+  slackApi?: SlackApi;
+  waitUntil?: (promise: Promise<unknown>) => void;
+  processAction?: (
+    action: SlackQuestionAction,
+    env: Env,
+    deps: SlackActionDeps,
+  ) => Promise<void>;
 }
 
 export async function handleSlackManifest(request: Request): Promise<Response> {
@@ -297,6 +312,41 @@ export async function handleSlackEvent(
     await runStatement(env.DB, externalSessionLinkHandledUpdate(existingLink.id, messageTs, handledAt));
   }
 
+  return json({ ok: true }, 200);
+}
+
+export async function handleSlackAction(
+  request: Request,
+  env: Env,
+  deps: SlackActionDeps = {},
+): Promise<Response> {
+  const body = await request.text();
+  const valid = await verifySlackSignature({
+    signingSecret: env.SLACK_SIGNING_SECRET,
+    signature: request.headers.get("x-slack-signature") ?? undefined,
+    timestamp: request.headers.get("x-slack-request-timestamp") ?? undefined,
+    body,
+  });
+  if (!valid) return json({ error: "Invalid signature" }, 401);
+
+  const encodedPayload = new URLSearchParams(body).get("payload");
+  if (!encodedPayload) return json({ error: "Missing Slack action payload" }, 400);
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(encodedPayload);
+  } catch {
+    return json({ error: "Invalid Slack action payload" }, 400);
+  }
+
+  if (isSlackQuestionSelectionAction(payload)) return json({ ok: true }, 200);
+  const action = parseSlackQuestionAction(payload);
+  if (!action) return json({ error: "Unsupported Slack action" }, 400);
+
+  const process = deps.processAction ?? (async () => {});
+  const processing = process(action, env, deps);
+  if (deps.waitUntil) deps.waitUntil(processing);
+  else await processing;
   return json({ ok: true }, 200);
 }
 

@@ -89,6 +89,17 @@ import {
   trimOutput,
   zeroCost,
 } from "./runtime-helpers.js";
+
+function agentTurnErrorAttributes(error: unknown): Record<string, unknown> {
+  if (typeof error !== "object" || error === null) return {};
+  const candidate = error as { stopReason?: unknown; errorMessage?: unknown; newMessageCount?: unknown };
+  return {
+    ...(typeof candidate.stopReason === "string" ? { stop_reason: candidate.stopReason } : {}),
+    ...(typeof candidate.errorMessage === "string" ? { provider_error: candidate.errorMessage } : {}),
+    ...(typeof candidate.newMessageCount === "number" ? { new_message_count: candidate.newMessageCount } : {}),
+  };
+}
+
 export class SandboxRuntime {
   private readonly workspace: string;
   private readonly provider: string;
@@ -346,16 +357,37 @@ export class SandboxRuntime {
 
     this.activeRunId = runId;
     try {
-      const result = await this.maybeSpan(
-        "llm.agent_turn",
-        { parent, attributes: { run_id: runId, model, provider: provider ?? this.provider } },
-        () => this.requireAgent().turn(prompt),
-      );
-      this.capturePreviewCommand(result.response);
-      this.send({ type: "agent_turn_complete", run_id: runId, ...result });
+      try {
+        const result = await this.maybeSpan(
+          "llm.agent_turn",
+          { parent, attributes: { run_id: runId, model, provider: provider ?? this.provider } },
+          () => this.requireAgent().turn(prompt),
+        );
+        this.capturePreviewCommand(result.response);
+        this.send({ type: "agent_turn_complete", run_id: runId, ...result });
+      } catch (error) {
+        sandboxLogException("agent_turn_failed", error, {
+          run_id: runId,
+          model,
+          provider: provider ?? this.provider,
+          ...agentTurnErrorAttributes(error),
+        });
+        await this.resetAgent();
+        this.send({
+          type: "agent_turn_failed",
+          run_id: runId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     } finally {
       this.activeRunId = undefined;
     }
+  }
+
+  private async resetAgent(): Promise<void> {
+    const agent = this.agent;
+    this.agent = undefined;
+    await agent?.dispose?.();
   }
 
   private async createPullRequest(options: CreatePullRequestToolOptions): Promise<{ url: string }> {

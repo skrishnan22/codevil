@@ -18,6 +18,20 @@ test("extracts plan text from Pi agent_end messages", () => {
   assert.equal(text, "## Plan\n\n1. Fix UI");
 });
 
+test("agent_end extraction ignores assistant text from before the active turn", () => {
+  const text = extractAssistantTextFromEvent({
+    type: "agent_end",
+    messages: [
+      { role: "user", content: "first question" },
+      { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+      { role: "user", content: "second question" },
+      { role: "assistant", content: [], stopReason: "error", errorMessage: "provider failed" },
+    ],
+  }, 2);
+
+  assert.equal(text, "");
+});
+
 test("extracts plan text from Pi turn_end message", () => {
   const text = extractAssistantTextFromEvent({
     type: "turn_end",
@@ -34,6 +48,38 @@ test("extracts streamed assistant text from Pi message_update deltas", () => {
   });
 
   assert.equal(text, "## Plan\n");
+});
+
+test("turn rejects a failed fresh response instead of reusing an earlier assistant message", async () => {
+  const driver = new PiAgentDriver();
+  const messages = [
+    { role: "user", content: "first question" },
+    { role: "assistant", content: [{ type: "text", text: "first answer" }], stopReason: "stop" },
+  ];
+  const session = {
+    messages,
+    async prompt(prompt) {
+      messages.push(
+        { role: "user", content: prompt },
+        { role: "assistant", content: [], stopReason: "error", errorMessage: "provider request failed" },
+      );
+    },
+    getSessionStats() {
+      return { tokens: { input: 0, output: 0 }, cost: 0 };
+    },
+  };
+  driver.session = session;
+
+  await assert.rejects(
+    () => driver.turn("second question"),
+    (error) => {
+      assert.equal(error.name, "AgentTurnError");
+      assert.equal(error.stopReason, "error");
+      assert.equal(error.newMessageCount, 2);
+      assert.match(error.message, /provider request failed/);
+      return true;
+    },
+  );
 });
 
 test("starts with coding tools, create_pull_request, and ask_question active", async () => {

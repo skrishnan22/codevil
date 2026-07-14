@@ -148,7 +148,7 @@ test("DO→Sandbox and Sandbox→DO: consolidation messages parse", () => {
   assert.equal(failed?.type, "consolidation_failed");
 });
 
-test("Sandbox→DO: agent turn completion and PR request parse", () => {
+test("Sandbox→DO: agent turn completion, failure, and PR request parse", () => {
   const completed = parseInbound(
     SandboxToDOMessageSchema,
     { type: "agent_turn_complete", run_id: "run_1", response: "Done", cost: { input_tokens: 1, output_tokens: 2, total_cost_usd: 0 } },
@@ -168,8 +168,14 @@ test("Sandbox→DO: agent turn completion and PR request parse", () => {
     },
     "sandbox_to_do",
   );
+  const failed = parseInbound(
+    SandboxToDOMessageSchema,
+    { type: "agent_turn_failed", run_id: "run_2", message: "provider request failed" },
+    "sandbox_to_do",
+  );
 
   assert.equal(completed?.type, "agent_turn_complete");
+  assert.equal(failed?.type, "agent_turn_failed");
   assert.equal(request?.type, "create_pr_request");
 });
 

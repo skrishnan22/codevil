@@ -207,6 +207,12 @@ export const AgentTurnCompleteSchema = z.object({
   cost: CostInfoSchema,
 });
 
+export const AgentTurnFailedSchema = z.object({
+  type: z.literal("agent_turn_failed"),
+  run_id: z.string(),
+  message: z.string().trim().min(1),
+});
+
 export const CreatePRRequestSchema = z.object({
   type: z.literal("create_pr_request"),
   run_id: z.string(),
@@ -331,6 +337,7 @@ export const SandboxToDOMessageSchema = z.discriminatedUnion("type", [
   SandboxCloneProgressSchema,
   SandboxPlanReadySchema,
   AgentTurnCompleteSchema,
+  AgentTurnFailedSchema,
   CreatePRRequestSchema,
   ExecutionCompleteSchema,
   SandboxVerificationStartedSchema,
@@ -357,6 +364,7 @@ export type SandboxStatus = z.infer<typeof SandboxStatusSchema>;
 export type SandboxCloneProgress = z.infer<typeof SandboxCloneProgressSchema>;
 export type SandboxPlanReady = z.infer<typeof SandboxPlanReadySchema>;
 export type AgentTurnComplete = z.infer<typeof AgentTurnCompleteSchema>;
+export type AgentTurnFailed = z.infer<typeof AgentTurnFailedSchema>;
 export type CreatePRRequest = z.infer<typeof CreatePRRequestSchema>;
 export type ExecutionComplete = z.infer<typeof ExecutionCompleteSchema>;
 export type SandboxVerificationStarted = z.infer<typeof SandboxVerificationStartedSchema>;

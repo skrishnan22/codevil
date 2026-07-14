@@ -1,9 +1,18 @@
-import type { DOToCLIEvent } from "@codevil/shared";
+import type { DOToCLIEvent, QuestionOption } from "@codevil/shared";
 
 export type ExternalNotificationIntent =
   | { type: "agent_response"; runId: string; text: string }
   | { type: "approval_requested"; runId: string; plan: string }
-  | { type: "question_asked"; runId: string; question: string }
+  | {
+      type: "question_asked";
+      requestId: string;
+      runId: string;
+      question: string;
+      context?: string;
+      options?: QuestionOption[];
+      allowFreeform: boolean;
+      allowMultiple: boolean;
+    }
   | { type: "run_failed"; runId: string; message: string };
 
 export function externalNotificationIntent(
@@ -17,8 +26,13 @@ export function externalNotificationIntent(
     case "question_raised":
       return {
         type: "question_asked",
+        requestId: event.request_id,
         runId: event.run_id,
         question: event.question,
+        ...(event.context !== undefined ? { context: event.context } : {}),
+        ...(event.options !== undefined ? { options: event.options } : {}),
+        allowFreeform: event.allow_freeform,
+        allowMultiple: event.allow_multiple,
       };
     case "agent_run_failed":
       return {

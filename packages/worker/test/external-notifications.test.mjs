@@ -24,12 +24,29 @@ test("externalNotificationIntent maps conversational Agent Run events", () => {
     request_id: "question_1",
     run_id: "run_1",
     question: "Which database?",
-    allow_freeform: true,
+    context: "Choose the deployment store.",
+    options: [
+      { id: "pg", label: "PostgreSQL", detail: "Managed production database" },
+      { id: "sqlite", label: "SQLite" },
+    ],
+    allow_freeform: false,
     allow_multiple: false,
-    answerable_by: "anyone",
+    answerable_by: "decider",
     status: "open",
     raised_at: "2026-07-12T00:00:00.000Z",
-  }), { type: "question_asked", runId: "run_1", question: "Which database?" });
+  }), {
+    type: "question_asked",
+    requestId: "question_1",
+    runId: "run_1",
+    question: "Which database?",
+    context: "Choose the deployment store.",
+    options: [
+      { id: "pg", label: "PostgreSQL", detail: "Managed production database" },
+      { id: "sqlite", label: "SQLite" },
+    ],
+    allowFreeform: false,
+    allowMultiple: false,
+  });
 
   assert.deepEqual(externalNotificationIntent({
     type: "agent_run_failed",

@@ -1,8 +1,11 @@
 import type { ExternalNotificationIntent } from "../notification-intents.js";
 import type { SlackMessageContent } from "./client.js";
+import type { QuestionOption } from "@codevil/shared";
 
 const MAX_EXTERNAL_TEXT_LENGTH = 500;
 const MAX_SLACK_MARKDOWN_CHARS = 11_500;
+const MAX_SLACK_ACTION_VALUE_LENGTH = 2_000;
+const MAX_SLACK_OPTION_TEXT_LENGTH = 75;
 
 export function renderSlackNotification(
   intent: ExternalNotificationIntent,
@@ -20,10 +23,160 @@ export function renderSlackNotification(
     case "approval_requested":
       return [{ text: `Codevil needs plan approval:\n\n${boundedText(intent.plan)}\n\n${openSession}` }];
     case "question_asked":
-      return [{ text: `Codevil needs input: ${boundedText(intent.question)} ${openSession}` }];
+      return [renderSlackQuestion(intent, sessionUrl)];
     case "run_failed":
       return [{ text: `Codevil could not complete the Agent Run: ${boundedText(intent.message)} ${openSession}` }];
   }
+}
+
+export function encodeSlackQuestionAction(input: {
+  requestId: string;
+  optionIndex?: number;
+}): string | null {
+  const value = JSON.stringify({
+    v: 1,
+    q: input.requestId,
+    ...(input.optionIndex !== undefined ? { i: input.optionIndex } : {}),
+  });
+  return value.length <= MAX_SLACK_ACTION_VALUE_LENGTH ? value : null;
+}
+
+export function renderAnsweredSlackQuestion(input: {
+  question: string;
+  selectedLabels: string[];
+  answeredByText: string;
+  sessionUrl: string;
+}): SlackMessageContent {
+  const answer = input.selectedLabels.join(", ");
+  return {
+    text: `${boundedText(input.question)} Answered: ${boundedText(answer)} by ${boundedText(input.answeredByText)}`,
+    blocks: [
+      {
+        type: "markdown",
+        text: `## Codevil question answered\n\n${input.question}\n\n**Answer:** ${answer}\n\nAnswered by ${input.answeredByText}`,
+      },
+      openSessionActions(input.sessionUrl),
+    ],
+  };
+}
+
+function renderSlackQuestion(
+  intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
+  sessionUrl: string,
+): SlackMessageContent {
+  const blocks = [
+    { type: "markdown", text: questionMarkdown(intent) },
+    questionActions(intent, sessionUrl),
+  ];
+  return {
+    text: `Codevil needs input: ${boundedText(intent.question)} Open session: ${sessionUrl}`,
+    blocks,
+  };
+}
+
+function questionMarkdown(
+  intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
+): string {
+  const sections = ["## Codevil needs input", intent.question];
+  if (intent.context) sections.push(`> ${intent.context}`);
+  if (intent.options?.length) {
+    sections.push(intent.options.map((option, index) => {
+      const detail = option.detail ? ` — ${option.detail}` : "";
+      return `${index + 1}. **${option.label}**${detail}`;
+    }).join("\n"));
+  }
+  return sections.join("\n\n");
+}
+
+function questionActions(
+  intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
+  sessionUrl: string,
+): Record<string, unknown> & { type: string } {
+  const options = intent.options ?? [];
+  const submitValue = encodeSlackQuestionAction({ requestId: intent.requestId });
+  const elements: Array<Record<string, unknown>> = [];
+
+  if (submitValue && options.length > 0 && options.length <= 100) {
+    if (!intent.allowMultiple && options.length <= 5) {
+      for (const [index, option] of options.entries()) {
+        const value = encodeSlackQuestionAction({ requestId: intent.requestId, optionIndex: index });
+        if (!value) {
+          elements.length = 0;
+          break;
+        }
+        elements.push({
+          type: "button",
+          action_id: "codevil_question_answer",
+          text: plainText(truncate(option.label, MAX_SLACK_OPTION_TEXT_LENGTH)),
+          value,
+        });
+      }
+    } else {
+      elements.push(questionSelectionElement(options, intent.allowMultiple));
+      elements.push({
+        type: "button",
+        action_id: "codevil_question_submit",
+        text: plainText("Submit answer"),
+        style: "primary",
+        value: submitValue,
+      });
+    }
+  }
+
+  elements.push(openSessionButton(sessionUrl));
+  return {
+    type: "actions",
+    block_id: "codevil_question_controls",
+    elements,
+  };
+}
+
+function questionSelectionElement(options: QuestionOption[], allowMultiple: boolean): Record<string, unknown> {
+  const renderedOptions = options.map((option, index) => ({
+    text: plainText(truncate(option.label, MAX_SLACK_OPTION_TEXT_LENGTH)),
+    value: String(index),
+    ...(option.detail
+      ? { description: plainText(truncate(option.detail, MAX_SLACK_OPTION_TEXT_LENGTH)) }
+      : {}),
+  }));
+
+  if (allowMultiple && options.length <= 10) {
+    return {
+      type: "checkboxes",
+      action_id: "codevil_question_select",
+      options: renderedOptions,
+    };
+  }
+  return {
+    type: allowMultiple ? "multi_static_select" : "static_select",
+    action_id: "codevil_question_select",
+    placeholder: plainText(allowMultiple ? "Select answers" : "Select an answer"),
+    options: renderedOptions,
+  };
+}
+
+function openSessionActions(sessionUrl: string): Record<string, unknown> & { type: string } {
+  return {
+    type: "actions",
+    elements: [openSessionButton(sessionUrl)],
+  };
+}
+
+function openSessionButton(sessionUrl: string): Record<string, unknown> {
+  return {
+    type: "button",
+    action_id: "codevil_open_session",
+    text: plainText("Open session"),
+    url: sessionUrl,
+  };
+}
+
+function plainText(text: string): { type: "plain_text"; text: string; emoji: true } {
+  return { type: "plain_text", text, emoji: true };
+}
+
+function truncate(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : value.slice(0, maxLength - 1).trimEnd() + "…";
 }
 
 function splitSlackMarkdown(markdown: string): string[] {

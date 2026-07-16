@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check:migrations": "node scripts/check-d1-migrations.mjs",
     "dev": "wrangler dev",
     "deploy": "pnpm --filter @codevil/web run build && wrangler deploy",
     "build": "tsc -p tsconfig.build.json",

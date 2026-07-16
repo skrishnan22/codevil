@@ -125,6 +125,52 @@ test("notifyExternalConversation posts mapped events to the linked Slack thread"
   }]);
 });
 
+test("Slack Open session links prefer the configured web UI origin", async () => {
+  const db = fakeD1({
+    firstRows: [{
+      provider: "slack",
+      integration_id: "int_slack_T123",
+      external_channel_id: "C123",
+      external_conversation_id: "171951.0001",
+    }],
+    runResults: [{ meta: { changes: 1 } }],
+  });
+  const calls = [];
+
+  await notifyExternalConversation({
+    env: {
+      DB: db,
+      SLACK_BOT_TOKEN: "xoxb-test",
+      CODEVIL_WEB_ORIGIN: "https://app.codevil.example, http://localhost:5173",
+    },
+    sessionId: "ses_123",
+    workerOrigin: "https://worker.codevil.example",
+    cursor: 14,
+    event: {
+      type: "question_raised",
+      request_id: "question_1",
+      run_id: "run_1",
+      question: "Which database?",
+      options: [{ id: "pg", label: "PostgreSQL" }],
+      allow_freeform: false,
+      allow_multiple: false,
+      answerable_by: "anyone",
+      status: "open",
+      raised_at: "2026-07-16T00:00:00.000Z",
+    },
+  }, {
+    slackApi: async (_token, method, body) => {
+      calls.push({ method, body });
+      return { ok: true, data: { ok: true } };
+    },
+  });
+
+  const openSession = calls[0].body.blocks
+    .find((block) => block.type === "actions").elements
+    .find((element) => element.action_id === "codevil_open_session");
+  assert.equal(openSession.url, "https://app.codevil.example/sessions/ses_123");
+});
+
 test("notifyExternalConversation suppresses a duplicate durable cursor", async () => {
   const db = fakeD1({
     firstRows: [{

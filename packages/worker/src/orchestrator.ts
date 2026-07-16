@@ -961,6 +961,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
 
   submitAgentRequest(args: {
     text: string;
+    displayText?: string;
     actor: ParticipantIdentity;
     planFirst?: boolean;
   }): { ok: true } | { ok: false; status: number; error: string } {
@@ -974,7 +975,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
 
     this.appendAndBroadcast({ type: "participant_joined", participant: args.actor });
-    handleAgentRequest(this, args.text, args.actor, args.planFirst ?? false);
+    handleAgentRequest(this, args.text, args.actor, args.planFirst ?? false, args.displayText);
     return { ok: true };
   }
 

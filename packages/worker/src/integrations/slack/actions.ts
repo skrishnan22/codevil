@@ -13,11 +13,12 @@ import {
   createSlackWebApi,
   fetchSlackUser,
   postSlackEphemeral,
+  slackUserDisplayName,
   updateSlackMessage,
   type SlackApi,
-  type SlackUser,
 } from "./client.js";
 import { renderAnsweredSlackQuestion } from "./render.js";
+import { externalSessionUrl } from "../session-url.js";
 
 const SlackBlockActionSchema = z.object({
   type: z.literal("block_actions"),
@@ -113,8 +114,10 @@ export async function processSlackQuestionAction(
   }
 
   const profile = await fetchSlackUser(api, env.SLACK_BOT_TOKEN, action.userId);
-  if (profile.ok && (profile.data.user.is_bot || profile.data.user.is_app_user)) return;
-  const displayName = profile.ok ? slackDisplayName(profile.data.user, action.userId) : action.userId;
+  if (profile.ok && profile.data.user && (profile.data.user.is_bot || profile.data.user.is_app_user)) return;
+  const displayName = profile.ok && profile.data.user
+    ? slackUserDisplayName(profile.data.user, action.userId)
+    : action.userId;
   const now = new Date().toISOString();
   const actorStatement = upsertExternalActor({
     id: externalActorRowId(integrationIdValue, action.userId),
@@ -149,8 +152,11 @@ export async function processSlackQuestionAction(
     return;
   }
 
-  const origin = (deps.workerOrigin ?? env.BETTER_AUTH_URL ?? env.CODEVIL_WEB_ORIGIN ?? "").replace(/\/+$/, "");
-  const sessionUrl = `${origin}/sessions/${link.session_id}`;
+  const sessionUrl = externalSessionUrl(
+    env,
+    deps.workerOrigin ?? env.BETTER_AUTH_URL ?? "",
+    link.session_id,
+  );
   const answeredByText = slackAnswererText(result.answeredBy);
   const update = await updateSlackMessage(api, env.SLACK_BOT_TOKEN, {
     channel: action.channelId,
@@ -172,13 +178,6 @@ export async function processSlackQuestionAction(
   if (result.status === "already_answered") {
     await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "This question was already answered.");
   }
-}
-
-function slackDisplayName(user: SlackUser, fallback: string): string {
-  return user.profile?.display_name?.trim()
-    || user.real_name?.trim()
-    || user.name?.trim()
-    || fallback;
 }
 
 function slackAnswererText(actor: { id: string; name: string }): string {

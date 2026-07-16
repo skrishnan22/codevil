@@ -32,8 +32,10 @@ import {
 import { verifySlackSignature } from "./signature.js";
 import {
   createSlackWebApi,
+  fetchSlackUser,
   fetchSlackThreadReplies,
   postSlackMessage,
+  slackUserDisplayName,
   type SlackApi,
 } from "./client.js";
 import { formatSlackAgentRequest } from "./context.js";
@@ -152,6 +154,8 @@ export async function handleSlackEvent(
   if (!botUserId) return json({ ok: true }, 200);
   if (event.bot_id || (botUserId && userId === botUserId)) return json({ ok: true }, 200);
   if (!containsBotMention(event.text, botUserId)) return json({ ok: true }, 200);
+  if (!env.SLACK_BOT_TOKEN) return json({ ok: true }, 200);
+  const slackApi = deps.slackApi ?? createSlackWebApi();
 
   const integrationIdValue = integrationId("slack", teamId);
   const externalEventId = eventCallback.data.event_id ?? `${channelId}:${messageTs}`;
@@ -165,6 +169,16 @@ export async function handleSlackEvent(
   const dedupeResult = await env.DB.prepare(dedupe.sql).bind(...dedupe.bindings).run();
   if (d1Changes(dedupeResult) === 0) return json({ ok: true }, 200);
 
+  const strippedText = stripBotMention(event.text ?? "", botUserId);
+  const rootConversationId = slackThreadRootTs({ ts: messageTs, thread_ts: event.thread_ts });
+  const profilePromise = fetchSlackUser(slackApi, env.SLACK_BOT_TOKEN, userId);
+  const threadPromise = fetchSlackThreadReplies(
+    slackApi,
+    env.SLACK_BOT_TOKEN,
+    channelId,
+    rootConversationId,
+  );
+
   await runStatement(env.DB, upsertIntegration({
     id: integrationIdValue,
     provider: "slack",
@@ -176,11 +190,16 @@ export async function handleSlackEvent(
     updated_at: handledAt,
   }));
 
+  const profile = await profilePromise;
+  const displayName = profile.ok && profile.data.user
+    ? slackUserDisplayName(profile.data.user, userId)
+    : userId;
+
   await runStatement(env.DB, upsertExternalActor({
     id: externalActorRowId(integrationIdValue, userId),
     integration_id: integrationIdValue,
     external_actor_id: userId,
-    display_name: userId,
+    display_name: displayName,
     email: null,
     linked_auth_user_id: null,
     metadata_json: "{}",
@@ -188,9 +207,7 @@ export async function handleSlackEvent(
     updated_at: handledAt,
   }));
 
-  const actor = { id: externalParticipantId("slack", userId), name: userId };
-  const strippedText = stripBotMention(event.text ?? "", botUserId);
-  const rootConversationId = slackThreadRootTs({ ts: messageTs, thread_ts: event.thread_ts });
+  const actor = { id: externalParticipantId("slack", userId), name: displayName };
   const channelRow = await firstRow<Pick<IntegrationChannelRow, "default_repo_url"> | null>(
     env.DB,
     channelByExternalIdSelect(integrationIdValue, channelId),
@@ -199,14 +216,7 @@ export async function handleSlackEvent(
     env.DB,
     externalSessionLinkSelect(integrationIdValue, channelId, rootConversationId),
   );
-  if (!env.SLACK_BOT_TOKEN) return json({ ok: true }, 200);
-  const slackApi = deps.slackApi ?? createSlackWebApi();
-  const thread = await fetchSlackThreadReplies(
-    slackApi,
-    env.SLACK_BOT_TOKEN,
-    channelId,
-    rootConversationId,
-  );
+  const thread = await threadPromise;
   if (!thread.ok) {
     workerLog("WARN", "slack.thread.read.failed", {
       error: thread.error,
@@ -282,6 +292,7 @@ export async function handleSlackEvent(
   try {
     submit = await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).submitAgentRequest({
       text: agentRequestText,
+      displayText: strippedText,
       actor,
       planFirst: false,
     });

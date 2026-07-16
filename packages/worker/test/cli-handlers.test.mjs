@@ -36,6 +36,22 @@ test("handleAgentRequest starts a run immediately when session is ready and idle
   assert.ok(!broadcasts.some((e) => e.type === "agent_request_queued"));
 });
 
+test("handleAgentRequest can separate visible request text from the agent prompt", () => {
+  const { host, broadcasts, sandboxMessages } = createFakeHost({ state: "ready" });
+
+  handleAgentRequest(
+    host,
+    "Source: Slack thread\n\nThread context:\nInternal context\n\nExplicit request:\nFix auth",
+    actor,
+    false,
+    "Fix auth",
+  );
+
+  assert.equal(broadcasts.find((event) => event.type === "agent_request").text, "Fix auth");
+  assert.match(host.meta.active_run.text, /Thread context:\nInternal context/);
+  assert.match(sandboxMessages[0].prompt, /Thread context:\nInternal context/);
+});
+
 test("handleAgentRequest queues when another run is already active", () => {
   const active = createAgentRun({
     actor,

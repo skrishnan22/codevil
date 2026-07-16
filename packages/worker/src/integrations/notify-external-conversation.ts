@@ -12,6 +12,7 @@ import {
   type SlackApi,
 } from "./slack/client.js";
 import { renderSlackNotification } from "./slack/render.js";
+import { externalSessionUrl } from "./session-url.js";
 
 export interface ExternalNotificationDeps {
   slackApi?: SlackApi;
@@ -20,6 +21,7 @@ export interface ExternalNotificationDeps {
 export interface ExternalNotificationEnv {
   DB: D1Database;
   SLACK_BOT_TOKEN?: string;
+  CODEVIL_WEB_ORIGIN?: string;
 }
 
 export async function notifyExternalConversation(
@@ -53,7 +55,7 @@ export async function notifyExternalConversation(
 
     if (destination.provider !== "slack" || !input.env.SLACK_BOT_TOKEN) return;
     const api = deps.slackApi ?? createSlackWebApi();
-    const sessionUrl = `${input.workerOrigin.replace(/\/+$/, "")}/sessions/${input.sessionId}`;
+    const sessionUrl = externalSessionUrl(input.env, input.workerOrigin, input.sessionId);
     const messages = renderSlackNotification(intent, sessionUrl);
     for (const message of messages) {
       const result = await postSlackMessage(api, input.env.SLACK_BOT_TOKEN, {

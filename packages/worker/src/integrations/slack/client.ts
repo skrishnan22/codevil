@@ -69,7 +69,16 @@ export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
         data,
       };
     }
-    if (!isSlackOk(data)) return { ok: false, error: slackError(data) ?? "slack_not_ok", data };
+    if (!isSlackOk(data)) {
+      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+      return {
+        ok: false,
+        error: slackError(data) ?? "slack_not_ok",
+        status: response.status,
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+        data,
+      };
+    }
     return { ok: true, data: data as T };
   };
 }

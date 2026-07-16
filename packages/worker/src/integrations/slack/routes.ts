@@ -169,6 +169,16 @@ export async function handleSlackEvent(
   const dedupeResult = await env.DB.prepare(dedupe.sql).bind(...dedupe.bindings).run();
   if (d1Changes(dedupeResult) === 0) return json({ ok: true }, 200);
 
+  const strippedText = stripBotMention(event.text ?? "", botUserId);
+  const rootConversationId = slackThreadRootTs({ ts: messageTs, thread_ts: event.thread_ts });
+  const profilePromise = fetchSlackUser(slackApi, env.SLACK_BOT_TOKEN, userId);
+  const threadPromise = fetchSlackThreadReplies(
+    slackApi,
+    env.SLACK_BOT_TOKEN,
+    channelId,
+    rootConversationId,
+  );
+
   await runStatement(env.DB, upsertIntegration({
     id: integrationIdValue,
     provider: "slack",
@@ -180,7 +190,7 @@ export async function handleSlackEvent(
     updated_at: handledAt,
   }));
 
-  const profile = await fetchSlackUser(slackApi, env.SLACK_BOT_TOKEN, userId);
+  const profile = await profilePromise;
   const displayName = profile.ok && profile.data.user
     ? slackUserDisplayName(profile.data.user, userId)
     : userId;
@@ -198,8 +208,6 @@ export async function handleSlackEvent(
   }));
 
   const actor = { id: externalParticipantId("slack", userId), name: displayName };
-  const strippedText = stripBotMention(event.text ?? "", botUserId);
-  const rootConversationId = slackThreadRootTs({ ts: messageTs, thread_ts: event.thread_ts });
   const channelRow = await firstRow<Pick<IntegrationChannelRow, "default_repo_url"> | null>(
     env.DB,
     channelByExternalIdSelect(integrationIdValue, channelId),
@@ -208,12 +216,7 @@ export async function handleSlackEvent(
     env.DB,
     externalSessionLinkSelect(integrationIdValue, channelId, rootConversationId),
   );
-  const thread = await fetchSlackThreadReplies(
-    slackApi,
-    env.SLACK_BOT_TOKEN,
-    channelId,
-    rootConversationId,
-  );
+  const thread = await threadPromise;
   if (!thread.ok) {
     workerLog("WARN", "slack.thread.read.failed", {
       error: thread.error,

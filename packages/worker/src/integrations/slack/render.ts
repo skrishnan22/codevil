@@ -65,14 +65,9 @@ function renderSlackQuestion(
   sessionUrl: string,
 ): SlackMessageContent {
   const actions = questionActions(intent, sessionUrl);
-  const elements = actions.elements as Array<Record<string, unknown>>;
-  const optionsShownInControls = elements.some((element) => {
-    const actionId = element.action_id;
-    return actionId === "codevil_question_answer" || actionId === "codevil_question_select";
-  });
   const blocks = [
-    { type: "markdown", text: questionMarkdown(intent, !optionsShownInControls) },
-    actions,
+    { type: "markdown", text: questionMarkdown(intent, !actions.optionsShownInControls) },
+    actions.block,
   ];
   return {
     text: `Codevil needs input: ${boundedText(intent.question)} Open session: ${sessionUrl}`,
@@ -98,7 +93,10 @@ function questionMarkdown(
 function questionActions(
   intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
   sessionUrl: string,
-): Record<string, unknown> & { type: string } {
+): {
+  block: Record<string, unknown> & { type: string };
+  optionsShownInControls: boolean;
+} {
   const options = intent.options ?? [];
   const submitValue = encodeSlackQuestionAction({ requestId: intent.requestId });
   const elements: Array<Record<string, unknown>> = [];
@@ -130,11 +128,15 @@ function questionActions(
     }
   }
 
+  const optionsShownInControls = elements.length > 0;
   elements.push(openSessionButton(sessionUrl));
   return {
-    type: "actions",
-    block_id: "codevil_question_controls",
-    elements,
+    block: {
+      type: "actions",
+      block_id: "codevil_question_controls",
+      elements,
+    },
+    optionsShownInControls,
   };
 }
 

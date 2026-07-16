@@ -334,6 +334,7 @@ test("event creates a session, links the Slack thread, and submits the stripped 
   const orchestratorCalls = [];
   const postCalls = [];
   const createSessionCalls = [];
+  let profileSettled = false;
   const body = JSON.stringify({
     type: "event_callback",
     event_id: "Ev2",
@@ -362,6 +363,7 @@ test("event creates a session, links the Slack thread, and submits the stripped 
     slackApi: async (token, method, payload) => {
       postCalls.push({ token, method, payload });
       if (method === "conversations.replies") {
+        assert.equal(profileSettled, false, "thread and profile Slack requests should overlap");
         return {
           ok: true,
           data: {
@@ -377,6 +379,8 @@ test("event creates a session, links the Slack thread, and submits the stripped 
         };
       }
       if (method === "users.info") {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        profileSettled = true;
         return {
           ok: true,
           data: { ok: true, user: { id: "U123", profile: { display_name: "krish" } } },

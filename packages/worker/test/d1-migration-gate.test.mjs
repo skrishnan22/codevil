@@ -116,6 +116,27 @@ test("queries the remote DB binding through the package Wrangler binary", () => 
   ]);
   assert.match(calls[0].options.cwd, /packages\/worker\/?$/);
   assert.equal(calls[0].options.env.CLOUDFLARE_API_TOKEN, "test-token");
+  assert.equal(calls[0].options.timeout, 60_000);
   assert.deepEqual(stdout, ["✅ No migrations to apply!\n"]);
   assert.deepEqual(stderr, []);
+});
+
+test("reports a clear failure when the Wrangler migration check times out", () => {
+  const recorder = createRecorder();
+  const timeoutError = Object.assign(new Error("spawnSync pnpm ETIMEDOUT"), {
+    code: "ETIMEDOUT",
+  });
+
+  const exitCode = runMigrationCheck({
+    spawn() {
+      return { status: null, stdout: "", stderr: "", error: timeoutError };
+    },
+    writers: recorder,
+    stdout: { write() {} },
+    stderr: { write() {} },
+  });
+
+  assert.equal(exitCode, 1);
+  assert.match(recorder.errors[0], /timed out after 60 seconds/i);
+  assert.match(recorder.summaries[0], /timed out after 60 seconds/i);
 });

@@ -4,8 +4,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const CURRENT_MARKER = "No migrations to apply!";
 const PENDING_MARKER = "Migrations to be applied:";
+// Keep this aligned with [[d1_databases]].binding in ../wrangler.toml.
+const D1_DATABASE_BINDING = "DB";
+const MIGRATION_CHECK_TIMEOUT_MS = 60_000;
 const APPLY_COMMAND =
-  "pnpm --filter @codevil/worker exec wrangler d1 migrations apply DB --remote";
+  `pnpm --filter @codevil/worker exec wrangler d1 migrations apply ${D1_DATABASE_BINDING} --remote`;
 
 function stripAnsi(value) {
   return value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "");
@@ -31,6 +34,20 @@ function summary(title, output, instructions) {
 
 export function evaluateMigrationCheck(result, writers) {
   const output = combinedOutput(result);
+
+  if (result.errorCode === "ETIMEDOUT") {
+    writers.writeError(
+      "D1 migration check timed out after 60 seconds; deployment was blocked.",
+    );
+    writers.writeSummary(
+      summary(
+        "D1 migration check timed out after 60 seconds",
+        output,
+        "Check Cloudflare availability, then rerun this job.",
+      ),
+    );
+    return 1;
+  }
 
   if (result.status !== 0) {
     writers.writeError("Could not check D1 migrations; deployment was blocked.");
@@ -105,11 +122,20 @@ export function runMigrationCheck({
   const workerDirectory = fileURLToPath(new URL("..", import.meta.url));
   const result = spawn(
     "pnpm",
-    ["exec", "wrangler", "d1", "migrations", "list", "DB", "--remote"],
+    [
+      "exec",
+      "wrangler",
+      "d1",
+      "migrations",
+      "list",
+      D1_DATABASE_BINDING,
+      "--remote",
+    ],
     {
       cwd: workerDirectory,
       encoding: "utf8",
       env,
+      timeout: MIGRATION_CHECK_TIMEOUT_MS,
     },
   );
 
@@ -119,6 +145,7 @@ export function runMigrationCheck({
   return evaluateMigrationCheck(
     {
       status: result.error ? 1 : result.status,
+      errorCode: result.error?.code,
       stdout: result.stdout ?? "",
       stderr: result.error?.message ?? result.stderr ?? "",
     },

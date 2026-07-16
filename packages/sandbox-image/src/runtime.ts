@@ -23,7 +23,6 @@ import {
 import {
   readDependencyArtifactMarker,
   dependencyCleanExcludesForMarker,
-  type DependencyArtifactMarker,
 } from "./dependency-cache.js";
 import { executePrompt, planPrompt, refinePrompt } from "./prompts.js";
 import { parsePreviewSuggestion } from "./preview-parsers.js";
@@ -37,8 +36,6 @@ import {
   type Verifier,
   RepositoryVerifier,
   ShellCommandRunner,
-  detectSetupCommand,
-  detectVerificationCommand,
   runVerificationLoop,
 } from "./verification.js";
 export {
@@ -47,7 +44,7 @@ export {
   detectSetupCommand,
   detectVerificationCommand,
 } from "./verification.js";
-export { detectPreviewApps, detectPreviewCommand } from "./preview-manager.js";
+export { detectPreviewApps } from "./preview-manager.js";
 
 export type {
   AgentStartOptions,

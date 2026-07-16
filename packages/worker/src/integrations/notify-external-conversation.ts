@@ -14,6 +14,7 @@ import {
   type SlackApiResult,
 } from "./slack/client.js";
 import { renderSlackNotification } from "./slack/render.js";
+import { externalSessionUrl } from "./session-url.js";
 
 export interface ExternalNotificationDeps {
   slackApi?: SlackApi;
@@ -24,6 +25,7 @@ export interface ExternalNotificationDeps {
 export interface ExternalNotificationEnv {
   DB: D1Database;
   SLACK_BOT_TOKEN?: string;
+  CODEVIL_WEB_ORIGIN?: string;
 }
 
 const MAX_DELIVERY_ATTEMPTS = 3;
@@ -65,7 +67,7 @@ export async function notifyExternalConversation(
     const api = deps.slackApi ?? createSlackWebApi();
     const sleep = deps.sleep ?? sleepFor;
     const random = deps.random ?? Math.random;
-    const sessionUrl = `${input.workerOrigin.replace(/\/+$/, "")}/sessions/${input.sessionId}`;
+    const sessionUrl = externalSessionUrl(input.env, input.workerOrigin, input.sessionId);
     const messages = renderSlackNotification(intent, sessionUrl);
     for (const [messageIndex, message] of messages.entries()) {
       const result = await postSlackMessageWithRetry({

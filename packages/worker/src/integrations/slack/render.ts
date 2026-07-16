@@ -64,9 +64,10 @@ function renderSlackQuestion(
   intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
   sessionUrl: string,
 ): SlackMessageContent {
+  const actions = questionActions(intent, sessionUrl);
   const blocks = [
-    { type: "markdown", text: questionMarkdown(intent) },
-    questionActions(intent, sessionUrl),
+    { type: "markdown", text: questionMarkdown(intent, !actions.optionsShownInControls) },
+    actions.block,
   ];
   return {
     text: `Codevil needs input: ${boundedText(intent.question)} Open session: ${sessionUrl}`,
@@ -76,10 +77,11 @@ function renderSlackQuestion(
 
 function questionMarkdown(
   intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
+  includeOptions: boolean,
 ): string {
   const sections = ["## Codevil needs input", intent.question];
   if (intent.context) sections.push(`> ${intent.context}`);
-  if (intent.options?.length) {
+  if (includeOptions && intent.options?.length) {
     sections.push(intent.options.map((option, index) => {
       const detail = option.detail ? ` — ${option.detail}` : "";
       return `${index + 1}. **${option.label}**${detail}`;
@@ -91,7 +93,10 @@ function questionMarkdown(
 function questionActions(
   intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
   sessionUrl: string,
-): Record<string, unknown> & { type: string } {
+): {
+  block: Record<string, unknown> & { type: string };
+  optionsShownInControls: boolean;
+} {
   const options = intent.options ?? [];
   const submitValue = encodeSlackQuestionAction({ requestId: intent.requestId });
   const elements: Array<Record<string, unknown>> = [];
@@ -123,11 +128,15 @@ function questionActions(
     }
   }
 
+  const optionsShownInControls = elements.length > 0;
   elements.push(openSessionButton(sessionUrl));
   return {
-    type: "actions",
-    block_id: "codevil_question_controls",
-    elements,
+    block: {
+      type: "actions",
+      block_id: "codevil_question_controls",
+      elements,
+    },
+    optionsShownInControls,
   };
 }
 

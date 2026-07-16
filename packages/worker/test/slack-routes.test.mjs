@@ -334,6 +334,7 @@ test("event creates a session, links the Slack thread, and submits the stripped 
   const orchestratorCalls = [];
   const postCalls = [];
   const createSessionCalls = [];
+  let profileSettled = false;
   const body = JSON.stringify({
     type: "event_callback",
     event_id: "Ev2",
@@ -362,6 +363,7 @@ test("event creates a session, links the Slack thread, and submits the stripped 
     slackApi: async (token, method, payload) => {
       postCalls.push({ token, method, payload });
       if (method === "conversations.replies") {
+        assert.equal(profileSettled, false, "thread and profile Slack requests should overlap");
         return {
           ok: true,
           data: {
@@ -374,6 +376,14 @@ test("event creates a session, links the Slack thread, and submits the stripped 
               },
             ],
           },
+        };
+      }
+      if (method === "users.info") {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        profileSettled = true;
+        return {
+          ok: true,
+          data: { ok: true, user: { id: "U123", profile: { display_name: "krish" } } },
         };
       }
       return { ok: true, data: { ok: true } };
@@ -393,7 +403,7 @@ test("event creates a session, links the Slack thread, and submits the stripped 
   assert.deepEqual(createSessionCalls, [{
     requestUrl: "https://codevil.example.com/slack/events",
     input: { repo: "https://github.com/acme/repo" },
-    actor: { id: "external:slack:U123", name: "U123" },
+    actor: { id: "external:slack:U123", name: "krish" },
   }]);
   assert.deepEqual(orchestratorCalls, [{
     sessionId: "ses_new",
@@ -407,13 +417,13 @@ test("event creates a session, links the Slack thread, and submits the stripped 
         "Explicit request:",
         "Slack U123: please check this repo https://github.com/acme/repo",
       ].join("\n"),
-      actor: { id: "external:slack:U123", name: "U123" },
+      displayText: "please check this repo https://github.com/acme/repo",
+      actor: { id: "external:slack:U123", name: "krish" },
       planFirst: false,
     },
   }]);
-  assert.equal(postCalls.length, 1);
-  assert.equal(postCalls[0].method, "conversations.replies");
-  assert.deepEqual(postCalls[0].payload, { channel: "C123", ts: "171951.0002", limit: 100 });
+  assert.deepEqual(postCalls.map((call) => call.method), ["users.info", "conversations.replies"]);
+  assert.deepEqual(postCalls[1].payload, { channel: "C123", ts: "171951.0002", limit: 100 });
   assert.match(db.records[0].sql, /^INSERT OR IGNORE INTO external_message_dedupe/i);
   assert.match(db.records[1].sql, /^INSERT INTO integrations/i);
   assert.match(db.records[2].sql, /^INSERT INTO integration_external_actors/i);
@@ -575,12 +585,12 @@ test("event continues an existing linked session and updates the handled message
         "Explicit request:",
         "Slack U123: follow up",
       ].join("\n"),
+      displayText: "follow up",
       actor: { id: "external:slack:U123", name: "U123" },
       planFirst: false,
     },
   }]);
-  assert.equal(postCalls.length, 1);
-  assert.equal(postCalls[0].method, "conversations.replies");
+  assert.deepEqual(postCalls.map((call) => call.method), ["users.info", "conversations.replies"]);
   assert.match(db.records[5].sql, /^UPDATE external_session_links/i);
   assert.deepEqual(db.records[5].bindings, [
     "171951.0003",

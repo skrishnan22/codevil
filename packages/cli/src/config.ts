@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { DEFAULT_CONFIG, type Config } from "@codevil/shared";
+import { DEFAULT_CONFIG, isRecord, type Config } from "@codevil/shared";
 
 export interface ConfigPathOptions {
   home?: string;
@@ -84,10 +84,6 @@ function validateConfig(value: unknown): Config {
       ...(isRecord(value.defaults) ? value.defaults : {}),
     },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

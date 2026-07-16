@@ -7,14 +7,7 @@
  */
 
 import type { DOToCLIEvent } from "./messages-cli.js";
-import type {
-  ChatMessage,
-  ActivityEntry,
-  PreviewState,
-  PlanRevisionState,
-  QuestionViewModel,
-  ProjectionContext,
-} from "./projection-types.js";
+import type { ProjectionContext } from "./projection-types.js";
 import {
   emptyPreviewState,
   inferPhase,
@@ -146,32 +139,4 @@ export function applyToChatActivity(
     messages: appendProjectedChatMessages(state.messages, event, ctx),
     activityLog: appendProjectedActivity(state.activityLog, event, ctx),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Batch projection helpers (legacy event-mapper API)
-// ---------------------------------------------------------------------------
-
-export interface ProjectedSessionView {
-  messages: ChatMessage[];
-  activityLog: ActivityEntry[];
-}
-
-export function projectEvent(
-  state: ProjectedSessionView,
-  event: DOToCLIEvent,
-  ctx: ProjectionContext,
-): ProjectedSessionView {
-  return {
-    messages: appendProjectedChatMessages(state.messages, event, ctx),
-    activityLog: appendProjectedActivity(state.activityLog, event, ctx),
-  };
-}
-
-export function projectEvents(
-  state: ProjectedSessionView,
-  events: DOToCLIEvent[],
-  ctx: ProjectionContext,
-): ProjectedSessionView {
-  return events.reduce((s, e) => projectEvent(s, e, ctx), state);
 }

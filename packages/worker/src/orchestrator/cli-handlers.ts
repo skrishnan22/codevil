@@ -92,6 +92,7 @@ export function handleAgentRequest(
   text: string,
   actor: ParticipantIdentity,
   planFirst: boolean,
+  displayText?: string,
 ): void {
   if (!host.meta) return;
 
@@ -109,7 +110,7 @@ export function handleAgentRequest(
     type: "agent_request",
     run_id: run.id,
     actor,
-    text: run.text,
+    text: displayText?.trim() || run.text,
     created_at: run.created_at,
   });
 

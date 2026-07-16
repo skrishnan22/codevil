@@ -39,7 +39,7 @@ import {
 import { formatSlackAgentRequest } from "./context.js";
 import { buildSlackManifest } from "./manifest.js";
 import {
-  isSlackQuestionSelectionAction,
+  isSlackNonSubmittingAction,
   parseSlackQuestionAction,
   processSlackQuestionAction,
   type SlackQuestionAction,
@@ -340,7 +340,7 @@ export async function handleSlackAction(
     return json({ error: "Invalid Slack action payload" }, 400);
   }
 
-  if (isSlackQuestionSelectionAction(payload)) return json({ ok: true }, 200);
+  if (isSlackNonSubmittingAction(payload)) return json({ ok: true }, 200);
   const action = parseSlackQuestionAction(payload);
   if (!action) return json({ error: "Unsupported Slack action" }, 400);
 

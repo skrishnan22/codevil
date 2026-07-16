@@ -117,7 +117,7 @@ Slack profile names are display metadata and are never used as authorization key
 
 The Session orchestrator is the source of truth for question status. It serializes answer attempts and accepts only an answer whose question is still open. The first valid answer wins; later attempts cannot overwrite it.
 
-Action handling derives an idempotency identity from the Slack team, user, channel, message timestamp, action timestamp, action ID, and question ID. Slack retries therefore converge on the already-accepted state rather than producing a second answer.
+Slack retries converge on the already-accepted state rather than producing a second answer. The Session Durable Object serializes answer attempts, and the conditional `status = 'open'` transition makes the accepted question state the idempotency boundary.
 
 When an interaction is stale, Codevil updates the Slack message from current Session state and tells the clicking user that the question was already answered.
 

@@ -71,7 +71,6 @@ test("Slack option ordinals map to stored option IDs", async () => {
     requestId: "question_1",
     optionIndexes: [0],
     actor: slackActor,
-    idempotencyKey: "action_1",
   });
 
   assert.deepEqual(result, {
@@ -98,7 +97,6 @@ test("Slack answer validation rejects invalid ordinals and cardinality", async (
       requestId: "question_1",
       optionIndexes,
       actor: slackActor,
-      idempotencyKey: `action_${optionIndexes.join("_")}`,
     });
     assert.equal(result.ok, false);
     assert.equal(result.status, "invalid_selection");
@@ -113,13 +111,11 @@ test("the first accepted answer wins and retries return persisted state", async 
     requestId: "question_1",
     optionIndexes: [1],
     actor: slackActor,
-    idempotencyKey: "action_1",
   });
   const second = await answer(state.host, {
     requestId: "question_1",
     optionIndexes: [0],
     actor: { id: "external:slack:U456", name: "Ada" },
-    idempotencyKey: "action_2",
   });
 
   assert.equal(first.status, "answered");
@@ -141,9 +137,26 @@ test("missing and cancelled questions are not answerable", async () => {
       requestId: "question_1",
       optionIndexes: [0],
       actor: slackActor,
-      idempotencyKey: "action_1",
     });
     assert.equal(result.ok, false);
     assert.ok(["not_found", "not_open"].includes(result.status));
+  }
+});
+
+test("Slack integration answers intentionally allow any human for every web answer policy", async () => {
+  for (const answerableBy of ["anyone", "decider", "assigned"]) {
+    const state = fixture(question({
+      answerable_by: answerableBy,
+      assigned_to_id: answerableBy === "assigned" ? "web-user" : null,
+      assigned_to_name: answerableBy === "assigned" ? "Web User" : null,
+    }));
+    const result = await answer(state.host, {
+      requestId: "question_1",
+      optionIndexes: [0],
+      actor: slackActor,
+    });
+
+    assert.equal(result.ok, true, `Slack actor should answer ${answerableBy} questions`);
+    assert.equal(result.status, "answered");
   }
 });

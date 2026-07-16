@@ -86,9 +86,12 @@ export function parseSlackQuestionAction(payload: unknown): SlackQuestionAction 
   };
 }
 
-export function isSlackQuestionSelectionAction(payload: unknown): boolean {
+export function isSlackNonSubmittingAction(payload: unknown): boolean {
   const parsed = SlackBlockActionSchema.safeParse(payload);
-  return parsed.success && parsed.data.actions[0]?.action_id === "codevil_question_select";
+  if (!parsed.success) return false;
+  return ["codevil_question_select", "codevil_open_session"].includes(
+    parsed.data.actions[0]?.action_id,
+  );
 }
 
 export async function processSlackQuestionAction(
@@ -135,14 +138,6 @@ export async function processSlackQuestionAction(
         requestId: action.requestId,
         optionIndexes: action.optionIndexes,
         actor,
-        idempotencyKey: [
-          action.teamId,
-          action.userId,
-          action.channelId,
-          action.messageTs,
-          action.actionTs,
-          action.requestId,
-        ].join(":"),
       });
   } catch {
     await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "I couldn't submit that answer. Please try again.");

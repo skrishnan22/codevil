@@ -982,7 +982,6 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     requestId: string;
     optionIndexes: number[];
     actor: ParticipantIdentity;
-    idempotencyKey: string;
   }): IntegrationQuestionAnswerResult {
     this.loadMeta();
     if (!this.meta) {

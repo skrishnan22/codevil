@@ -30,9 +30,10 @@ export function answerQuestionFromIntegration(
     requestId: string;
     optionIndexes: number[];
     actor: ParticipantIdentity;
-    idempotencyKey: string;
   },
 ): IntegrationQuestionAnswerResult {
+  // Slack conversation membership is the authorization boundary for this path.
+  // Web-only answerable_by policies are intentionally enforced by handleQuestionAnswer instead.
   return applyQuestionAnswer(host, {
     requestId: args.requestId,
     optionIndexes: args.optionIndexes,

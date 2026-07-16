@@ -77,13 +77,20 @@ test("parseSlackQuestionAction rejects malformed or unsafe actions", async () =>
   }
 });
 
-test("isSlackQuestionSelectionAction recognizes non-submitting selection changes", async () => {
+test("isSlackNonSubmittingAction recognizes controls that need acknowledgement only", async () => {
   const module = await actionsModule;
-  assert.equal(typeof module.isSlackQuestionSelectionAction, "function");
-  assert.equal(module.isSlackQuestionSelectionAction(basePayload({
+  assert.equal(typeof module.isSlackNonSubmittingAction, "function");
+  assert.equal(module.isSlackNonSubmittingAction(basePayload({
     actions: [{ action_id: "codevil_question_select", action_ts: "171951.1111" }],
   })), true);
-  assert.equal(module.isSlackQuestionSelectionAction(basePayload()), false);
+  assert.equal(module.isSlackNonSubmittingAction(basePayload({
+    actions: [{
+      action_id: "codevil_open_session",
+      action_ts: "171951.1111",
+      url: "https://codevil.example/sessions/ses_123",
+    }],
+  })), true);
+  assert.equal(module.isSlackNonSubmittingAction(basePayload()), false);
 });
 
 function parsedAction(overrides = {}) {
@@ -198,7 +205,6 @@ test("processSlackQuestionAction attributes and reflects an accepted answer", as
       requestId: "question_1",
       optionIndexes: [0],
       actor: { id: "external:slack:U123", name: "krish" },
-      idempotencyKey: "T123:U123:C123:171951.0002:171951.1111:question_1",
     },
   });
   assert.ok(fixture.records.some((record) => /INSERT INTO integration_external_actors/.test(record.sql)));

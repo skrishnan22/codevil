@@ -234,6 +234,38 @@ test("action validates its payload and schedules valid processing", async () => 
   assert.equal(processed[0].requestId, "question_1");
 });
 
+test("Open session URL actions are acknowledged without background processing", async () => {
+  const action = {
+    type: "block_actions",
+    team: { id: "T123" },
+    user: { id: "U123" },
+    channel: { id: "C123" },
+    container: { type: "message", message_ts: "171951.0002", channel_id: "C123" },
+    message: { ts: "171951.0002", thread_ts: "171951.0001" },
+    actions: [{
+      action_id: "codevil_open_session",
+      action_ts: "171951.1111",
+      url: "https://codevil.example.com/sessions/ses_123",
+    }],
+    state: { values: {} },
+  };
+  const body = new URLSearchParams({ payload: JSON.stringify(action) }).toString();
+  let scheduled = false;
+  let processed = false;
+  const response = await slackRoutes.handleSlackAction(
+    await signedSlackActionRequest(body),
+    { SLACK_SIGNING_SECRET: "secret" },
+    {
+      waitUntil: () => { scheduled = true; },
+      processAction: async () => { processed = true; },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(scheduled, false);
+  assert.equal(processed, false);
+});
+
 test("event ignores app mentions when bot user id is missing", async () => {
   const db = fakeD1();
   const body = JSON.stringify({

@@ -27,7 +27,23 @@ test("Slack Web API client returns Slack error envelopes", async () => {
   assert.deepEqual(await slackApi("xoxb-test", "auth.test"), {
     ok: false,
     error: "invalid_auth",
+    status: 200,
     data: { ok: false, error: "invalid_auth" },
+  });
+});
+
+test("Slack Web API client preserves retry metadata from successful HTTP error envelopes", async () => {
+  const slackApi = createSlackWebApi(async () => Response.json(
+    { ok: false, error: "ratelimited" },
+    { headers: { "retry-after": "2" } },
+  ));
+
+  assert.deepEqual(await slackApi("xoxb-test", "chat.postMessage"), {
+    ok: false,
+    error: "ratelimited",
+    status: 200,
+    retryAfterMs: 2_000,
+    data: { ok: false, error: "ratelimited" },
   });
 });
 

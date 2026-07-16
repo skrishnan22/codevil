@@ -180,7 +180,7 @@ function withCors(request: Request, env: Env, response: Response): Response {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeadersFor(request, env) });
     }
@@ -191,7 +191,10 @@ export default {
     const applyCors = (response: Response) => withCors(request, env, response);
 
     try {
-      const routed = await dispatchHttpRequest(request, env, { withCors });
+      const routed = await dispatchHttpRequest(request, env, {
+        withCors,
+        slack: { waitUntil: (promise) => ctx.waitUntil(promise) },
+      });
       if (routed) {
         return observeRoutedResponse(routed, {
           requestId,

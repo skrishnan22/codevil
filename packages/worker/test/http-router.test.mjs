@@ -154,6 +154,49 @@ test("dispatchHttpRequest routes Slack events before origin guard", async () => 
   assert.equal(await response.text(), "challenge-token");
 });
 
+test("dispatchHttpRequest routes Slack actions before origin guard", async () => {
+  const action = {
+    type: "block_actions",
+    team: { id: "T123" },
+    user: { id: "U123" },
+    channel: { id: "C123" },
+    container: { type: "message", message_ts: "171951.0002", channel_id: "C123" },
+    message: { ts: "171951.0002", thread_ts: "171951.0001" },
+    actions: [{
+      action_id: "codevil_question_answer",
+      action_ts: "171951.1111",
+      value: JSON.stringify({ v: 1, q: "question_1", i: 0 }),
+    }],
+    state: { values: {} },
+  };
+  const body = new URLSearchParams({ payload: JSON.stringify(action) }).toString();
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = `v0=${await hmacSha256Hex("secret", `v0:${timestamp}:${body}`)}`;
+  const processed = [];
+
+  const response = await dispatchHttpRequest(new Request("https://codevil.example.workers.dev/slack/actions", {
+    method: "POST",
+    headers: {
+      origin: "https://evil.example.com",
+      "content-type": "application/x-www-form-urlencoded",
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": signature,
+    },
+    body,
+  }), {
+    SLACK_SIGNING_SECRET: "secret",
+  }, {
+    withCors: (_request, _env, innerResponse) => innerResponse,
+    slack: {
+      processAction: async (parsed) => { processed.push(parsed); },
+      waitUntil: (promise) => { void promise; },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(processed.length, 1);
+});
+
 async function hmacSha256Hex(secret, message) {
   const key = await crypto.subtle.importKey(
     "raw",

@@ -7,6 +7,7 @@ import {
   handleSlackManifest,
   handleSlackStatus,
 } from "../dist/integrations/slack/routes.js";
+import * as slackRoutes from "../dist/integrations/slack/routes.js";
 
 test("manifest route returns YAML with request origin", async () => {
   const response = await handleSlackManifest(
@@ -169,6 +170,100 @@ test("event invalid signature returns 401", async () => {
 
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: "Invalid signature" });
+});
+
+test("action invalid signature returns 401 without scheduling work", async () => {
+  assert.equal(typeof slackRoutes.handleSlackAction, "function");
+  let scheduled = false;
+  const response = await slackRoutes.handleSlackAction(
+    new Request("https://codevil.example.com/slack/actions", {
+      method: "POST",
+      body: new URLSearchParams({ payload: "{}" }),
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-slack-signature": "v0=invalid",
+        "x-slack-request-timestamp": String(Math.floor(Date.now() / 1000)),
+      },
+    }),
+    { SLACK_SIGNING_SECRET: "secret" },
+    { waitUntil: () => { scheduled = true; } },
+  );
+  assert.equal(response.status, 401);
+  assert.equal(scheduled, false);
+});
+
+test("action validates its payload and schedules valid processing", async () => {
+  assert.equal(typeof slackRoutes.handleSlackAction, "function");
+  const invalidBody = new URLSearchParams({ payload: "not-json" }).toString();
+  const invalid = await slackRoutes.handleSlackAction(
+    await signedSlackActionRequest(invalidBody),
+    { SLACK_SIGNING_SECRET: "secret" },
+  );
+  assert.equal(invalid.status, 400);
+
+  const action = {
+    type: "block_actions",
+    team: { id: "T123" },
+    user: { id: "U123" },
+    channel: { id: "C123" },
+    container: { type: "message", message_ts: "171951.0002", channel_id: "C123" },
+    message: { ts: "171951.0002", thread_ts: "171951.0001" },
+    actions: [{
+      action_id: "codevil_question_answer",
+      action_ts: "171951.1111",
+      value: JSON.stringify({ v: 1, q: "question_1", i: 0 }),
+    }],
+    state: { values: {} },
+  };
+  const body = new URLSearchParams({ payload: JSON.stringify(action) }).toString();
+  const processed = [];
+  const scheduled = [];
+  const response = await slackRoutes.handleSlackAction(
+    await signedSlackActionRequest(body),
+    { SLACK_SIGNING_SECRET: "secret" },
+    {
+      processAction: async (parsed) => { processed.push(parsed); },
+      waitUntil: (promise) => { scheduled.push(promise); },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(scheduled.length, 1);
+  await Promise.all(scheduled);
+  assert.equal(processed.length, 1);
+  assert.equal(processed[0].requestId, "question_1");
+});
+
+test("Open session URL actions are acknowledged without background processing", async () => {
+  const action = {
+    type: "block_actions",
+    team: { id: "T123" },
+    user: { id: "U123" },
+    channel: { id: "C123" },
+    container: { type: "message", message_ts: "171951.0002", channel_id: "C123" },
+    message: { ts: "171951.0002", thread_ts: "171951.0001" },
+    actions: [{
+      action_id: "codevil_open_session",
+      action_ts: "171951.1111",
+      url: "https://codevil.example.com/sessions/ses_123",
+    }],
+    state: { values: {} },
+  };
+  const body = new URLSearchParams({ payload: JSON.stringify(action) }).toString();
+  let scheduled = false;
+  let processed = false;
+  const response = await slackRoutes.handleSlackAction(
+    await signedSlackActionRequest(body),
+    { SLACK_SIGNING_SECRET: "secret" },
+    {
+      waitUntil: () => { scheduled = true; },
+      processAction: async () => { processed = true; },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(scheduled, false);
+  assert.equal(processed, false);
 });
 
 test("event ignores app mentions when bot user id is missing", async () => {
@@ -590,6 +685,20 @@ async function signedSlackJsonRequest(body) {
     body,
     headers: {
       "content-type": "application/json",
+      "x-slack-signature": signature,
+      "x-slack-request-timestamp": timestamp,
+    },
+  });
+}
+
+async function signedSlackActionRequest(body) {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = `v0=${await hmacSha256Hex("secret", `v0:${timestamp}:${body}`)}`;
+  return new Request("https://codevil.example.com/slack/actions", {
+    method: "POST",
+    body,
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
       "x-slack-signature": signature,
       "x-slack-request-timestamp": timestamp,
     },

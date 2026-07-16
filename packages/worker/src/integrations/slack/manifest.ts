@@ -35,7 +35,8 @@ settings:
     bot_events:
       - app_mention
   interactivity:
-    is_enabled: false
+    is_enabled: true
+    request_url: ${origin}/slack/actions
   socket_mode_enabled: false
   org_deploy_enabled: false
   token_rotation_enabled: false

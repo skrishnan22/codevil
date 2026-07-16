@@ -29,12 +29,13 @@ test("buildSlackManifest includes required bot scopes", () => {
   }
 });
 
-test("buildSlackManifest disables socket mode and interactivity", () => {
+test("buildSlackManifest disables socket mode and enables HTTP interactivity", () => {
   const manifest = buildSlackManifest("https://worker.example.com");
 
   assert.doesNotMatch(manifest, /socket_mode_enabled:\s*true/);
   assert.match(manifest, /socket_mode_enabled: false/);
-  assert.match(manifest, /is_enabled: false/);
+  assert.match(manifest, /interactivity:\n\s+is_enabled: true/);
+  assert.match(manifest, /request_url: https:\/\/worker\.example\.com\/slack\/actions/);
 });
 
 test("buildSlackManifest subscribes only to events handled by the adapter", () => {

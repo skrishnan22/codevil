@@ -108,6 +108,10 @@ import {
   provisionSessionSandbox,
 } from "./orchestrator/sandbox-handlers.js";
 import { runSessionDirectoryUpdateWithRetry } from "./session-directory.js";
+import {
+  answerQuestionFromIntegration as answerQuestionFromIntegrationFn,
+  type IntegrationQuestionAnswerResult,
+} from "./orchestrator/question-answer.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
 
@@ -972,5 +976,17 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.appendAndBroadcast({ type: "participant_joined", participant: args.actor });
     handleAgentRequest(this, args.text, args.actor, args.planFirst ?? false);
     return { ok: true };
+  }
+
+  answerQuestionFromIntegration(args: {
+    requestId: string;
+    optionIndexes: number[];
+    actor: ParticipantIdentity;
+  }): IntegrationQuestionAnswerResult {
+    this.loadMeta();
+    if (!this.meta) {
+      return { ok: false, status: "not_open", error: "Session not initialized" };
+    }
+    return answerQuestionFromIntegrationFn(this, args);
   }
 }

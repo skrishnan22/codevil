@@ -54,17 +54,21 @@ export async function notifyExternalConversation(
     if (destination.provider !== "slack" || !input.env.SLACK_BOT_TOKEN) return;
     const api = deps.slackApi ?? createSlackWebApi();
     const sessionUrl = `${input.workerOrigin.replace(/\/+$/, "")}/sessions/${input.sessionId}`;
-    const result = await postSlackMessage(api, input.env.SLACK_BOT_TOKEN, {
-      channel: destination.external_channel_id,
-      threadTs: destination.external_conversation_id,
-      text: renderSlackNotification(intent, sessionUrl),
-    });
-    if (!result.ok) {
-      workerLogForSession(input.sessionId, "WARN", "external_notification.delivery.failed", {
-        provider: destination.provider,
-        error: result.error,
-        cursor: input.cursor,
+    const messages = renderSlackNotification(intent, sessionUrl);
+    for (const message of messages) {
+      const result = await postSlackMessage(api, input.env.SLACK_BOT_TOKEN, {
+        channel: destination.external_channel_id,
+        threadTs: destination.external_conversation_id,
+        ...message,
       });
+      if (!result.ok) {
+        workerLogForSession(input.sessionId, "WARN", "external_notification.delivery.failed", {
+          provider: destination.provider,
+          error: result.error,
+          cursor: input.cursor,
+        });
+        break;
+      }
     }
   } catch (error) {
     workerLogSessionException(input.sessionId, "external_notification.delivery.failed", error, {

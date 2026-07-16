@@ -25,10 +25,12 @@ import {
   requireAuthContext,
 } from "./http-handlers.js";
 import {
+  handleSlackAction,
   handleSlackCommand,
   handleSlackEvent,
   handleSlackManifest,
   handleSlackStatus,
+  type SlackActionDeps,
   type SlackEventDeps,
   type SlackStatusDeps,
 } from "./integrations/slack/routes.js";
@@ -37,7 +39,7 @@ import type { Env } from "./worker-env.js";
 
 export interface HttpRouterDeps {
   withCors: (request: Request, env: Env, response: Response) => Response;
-  slack?: SlackStatusDeps & SlackEventDeps;
+  slack?: SlackStatusDeps & SlackEventDeps & SlackActionDeps;
 }
 
 export async function dispatchHttpRequest(
@@ -83,6 +85,10 @@ export async function dispatchHttpRequest(
 
   if (path === "/slack/events" && request.method === "POST") {
     return await handleSlackEvent(request, env, deps.slack);
+  }
+
+  if (path === "/slack/actions" && request.method === "POST") {
+    return await handleSlackAction(request, env, deps.slack);
   }
 
   if (isOriginGuardedPath(request.method, path)) {

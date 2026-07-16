@@ -24,12 +24,29 @@ test("externalNotificationIntent maps conversational Agent Run events", () => {
     request_id: "question_1",
     run_id: "run_1",
     question: "Which database?",
-    allow_freeform: true,
+    context: "Choose the deployment store.",
+    options: [
+      { id: "pg", label: "PostgreSQL", detail: "Managed production database" },
+      { id: "sqlite", label: "SQLite" },
+    ],
+    allow_freeform: false,
     allow_multiple: false,
-    answerable_by: "anyone",
+    answerable_by: "decider",
     status: "open",
     raised_at: "2026-07-12T00:00:00.000Z",
-  }), { type: "question_asked", runId: "run_1", question: "Which database?" });
+  }), {
+    type: "question_asked",
+    requestId: "question_1",
+    runId: "run_1",
+    question: "Which database?",
+    context: "Choose the deployment store.",
+    options: [
+      { id: "pg", label: "PostgreSQL", detail: "Managed production database" },
+      { id: "sqlite", label: "SQLite" },
+    ],
+    allowFreeform: false,
+    allowMultiple: false,
+  });
 
   assert.deepEqual(externalNotificationIntent({
     type: "agent_run_failed",
@@ -103,6 +120,7 @@ test("notifyExternalConversation posts mapped events to the linked Slack thread"
       channel: "C123",
       thread_ts: "171951.0001",
       text: "I fixed the auth flow.",
+      blocks: [{ type: "markdown", text: "I fixed the auth flow." }],
     },
   }]);
 });
@@ -133,6 +151,40 @@ test("notifyExternalConversation suppresses a duplicate durable cursor", async (
   });
 
   assert.equal(posted, false);
+});
+
+test("notifyExternalConversation posts every long response chunk in order", async () => {
+  const db = fakeD1({
+    firstRows: [{
+      provider: "slack",
+      integration_id: "int_slack_T123",
+      external_channel_id: "C123",
+      external_conversation_id: "171951.0001",
+    }],
+    runResults: [{ meta: { changes: 1 } }],
+  });
+  const calls = [];
+  const text = `FIRST\n${"x".repeat(11_000)}\n${"y".repeat(11_000)}\nLAST`;
+
+  await notifyExternalConversation({
+    env: { DB: db, SLACK_BOT_TOKEN: "xoxb-test" },
+    sessionId: "ses_123",
+    workerOrigin: "https://codevil.example",
+    cursor: 13,
+    event: { type: "agent_response", run_id: "run_1", text },
+  }, {
+    slackApi: async (_token, method, body) => {
+      calls.push({ method, body });
+      return { ok: true, data: { ok: true, ts: `171951.000${calls.length + 1}` } };
+    },
+  });
+
+  assert.ok(calls.length > 1);
+  assert.ok(calls.every((call) => call.method === "chat.postMessage"));
+  assert.ok(calls.every((call) => call.body.channel === "C123"));
+  assert.ok(calls.every((call) => call.body.thread_ts === "171951.0001"));
+  assert.match(calls[0].body.blocks[0].text, /^FIRST/);
+  assert.match(calls.at(-1).body.blocks[0].text, /LAST$/);
 });
 
 function fakeD1({ firstRows = [], runResults = [] } = {}) {

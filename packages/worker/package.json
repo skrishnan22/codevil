@@ -6,7 +6,7 @@
   "scripts": {
     "check:migrations": "node scripts/check-d1-migrations.mjs",
     "dev": "wrangler dev",
-    "deploy": "pnpm --filter @codevil/web run build && wrangler deploy",
+    "deploy": "pnpm --filter '@codevil/web...' run build && wrangler deploy",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "pnpm run build && node --test test/*.test.mjs"

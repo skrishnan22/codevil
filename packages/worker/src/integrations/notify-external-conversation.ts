@@ -159,10 +159,9 @@ async function postSlackMessageWithRetry(input: RetrySlackMessageInput): Promise
       error: result.error,
       delay_ms: delayMs,
       ...(result.status !== undefined ? { http_status: result.status } : {}),
-      ...(result.retryAfterMs !== undefined ? { retry_after_ms: result.retryAfterMs } : {}),
-    });
     await input.sleep(delayMs);
   }
+}
   return { ok: false, error: "retry_exhausted" };
 }
 

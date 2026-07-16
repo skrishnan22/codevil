@@ -3,7 +3,6 @@
  */
 
 import type { DOToCLIEvent } from "./messages-cli.js";
-import { isRecord } from "./records.js";
 import type { ChatMessage, ProjectionContext } from "./projection-types.js";
 
 export function mapEventToChat(event: DOToCLIEvent, ctx: ProjectionContext): ChatMessage[] {
@@ -234,7 +233,7 @@ export function mapEventToChat(event: DOToCLIEvent, ctx: ProjectionContext): Cha
       ];
 
     case "agent_event":
-      return mapAgentEventToChat(event.event, ctx);
+      return [];
 
     case "plan_revision_frozen":
       return [];
@@ -311,18 +310,6 @@ export function mapEventToChat(event: DOToCLIEvent, ctx: ProjectionContext): Cha
     case "cost_updated":
       return [];
 
-    default:
-      return [];
-  }
-}
-
-function mapAgentEventToChat(raw: unknown, ctx: ProjectionContext): ChatMessage[] {
-  if (!isRecord(raw) || typeof raw.type !== "string") return [];
-
-  switch (raw.type) {
-    case "tool_execution_end":
-    case "message_update":
-      return [];
     default:
       return [];
   }

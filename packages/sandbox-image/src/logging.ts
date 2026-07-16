@@ -14,11 +14,6 @@ export function setSandboxTraceFromSession(sessionId: string): void {
   bootstrapLogger.withSessionId(sessionId);
 }
 
-export function setSandboxTraceId(traceId: string, sessionId?: string): void {
-  bootstrapLogger.withTraceId(traceId);
-  if (sessionId) bootstrapLogger.withSessionId(sessionId);
-}
-
 export function sandboxLogException(
   event: string,
   error: unknown,

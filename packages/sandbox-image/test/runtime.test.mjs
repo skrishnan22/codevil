@@ -9,7 +9,6 @@ import {
   SandboxRuntime,
   ShellCommandRunner,
   detectPreviewApps,
-  detectPreviewCommand,
   detectSetupCommand,
   detectVerificationCommand,
   parsePreviewDiscovery,
@@ -509,7 +508,7 @@ test("detectSetupCommand uses non-interactive npm install flags", async () => {
   }
 });
 
-test("detectPreviewCommand prefers Vite dev scripts and port 5173", async () => {
+test("detectPreviewApps prefers Vite dev scripts and port 5173", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-vite-"));
   try {
     await writeFile(join(workspace, "package.json"), JSON.stringify({
@@ -518,7 +517,11 @@ test("detectPreviewCommand prefers Vite dev scripts and port 5173", async () => 
     }));
     await writeFile(join(workspace, "pnpm-lock.yaml"), "");
 
-    assert.deepEqual(detectPreviewCommand(workspace), {
+    assert.deepEqual(detectPreviewApps(workspace)[0], {
+      key: ".",
+      name: workspace.split("/").at(-1),
+      cwd: workspace,
+      framework: "vite",
       command: "pnpm dev -- --host 0.0.0.0 --port 5173",
       port: 5173,
     });
@@ -619,7 +622,7 @@ test("detectPreviewApps uses the root package manager for workspace apps", async
   }
 });
 
-test("detectPreviewCommand remaps Next.js away from port 3000", async () => {
+test("detectPreviewApps remaps Next.js away from port 3000", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-next-"));
   try {
     await writeFile(join(workspace, "package.json"), JSON.stringify({
@@ -627,10 +630,13 @@ test("detectPreviewCommand remaps Next.js away from port 3000", async () => {
       dependencies: { next: "^15.0.0" },
     }));
 
-    assert.deepEqual(detectPreviewCommand(workspace), {
+    assert.deepEqual(detectPreviewApps(workspace)[0], {
+      key: ".",
+      name: workspace.split("/").at(-1),
+      cwd: workspace,
+      framework: "next",
       command: "npm run dev -- --hostname 0.0.0.0 --port 3001",
       port: 3001,
-      readinessTimeoutMs: 120_000,
     });
   } finally {
     await rm(workspace, { recursive: true, force: true });

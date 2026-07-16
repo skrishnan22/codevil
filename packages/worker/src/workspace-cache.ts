@@ -4,15 +4,11 @@ import {
   getCodevilSandbox,
   retrySandboxOperation,
 } from "./sandbox.js";
+import type { SqlStatement } from "./sql.js";
 
 export const WORKSPACE_CACHE_VERSION = "workspace-cache-v2";
 export const WORKSPACE_CACHE_DIR = "/workspace";
 export const WORKSPACE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
-
-export interface SqlStatement {
-  sql: string;
-  bindings: unknown[];
-}
 
 export interface WorkspaceSnapshotRow {
   id: string;
@@ -172,7 +168,6 @@ export async function createWorkspaceCacheSnapshot(input: {
         dir: WORKSPACE_CACHE_DIR,
         name: `codevil-${normalizeRepoCacheKey(input.repo).replace(/[^a-z0-9_.-]+/g, "-")}`,
         ttl: input.ttlSeconds ?? WORKSPACE_CACHE_TTL_SECONDS,
-        excludes: workspaceBackupExcludes(),
         compression: { format: "zstd" },
         multipart: true,
       }),
@@ -193,21 +188,6 @@ export async function createWorkspaceCacheSnapshot(input: {
   }
 }
 
-export async function restoreLatestWorkspaceCacheForSandbox(input: {
-  db: D1Database;
-  binding: DurableObjectNamespace<Sandbox>;
-  sessionId: string;
-  repo: string;
-}): Promise<WorkspaceCacheRestoreResult> {
-  const { getSandbox } = await import("@cloudflare/sandbox");
-  const sandbox = getCodevilSandbox(getSandbox, input.binding, input.sessionId) as WorkspaceCacheSandbox;
-  return restoreLatestWorkspaceCache({
-    db: input.db,
-    sandbox,
-    repo: input.repo,
-  });
-}
-
 export async function createWorkspaceCacheSnapshotForSandbox(input: {
   db: D1Database;
   binding: DurableObjectNamespace<Sandbox>;
@@ -222,10 +202,6 @@ export async function createWorkspaceCacheSnapshotForSandbox(input: {
     repo: input.repo,
     sourceSessionId: input.sessionId,
   });
-}
-
-export function workspaceBackupExcludes(): string[] {
-  return [];
 }
 
 function errorMessage(error: unknown): string {

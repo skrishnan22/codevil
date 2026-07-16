@@ -57,7 +57,6 @@ import {
   PHASE_SPAN_NAMES,
   SNAPSHOT_TERMINAL_EVENT_TYPES,
 } from "./orchestrator/types.js";
-import { traceSandboxProvisioning } from "./orchestrator/provisioning.js";
 export { traceSandboxProvisioning } from "./orchestrator/provisioning.js";
 import { proxyPreviewRequest } from "./orchestrator/preview.js";
 import {

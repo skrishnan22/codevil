@@ -1,4 +1,4 @@
-import type { Config } from "@codevil/shared";
+import { isRecord, type Config } from "@codevil/shared";
 
 import type { RunCommand } from "./args.js";
 
@@ -81,8 +81,4 @@ export function buildWebSocketUrl(url: string, cursor: number): string {
 
   wsUrl.searchParams.set("cursor", cursor.toString());
   return wsUrl.toString();
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

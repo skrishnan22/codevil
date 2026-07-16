@@ -6,15 +6,10 @@ import {
   buildWorkspaceSnapshotInsert,
   latestWorkspaceSnapshotSelect,
   normalizeRepoCacheKey,
-  workspaceBackupExcludes,
 } from "../dist/workspace-cache.js";
 
 test("workspace cache version changes when installed dependencies become snapshot artifacts", () => {
   assert.equal(WORKSPACE_CACHE_VERSION, "workspace-cache-v2");
-});
-
-test("workspace backups include installed dependency artifacts", () => {
-  assert.deepEqual(workspaceBackupExcludes(), []);
 });
 
 test("normalizeRepoCacheKey removes credentials and unstable URL suffixes", () => {

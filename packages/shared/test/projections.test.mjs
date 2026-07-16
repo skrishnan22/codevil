@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   mapEventToChat,
   mapEventToActivity,
-  projectEvent,
   applyToSessionSnapshot,
   applyToChatActivity,
   emptySessionSnapshot,
@@ -187,17 +186,17 @@ test("mapEventToChat: maps verification_failed to a verification_failed message"
 });
 
 // ---------------------------------------------------------------------------
-// projectEvent
+// applyToChatActivity
 // ---------------------------------------------------------------------------
 
-test("projectEvent: coalesces streamed message updates into one thinking entry", () => {
+test("applyToChatActivity: coalesces streamed message updates into one thinking entry", () => {
   const ctx = makeCtx();
-  const first = projectEvent(
+  const first = applyToChatActivity(
     { messages: [], activityLog: [] },
     { type: "agent_event", event: { type: "message_update", content: "Analyzing " } },
     ctx,
   );
-  const second = projectEvent(
+  const second = applyToChatActivity(
     first,
     { type: "agent_event", event: { type: "message_update", content: "the repo." } },
     ctx,
@@ -208,14 +207,14 @@ test("projectEvent: coalesces streamed message updates into one thinking entry",
   assert.equal(second.activityLog[0].thinking?.text, "Analyzing the repo.");
 });
 
-test("projectEvent: updates a running tool entry when the matching tool ends", () => {
+test("applyToChatActivity: updates a running tool entry when the matching tool ends", () => {
   const ctx = makeCtx();
-  const started = projectEvent(
+  const started = applyToChatActivity(
     { messages: [], activityLog: [] },
     { type: "agent_event", event: { type: "tool_execution_start", tool: "bash", args: { command: "pnpm test" } } },
     ctx,
   );
-  const ended = projectEvent(
+  const ended = applyToChatActivity(
     started,
     { type: "agent_event", event: { type: "tool_execution_end", tool: "bash", args: { command: "pnpm test" }, result: "PASS", success: true } },
     ctx,

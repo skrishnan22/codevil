@@ -1,4 +1,4 @@
-import type { SqlStatement } from "../session-directory.js";
+import type { SqlStatement } from "../sql.js";
 
 import {
   externalParticipantId,

@@ -64,9 +64,15 @@ function renderSlackQuestion(
   intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
   sessionUrl: string,
 ): SlackMessageContent {
+  const actions = questionActions(intent, sessionUrl);
+  const elements = actions.elements as Array<Record<string, unknown>>;
+  const optionsShownInControls = elements.some((element) => {
+    const actionId = element.action_id;
+    return actionId === "codevil_question_answer" || actionId === "codevil_question_select";
+  });
   const blocks = [
-    { type: "markdown", text: questionMarkdown(intent) },
-    questionActions(intent, sessionUrl),
+    { type: "markdown", text: questionMarkdown(intent, !optionsShownInControls) },
+    actions,
   ];
   return {
     text: `Codevil needs input: ${boundedText(intent.question)} Open session: ${sessionUrl}`,
@@ -76,10 +82,11 @@ function renderSlackQuestion(
 
 function questionMarkdown(
   intent: Extract<ExternalNotificationIntent, { type: "question_asked" }>,
+  includeOptions: boolean,
 ): string {
   const sections = ["## Codevil needs input", intent.question];
   if (intent.context) sections.push(`> ${intent.context}`);
-  if (intent.options?.length) {
+  if (includeOptions && intent.options?.length) {
     sections.push(intent.options.map((option, index) => {
       const detail = option.detail ? ` — ${option.detail}` : "";
       return `${index + 1}. **${option.label}**${detail}`;

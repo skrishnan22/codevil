@@ -62,7 +62,7 @@ function questionIntent(overrides = {}) {
 test("single-choice questions use direct answer buttons", () => {
   const [message] = renderSlackNotification(questionIntent(), sessionUrl);
   assert.equal(message.blocks[0].type, "markdown");
-  assert.match(message.blocks[0].text, /PostgreSQL/);
+  assert.doesNotMatch(message.blocks[0].text, /PostgreSQL/);
   const actions = message.blocks.find((block) => block.type === "actions");
   assert.deepEqual(actions.elements.map((element) => element.type), ["button", "button", "button"]);
   assert.deepEqual(actions.elements.slice(0, 2).map((element) => element.action_id), [
@@ -90,6 +90,8 @@ test("multiple-choice questions use checkboxes through ten options", () => {
   const actions = message.blocks.find((block) => block.type === "actions");
   assert.deepEqual(actions.elements.map((element) => element.type), ["checkboxes", "button", "button"]);
   assert.equal(actions.elements[1].action_id, "codevil_question_submit");
+  assert.equal(JSON.stringify(message.blocks).match(/PostgreSQL/g)?.length, 1);
+  assert.equal(JSON.stringify(message.blocks).match(/Managed production database/g)?.length, 1);
 });
 
 test("multiple-choice questions use a multi-select above ten options", () => {
@@ -109,6 +111,10 @@ test("unrepresentable and free-form-only questions fall back to Open session", (
     assert.deepEqual(actions.elements.map((element) => element.type), ["button"]);
     assert.equal(actions.elements[0].url, sessionUrl);
   }
+  const [unrepresentable] = renderSlackNotification(questionIntent({
+    options: Array.from({ length: 101 }, (_, index) => ({ id: `o${index}`, label: `Option ${index}` })),
+  }), sessionUrl);
+  assert.match(unrepresentable.blocks[0].text, /Option 0/);
 });
 
 test("answered questions remove controls and mention the Slack answerer", () => {

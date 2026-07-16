@@ -78,6 +78,13 @@ export interface SlackUser {
   is_app_user?: boolean;
 }
 
+export function slackUserDisplayName(user: SlackUser, fallback: string): string {
+  return user.profile?.display_name?.trim()
+    || user.real_name?.trim()
+    || user.name?.trim()
+    || fallback;
+}
+
 export interface SlackThreadMessage {
   ts: string;
   user?: string;

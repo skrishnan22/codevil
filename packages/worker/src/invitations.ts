@@ -1,5 +1,6 @@
-import { AuthRoleSchema, can, type AuthRole } from "@codevil/shared";
-import { normalizeEmail, type InvitationRow, type SqlStatement } from "./memberships.js";
+import { can, type AuthRole } from "@codevil/shared";
+import { normalizeEmail, type InvitationRow } from "./memberships.js";
+import type { SqlStatement } from "./sql.js";
 
 export const INVITATION_TTL_DAYS = 14;
 
@@ -18,11 +19,6 @@ export async function hashInviteToken(token: string): Promise<string> {
 
 export function inviteExpiresAt(now: Date, ttlDays = INVITATION_TTL_DAYS): string {
   return new Date(now.getTime() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
-}
-
-export function parseInviteRole(role: unknown): AuthRole | null {
-  const parsed = AuthRoleSchema.safeParse(role);
-  return parsed.success ? parsed.data : null;
 }
 
 export function canInviteRole(inviterRole: AuthRole, inviteRole: AuthRole): boolean {

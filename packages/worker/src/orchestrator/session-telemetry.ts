@@ -1,5 +1,4 @@
 import type { SessionMeta } from "@codevil/shared";
-import type { WideEventGroups } from "@codevil/shared";
 
 /** Session domain context for wide events — high-cardinality fields for debugging. */
 export function sessionWideEventGroup(meta: SessionMeta): Record<string, unknown> {
@@ -19,8 +18,4 @@ export function sessionWideEventGroup(meta: SessionMeta): Record<string, unknown
     queued_run_count: meta.queued_runs?.length ?? 0,
     created_at: meta.created_at,
   };
-}
-
-export function sessionWideEventGroups(meta: SessionMeta): WideEventGroups {
-  return { session: sessionWideEventGroup(meta) };
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseCommand } from "../dist/args.js";
+import { parseCommand, usage } from "../dist/args.js";
 
 test("parses run command with repo, prompt, models, and time guard options", () => {
   const command = parseCommand([
@@ -70,4 +70,8 @@ test("rejects removed guard options", () => {
     () => parseCommand(["run", "--repo", "repo", "--max-cost", "$5", "work"]),
     /Unknown option: --max-cost/,
   );
+});
+
+test("usage omits removed guard options", () => {
+  assert.doesNotMatch(usage(), /--max-cost|--max-steps/);
 });

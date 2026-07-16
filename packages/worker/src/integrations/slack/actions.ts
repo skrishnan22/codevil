@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRecord } from "@codevil/shared";
 import { workerLogForSession } from "../../logging.js";
 import type { Env } from "../../worker-env.js";
 import {
@@ -238,8 +239,4 @@ function parseOrdinal(value: unknown): number | null {
   if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

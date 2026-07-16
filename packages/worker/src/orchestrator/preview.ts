@@ -45,7 +45,7 @@ export function buildPreviewUrl(options: {
   return url.toString();
 }
 
-export function validatePreviewAccess(meta: SessionMeta, token: string): Response | null {
+export function validatePreviewAccess(meta: SessionMeta): Response | null {
   if (!meta.preview_active || !meta.preview_port || !meta.preview_token_hash) {
     return new Response("Preview is not active.", { status: 404 });
   }
@@ -63,7 +63,7 @@ export async function proxyPreviewRequest(
   token: string,
   sandboxNamespace: DurableObjectNamespace<Sandbox>,
 ): Promise<Response> {
-  const blocked = validatePreviewAccess(meta, token);
+  const blocked = validatePreviewAccess(meta);
   if (blocked) return blocked;
 
   const tokenHash = await hashPreviewToken(token);

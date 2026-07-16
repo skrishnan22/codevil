@@ -267,18 +267,6 @@ function strategyFromMarker(
   };
 }
 
-function readPackageManager(packageJson: string): string | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(packageJson, "utf8")) as {
-      packageManager?: unknown;
-    };
-    if (typeof parsed.packageManager !== "string") return undefined;
-    return parsed.packageManager.split("@", 1)[0];
-  } catch {
-    return undefined;
-  }
-}
-
 function packageManifestHasInstallLifecycleScript(packageJson: string): boolean {
   try {
     const parsed = JSON.parse(readFileSync(packageJson, "utf8")) as {

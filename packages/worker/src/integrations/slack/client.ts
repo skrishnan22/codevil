@@ -1,4 +1,6 @@
-export type SlackApiResult<T> = { ok: true; data: T } | { ok: false; error: string; data?: unknown };
+export type SlackApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; status?: number; retryAfterMs?: number; data?: unknown };
 export type SlackApi = <T = Record<string, unknown>>(
   botToken: string,
   method: string,
@@ -45,17 +47,38 @@ export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
     method: string,
     body?: Record<string, unknown>,
   ): Promise<SlackApiResult<T>> {
-    const response = await fetcher(`https://slack.com/api/${method}`, slackRequestInit(botToken, method, body));
+    let response: Response;
+    try {
+      response = await fetcher(`https://slack.com/api/${method}`, slackRequestInit(botToken, method, body));
+    } catch {
+      return { ok: false, error: "network_error" };
+    }
     let data: unknown = null;
     try {
       data = await response.json<Record<string, unknown>>();
     } catch {
       // Slack may return a non-JSON gateway or rate-limit response.
     }
-    if (!response.ok) return { ok: false, error: slackError(data) ?? `http_${response.status}`, data };
+    if (!response.ok) {
+      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+      return {
+        ok: false,
+        error: slackError(data) ?? `http_${response.status}`,
+        status: response.status,
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+        data,
+      };
+    }
     if (!isSlackOk(data)) return { ok: false, error: slackError(data) ?? "slack_not_ok", data };
     return { ok: true, data: data as T };
   };
+}
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (value === null || !/^\d+(?:\.\d+)?$/.test(value.trim())) return undefined;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.round(seconds * 1_000);
 }
 
 export interface SlackMessageInput extends SlackMessageContent {

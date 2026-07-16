@@ -40,7 +40,34 @@ test("Slack Web API client converts non-JSON responses into safe failures", asyn
   assert.deepEqual(await slackApi("xoxb-test", "auth.test"), {
     ok: false,
     error: "http_502",
+    status: 502,
     data: null,
+  });
+});
+
+test("Slack Web API client preserves retry metadata from rate limits", async () => {
+  const slackApi = createSlackWebApi(async () => Response.json(
+    { ok: false, error: "ratelimited" },
+    { status: 429, headers: { "retry-after": "3" } },
+  ));
+
+  assert.deepEqual(await slackApi("xoxb-test", "chat.postMessage"), {
+    ok: false,
+    error: "ratelimited",
+    status: 429,
+    retryAfterMs: 3_000,
+    data: { ok: false, error: "ratelimited" },
+  });
+});
+
+test("Slack Web API client converts network failures into retryable results", async () => {
+  const slackApi = createSlackWebApi(async () => {
+    throw new TypeError("fetch failed");
+  });
+
+  assert.deepEqual(await slackApi("xoxb-test", "chat.postMessage"), {
+    ok: false,
+    error: "network_error",
   });
 });
 

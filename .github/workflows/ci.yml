@@ -88,5 +88,6 @@ jobs:
 
       - name: Deploy to Cloudflare
         run: |
+          pnpm --filter @codevil/shared run build
           pnpm --filter @codevil/web run build
           pnpm --filter @codevil/worker exec wrangler deploy --config .wrangler.deploy.toml

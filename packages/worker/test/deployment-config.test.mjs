@@ -71,4 +71,8 @@ test("production CI generates and uses a D1 deployment overlay", async () => {
   assert.match(workflow, /write-deployment-config\.mjs/);
   assert.match(workflow, /CODEVIL_WRANGLER_CONFIG: \.wrangler\.deploy\.toml/);
   assert.match(workflow, /wrangler deploy --config \.wrangler\.deploy\.toml/);
+  assert.match(
+    workflow,
+    /pnpm --filter @codevil\/shared run build\s+pnpm --filter @codevil\/web run build/,
+  );
 });

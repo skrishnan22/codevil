@@ -1,4 +1,4 @@
-import type { CredentialRequest } from "@codevil/shared";
+import { normalizeGitHubRepoName } from "@codevil/shared";
 
 export interface GitHubRepo {
   host: string;
@@ -18,29 +18,13 @@ export interface CreatePullRequestOptions {
 
 const TRANSIENT_PR_STATUSES = new Set([429, 500, 502, 503, 504]);
 const PR_RETRY_DELAYS_MS = [500, 1_500, 3_000];
+export { normalizeGitHubRepoName } from "@codevil/shared";
 
 export function parseGitHubRepo(repoUrl: string): GitHubRepo | null {
-  try {
-    const url = new URL(repoUrl);
-    if (url.protocol !== "https:" || url.hostname !== "github.com") return null;
-    const [owner, rawRepo] = url.pathname.replace(/^\/+/, "").split("/");
-    const repo = rawRepo?.replace(/\.git$/, "");
-    if (!owner || !repo) return null;
-    return { host: url.hostname, owner, repo };
-  } catch {
-    return null;
-  }
-}
-
-export function credentialRequestAllowed(sessionRepo: string, request: CredentialRequest): boolean {
-  const parsed = parseGitHubRepo(sessionRepo);
-  if (!parsed) return false;
-  if (request.protocol !== "https") return false;
-  if (request.host !== parsed.host) return false;
-
-  const normalizedPath = normalizeRepoPath(request.path);
-  if (!normalizedPath) return false;
-  return normalizedPath === `${parsed.owner}/${parsed.repo}`;
+  const normalized = normalizeGitHubRepoName(repoUrl);
+  if (!normalized) return null;
+  const [owner, repo] = normalized.split("/");
+  return { host: "github.com", owner, repo };
 }
 
 export function buildCreatePullRequestRequest(options: CreatePullRequestOptions): {

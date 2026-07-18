@@ -4,6 +4,9 @@ import {
   DOToCLIEventSchema,
   emptySessionSnapshot,
   parseSessionSnapshot,
+  safeExceptionAttributes,
+  safeOwnDataProperty,
+  safePrimitiveString,
   type ProjectionContext,
   type SessionSnapshot,
   type Tracer,
@@ -12,8 +15,11 @@ import { redactEvent } from "../redaction.js";
 import { buildReplayBatch } from "../replay-batch.js";
 import {
   capEventForStorage,
+  capSessionSnapshotForStorage,
   EVENT_LOG_RETENTION_DAYS,
   eventJsonByteLength,
+  prepareSnapshotCheckpoint,
+  shouldCompactEventTail,
 } from "./event-log-limits.js";
 
 export class SessionEventLog {
@@ -23,6 +29,9 @@ export class SessionEventLog {
   private snapshotMessageCounter = 0;
   private snapshotHydrated = false;
   private snapshotAlarmScheduled = false;
+  private lastPersistedSnapshot: SessionSnapshot = emptySessionSnapshot();
+  private lastPersistedSnapshotCursor = 0;
+  private eventsSincePersistedSnapshot = 0;
 
   constructor(
     private readonly sql: SqlStorage,
@@ -34,11 +43,15 @@ export class SessionEventLog {
   ) {}
 
   getSnapshot(): SessionSnapshot {
-    return this.snapshot;
+    return prepareSnapshotCheckpoint(this.snapshot).canPersist
+      ? this.snapshot
+      : this.lastPersistedSnapshot;
   }
 
   getSnapshotCursor(): number {
-    return this.snapshotCursor;
+    return prepareSnapshotCheckpoint(this.snapshot).canPersist
+      ? this.snapshotCursor
+      : this.lastPersistedSnapshotCursor;
   }
 
   isSnapshotDirty(): boolean {
@@ -61,9 +74,9 @@ export class SessionEventLog {
     const validated = DOToCLIEventSchema.safeParse(event);
     if (!validated.success) {
       this.getTracer()?.log("ERROR", "event.append.rejected", {
-        raw_type: typeof event === "object" && event && "type" in event
-          ? String((event as { type: unknown }).type)
-          : null,
+        raw_type: safePrimitiveString(
+          safeOwnDataProperty(event, "type"),
+        ),
         issues: validated.error.issues,
       });
       return null;
@@ -93,9 +106,12 @@ export class SessionEventLog {
       uid: () => `msg_${row.id}_${this.snapshotMessageCounter++}`,
       now: Date.now(),
     };
-    this.snapshot = applyToSessionSnapshot(this.snapshot, row.id, stored, ctx);
+    this.snapshot = capSessionSnapshotForStorage(
+      applyToSessionSnapshot(this.snapshot, row.id, stored, ctx),
+    );
     this.snapshotCursor = row.id;
     this.snapshotDirty = true;
+    this.eventsSincePersistedSnapshot += 1;
 
     const envelope = JSON.stringify({ cursor: row.id, event: stored });
     for (const ws of this.getCliWebSockets()) {
@@ -103,7 +119,10 @@ export class SessionEventLog {
     }
 
     // Persist synchronously on terminal events; otherwise debounce via alarm.
-    if (this.snapshotTerminalEventTypes.has(stored.type)) {
+    if (
+      this.snapshotTerminalEventTypes.has(stored.type) ||
+      shouldCompactEventTail(this.eventsSincePersistedSnapshot)
+    ) {
       this.persistSnapshot();
     } else {
       this.scheduleSnapshotPersist();
@@ -113,16 +132,27 @@ export class SessionEventLog {
 
   persistSnapshot(): void {
     try {
+      const prepared = prepareSnapshotCheckpoint(this.snapshot);
+      if (!prepared.canPersist) {
+        this.getTracer()?.log("WARN", "snapshot.persist.skipped", {
+          reason: "snapshot_exceeds_storage_budget",
+          bytes: eventJsonByteLength(JSON.stringify(prepared.snapshot)),
+        });
+        return;
+      }
       this.sql.exec(
         "INSERT OR REPLACE INTO snapshots (path, cursor, state_json, updated_at) VALUES (?, ?, ?, datetime('now'))",
         "session",
         this.snapshotCursor,
-        JSON.stringify(this.snapshot),
+        JSON.stringify(prepared.snapshot),
       );
+      this.lastPersistedSnapshot = prepared.snapshot;
+      this.lastPersistedSnapshotCursor = this.snapshotCursor;
+      this.eventsSincePersistedSnapshot = 0;
       this.snapshotDirty = false;
     } catch (error) {
       this.getTracer()?.log("ERROR", "snapshot.persist.failed", {
-        error: error instanceof Error ? error.message : String(error),
+        ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
       });
       // Do NOT rethrow — persistence failure is recoverable on the next alarm.
     }
@@ -168,6 +198,8 @@ export class SessionEventLog {
         if (parsed) {
           this.snapshot = parsed;
           this.snapshotCursor = snapRow.cursor;
+          this.lastPersistedSnapshot = parsed;
+          this.lastPersistedSnapshotCursor = snapRow.cursor;
         } else {
           this.getTracer()?.log("ERROR", "snapshot.hydrate.failed", {
             error: "SessionSnapshot validation failed",
@@ -175,10 +207,16 @@ export class SessionEventLog {
         }
       } catch (error) {
         this.getTracer()?.log("ERROR", "snapshot.hydrate.failed", {
-          error: error instanceof Error ? error.message : String(error),
+          ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
         });
         // Leave defaults; next append will rebuild from scratch.
       }
     }
+    // Events are the seven-day canonical history; hydrate the uncheckpointed
+    // tail once, then maintain it in memory on the hot append path.
+    this.eventsSincePersistedSnapshot = this.sql.exec(
+      "SELECT COUNT(*) AS count FROM events WHERE id > ?",
+      this.lastPersistedSnapshotCursor,
+    ).one().count as number;
   }
 }

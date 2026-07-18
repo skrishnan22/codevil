@@ -7,14 +7,10 @@ upload_source_maps = true
 
 [vars]
 EMAIL_PROVIDER = "none"
-CODEVIL_WEB_ORIGIN = "https://codevil-ui.pages.dev,http://localhost:5173,http://localhost:8787"
-# Preview subdomains: {token}.lexmora.app → worker (Next.js/Vite use root-absolute asset paths).
-CODEVIL_PREVIEW_ORIGIN = "https://lexmora.app"
+CODEVIL_WEB_ORIGIN = "http://localhost:5173,http://localhost:8787"
+# Leaving CODEVIL_PREVIEW_ORIGIN unset keeps preview URLs on the portable
+# workers.dev path. Set it in an untracked operator overlay to use a domain.
 BACKUP_BUCKET_NAME = "codevil-sandbox-backups"
-
-[[routes]]
-pattern = "*.lexmora.app/*"
-zone_name = "lexmora.app"
 
 [assets]
 directory = "../web/dist"
@@ -50,7 +46,6 @@ class_name = "Sandbox"
 [[d1_databases]]
 binding = "DB"
 database_name = "codevil"
-database_id = "f497dece-7db6-441d-8eaf-cc57e02fb56a"
 migrations_dir = "migrations"
 
 [[r2_buckets]]

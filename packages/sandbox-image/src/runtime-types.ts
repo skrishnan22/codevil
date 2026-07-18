@@ -7,14 +7,22 @@ import type {
   AnswerableBy,
   ParticipantIdentity,
 } from "@codevil/shared";
+import type { ProviderApi } from "@codevil/shared";
+import type { ProviderPublicConfig } from "@codevil/shared";
 import type { CommandRunner, Verifier } from "./verification.js";
+
+export type ProxyCapabilities = Partial<Record<ProviderApi, string>> & { git?: string };
 
 export interface AgentStartOptions {
   cwd: string;
   mode: "coding";
   model: string;
   provider: string;
+  providerConfig?: ProviderPublicConfig;
   llmKey?: string;
+  proxyBase?: string;
+  proxyTokens?: ProxyCapabilities;
+  proxySessionId?: string;
   onEvent(event: unknown): void;
   createPullRequest(options: CreatePullRequestToolOptions): Promise<{ url: string }>;
   askQuestion?: (params: AskQuestionParams) => Promise<AskQuestionOutcome>;
@@ -58,7 +66,11 @@ export interface ConsolidationInput {
   round: number;
   model: string;
   provider: string;
+  providerConfig?: ProviderPublicConfig;
   llmKey?: string;
+  proxyBase?: string;
+  proxyTokens?: ProxyCapabilities;
+  proxySessionId?: string;
   plan: string;
   annotations: ConsolidationAnnotation[];
   askQuestion?: (params: AskQuestionParams) => Promise<AskQuestionOutcome>;
@@ -76,6 +88,8 @@ export interface AgentDriver {
   plan(prompt: string): Promise<PlanResult>;
   refine(feedback: string): Promise<PlanResult>;
   consolidateAnnotations?(input: ConsolidationInput): Promise<ConsolidationResult>;
+  /** Replace expiring sandbox-only proxy capabilities without exposing provider keys. */
+  refreshProxyCapabilities?(tokens: Partial<Record<ProviderApi, string>>): Promise<void> | void;
   switchToExecution(model: string, provider?: string): Promise<void>;
   execute(plan: string): Promise<CostInfo>;
   dispose?(): Promise<void> | void;
@@ -86,28 +100,23 @@ export interface AgentDriverFactory {
 }
 
 export interface GitDriver {
-  clone(repo: string, destination: string, onProgress: (line: string) => void, credential?: GitCredential): Promise<void>;
+  clone(repo: string, destination: string, onProgress: (line: string) => void): Promise<void>;
   refresh(
     repo: string,
     cwd: string,
     onProgress: (line: string) => void,
-    credential?: GitCredential,
     cleanExcludes?: string[],
   ): Promise<void>;
   defaultBranch(cwd: string): Promise<string>;
   pushBranch(options: PushBranchOptions): Promise<void>;
-}
-
-export interface GitCredential {
-  username: string;
-  password: string;
+  /** Replace the short-lived Git proxy capability; never a GitHub PAT. */
+  refreshGitProxyCapability?(capability: string | undefined): Promise<void> | void;
 }
 
 export interface PushBranchOptions {
   cwd: string;
   branch: string;
   commitMessage: string;
-  credential?: GitCredential;
 }
 
 export type RepoState =
@@ -123,12 +132,15 @@ export type RepoState =
 export interface SandboxRuntimeOptions {
   workspace: string;
   provider?: string;
+  providerConfig?: ProviderPublicConfig;
   llmKey?: string;
+  proxyBase?: string;
+  proxyTokens?: ProxyCapabilities;
+  proxySessionId?: string;
   send(message: SandboxToDOMessage): void;
   agentFactory: AgentDriverFactory;
   git: GitDriver;
   verifier?: Verifier;
   commandRunner?: CommandRunner;
-  credentialTimeoutMs?: number;
   askQuestionTimeoutMs?: number;
 }

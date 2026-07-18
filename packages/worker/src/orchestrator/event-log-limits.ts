@@ -1,7 +1,27 @@
-import type { DOToCLIEvent } from "@codevil/shared";
+import type { DOToCLIEvent, SessionSnapshot } from "@codevil/shared";
 
 export const EVENT_LOG_RETENTION_DAYS = 7;
 export const MAX_EVENT_JSON_BYTES = 64 * 1024;
+/**
+ * Snapshots are sent wholesale to reconnecting clients, so keep their
+ * presentation-only history below a size that is cheap to persist and replay.
+ * Structural session fields are deliberately never evicted here.
+ */
+export const MAX_SESSION_SNAPSHOT_BYTES = 1024 * 1024;
+export const MAX_SESSION_MESSAGES = 500;
+export const MAX_SESSION_ACTIVITY_ENTRIES = 1_000;
+export const MAX_PREVIEW_OUTPUT_LINE_CHARS = 4 * 1024;
+/** Prevent a busy session from accumulating an unbounded un-snapshotted tail. */
+export const MAX_EVENTS_BETWEEN_SNAPSHOTS = 1_000;
+
+export interface PreparedSnapshotCheckpoint {
+  snapshot: SessionSnapshot;
+  canPersist: boolean;
+}
+
+export function shouldCompactEventTail(eventCount: number): boolean {
+  return eventCount >= MAX_EVENTS_BETWEEN_SNAPSHOTS;
+}
 
 export function eventJsonByteLength(json: string): number {
   return new TextEncoder().encode(json).length;
@@ -44,6 +64,57 @@ export function capEventForStorage(
       message: `Event ${event.type} omitted: payload exceeded ${maxBytes} bytes after truncation`,
     },
     truncated: true,
+  };
+}
+
+/**
+ * Bounds only derived, non-protocol display history.  The durable snapshot is
+ * the authoritative cursor checkpoint, so its session state (phase, plan,
+ * participants, questions, annotations, and preview state) must remain exact.
+ * Messages and activity are historical UI projections and can be evicted from
+ * oldest to newest without changing protocol behaviour or cursor semantics.
+ */
+export function capSessionSnapshotForStorage(snapshot: SessionSnapshot): SessionSnapshot {
+  let messages = snapshot.messages.slice(-MAX_SESSION_MESSAGES);
+  let activityLog = snapshot.activityLog.slice(-MAX_SESSION_ACTIVITY_ENTRIES);
+  const preview = {
+    ...snapshot.preview,
+    outputLines: snapshot.preview.outputLines.map((line) =>
+      line.length <= MAX_PREVIEW_OUTPUT_LINE_CHARS
+        ? line
+        : `${line.slice(0, MAX_PREVIEW_OUTPUT_LINE_CHARS)}… [truncated]`,
+    ),
+  };
+
+  const build = (): SessionSnapshot => ({ ...snapshot, preview, messages, activityLog });
+  let capped = build();
+
+  while (eventJsonByteLength(JSON.stringify(capped)) > MAX_SESSION_SNAPSHOT_BYTES) {
+    if (messages.length === 0 && activityLog.length === 0) break;
+
+    const messageTimestamp = messages[0]?.timestamp ?? Number.POSITIVE_INFINITY;
+    const activityTimestamp = activityLog[0]?.timestamp ?? Number.POSITIVE_INFINITY;
+    if (messageTimestamp <= activityTimestamp) {
+      messages = messages.slice(1);
+    } else {
+      activityLog = activityLog.slice(1);
+    }
+    capped = build();
+  }
+
+  return capped;
+}
+
+/**
+ * Prepare a display-bounded checkpoint without ever truncating structural
+ * session data. A structural field that still exceeds the storage budget
+ * leaves the previous durable checkpoint and its event tail authoritative.
+ */
+export function prepareSnapshotCheckpoint(snapshot: SessionSnapshot): PreparedSnapshotCheckpoint {
+  const capped = capSessionSnapshotForStorage(snapshot);
+  return {
+    snapshot: capped,
+    canPersist: eventJsonByteLength(JSON.stringify(capped)) <= MAX_SESSION_SNAPSHOT_BYTES,
   };
 }
 

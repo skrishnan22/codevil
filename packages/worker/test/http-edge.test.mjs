@@ -33,6 +33,7 @@ test("dispatchHttpRequest routes GET /health before auth", async () => {
 test("handleReady returns 200 when all checks pass", async () => {
   const env = {
     CODEVIL_API_KEY: "test-api-key",
+    CODEVIL_PROXY_SIGNING_SECRET: "test-proxy-signing-secret",
     BETTER_AUTH_SECRET: "secret",
     GOOGLE_CLIENT_ID: "client-id",
     GOOGLE_CLIENT_SECRET: "client-secret",
@@ -47,13 +48,14 @@ test("handleReady returns 200 when all checks pass", async () => {
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     ok: true,
-    checks: { d1: true, auth_config: true, api_key: true },
+    checks: { d1: true, auth_config: true, api_key: true, proxy_signing_secret: true },
   });
 });
 
 test("handleReady returns 503 when D1 is unreachable", async () => {
   const env = {
     CODEVIL_API_KEY: "test-api-key",
+    CODEVIL_PROXY_SIGNING_SECRET: "test-proxy-signing-secret",
     BETTER_AUTH_SECRET: "secret",
     GOOGLE_CLIENT_ID: "client-id",
     GOOGLE_CLIENT_SECRET: "client-secret",
@@ -70,13 +72,14 @@ test("handleReady returns 503 when D1 is unreachable", async () => {
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), {
     ok: false,
-    checks: { d1: false, auth_config: true, api_key: true },
+    checks: { d1: false, auth_config: true, api_key: true, proxy_signing_secret: true },
   });
 });
 
 test("dispatchHttpRequest routes GET /ready with failing D1", async () => {
   const env = {
     CODEVIL_API_KEY: "test-api-key",
+    CODEVIL_PROXY_SIGNING_SECRET: "test-proxy-signing-secret",
     BETTER_AUTH_SECRET: "secret",
     GOOGLE_CLIENT_ID: "client-id",
     GOOGLE_CLIENT_SECRET: "client-secret",
@@ -98,8 +101,29 @@ test("dispatchHttpRequest routes GET /ready with failing D1", async () => {
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), {
     ok: false,
-    checks: { d1: false, auth_config: true, api_key: true },
+    checks: { d1: false, auth_config: true, api_key: true, proxy_signing_secret: true },
   });
+});
+
+test("handleReady rejects a missing or blank proxy signing secret without exposing it", async () => {
+  const baseEnv = {
+    CODEVIL_API_KEY: "test-api-key",
+    BETTER_AUTH_SECRET: "secret",
+    GOOGLE_CLIENT_ID: "client-id",
+    GOOGLE_CLIENT_SECRET: "client-secret",
+    DB: { prepare: () => ({ first: async () => ({ "1": 1 }) }) },
+  };
+
+  for (const secret of [undefined, "   "]) {
+    const response = await handleReady({ ...baseEnv, CODEVIL_PROXY_SIGNING_SECRET: secret });
+    assert.equal(response.status, 503);
+    const payload = await response.json();
+    assert.deepEqual(payload, {
+      ok: false,
+      checks: { d1: true, auth_config: true, api_key: true, proxy_signing_secret: false },
+    });
+    assert.doesNotMatch(JSON.stringify(payload), /test-api-key|client-secret/);
+  }
 });
 
 test("checkD1Reachable returns false when query fails", async () => {
@@ -131,6 +155,7 @@ test("observeRoutedResponse passes WebSocket upgrade responses through unchanged
     method: "GET",
     path: "/sessions/ses_abc/ws",
     startedAt: Date.now(),
+    secrets: [],
   });
 
   assert.equal(result, upgrade);
@@ -144,6 +169,7 @@ test("observeRoutedResponse attaches x-request-id to plain API responses", () =>
     method: "GET",
     path: "/sessions",
     startedAt: Date.now(),
+    secrets: [],
   });
 
   assert.equal(result.status, 200);
@@ -157,6 +183,7 @@ test("handleUncaughtHttpError returns generic 500 without leaking error message"
     path: "/sessions",
     startedAt: Date.now(),
     withCors: (innerResponse) => innerResponse,
+    secrets: [],
   });
 
   assert.equal(response.status, 500);

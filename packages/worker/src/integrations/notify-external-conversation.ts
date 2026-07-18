@@ -1,5 +1,6 @@
 import type { DOToCLIEvent } from "@codevil/shared";
-import { workerLogForSession, workerLogSessionException } from "../logging.js";
+import { workerLogForSession, workerLogSessionExceptionForEnv } from "../logging.js";
+import { collectWorkerSecretValues, type WorkerSecretEnv } from "../worker-env.js";
 import {
   dedupeEventInsert,
   externalMessageDedupeDelete,
@@ -22,7 +23,7 @@ export interface ExternalNotificationDeps {
   random?: () => number;
 }
 
-export interface ExternalNotificationEnv {
+export interface ExternalNotificationEnv extends WorkerSecretEnv {
   DB: D1Database;
   SLACK_BOT_TOKEN?: string;
   CODEVIL_WEB_ORIGIN?: string;
@@ -46,6 +47,7 @@ export async function notifyExternalConversation(
   const intent = externalNotificationIntent(input.event);
   if (!intent) return;
 
+  const secrets = collectWorkerSecretValues(input.env);
   const log = (
     severity: "DEBUG" | "INFO" | "WARN" | "ERROR",
     event: string,
@@ -55,7 +57,7 @@ export async function notifyExternalConversation(
       cursor: input.cursor,
       event_type: input.event.type,
       ...attributes,
-    });
+    }, secrets);
   };
 
   log("DEBUG", "external_notification.mapped", { intent_type: intent.type });
@@ -135,7 +137,7 @@ export async function notifyExternalConversation(
           message_index: messageIndex,
           message_count: messages.length,
           ...attributes,
-        }),
+        }, collectWorkerSecretValues(input.env)),
       });
       if (!result.ok) {
         if (messageIndex === 0) {
@@ -146,7 +148,7 @@ export async function notifyExternalConversation(
       }
     }
   } catch (error) {
-    workerLogSessionException(input.sessionId, "external_notification.delivery.failed", error, {
+    workerLogSessionExceptionForEnv(input.sessionId, "external_notification.delivery.failed", error, input.env, {
       cursor: input.cursor,
       event_type: input.event.type,
     });

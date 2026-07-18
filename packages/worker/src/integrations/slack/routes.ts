@@ -1,7 +1,7 @@
 import { json } from "../../http-handlers.js";
 import { workerLog } from "../../logging.js";
 import { createSession, type CreateSessionResult } from "../../session-service.js";
-import type { Env } from "../../worker-env.js";
+import { collectWorkerSecretValues, type Env } from "../../worker-env.js";
 import { extractGithubRepoUrl, resolveRepoForExternalRequest } from "../repo-resolution.js";
 import {
   channelByExternalIdSelect,
@@ -222,7 +222,7 @@ export async function handleSlackEvent(
       error: thread.error,
       channel_id: channelId,
       thread_ts: rootConversationId,
-    });
+    }, collectWorkerSecretValues(env));
     await postSlackReply(
       env,
       deps,

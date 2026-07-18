@@ -1,15 +1,21 @@
 import type { Sandbox } from "@cloudflare/sandbox";
+import { safeExceptionAttributes, safeOwnDataProperty, type ProviderPublicConfig } from "@codevil/shared";
+import { redactEvent } from "./redaction.js";
 
 export interface SandboxProcessEnvOptions {
   wsUrl: string;
-  apiKey: string;
+  wsToken: string;
   provider: string;
+  /** Registry-limited, non-secret provider values (for example Cloudflare IDs). */
+  providerConfig?: ProviderPublicConfig;
+  proxyBase?: string;
+  /** Per-Pi-API capabilities; provider credentials never enter the sandbox. */
+  proxyTokens?: Partial<Record<import("@codevil/shared").ProviderApi, string>>;
 }
 
 export interface ProvisionSandboxOptions extends SandboxProcessEnvOptions {
   binding: DurableObjectNamespace<Sandbox>;
   sessionId: string;
-  llmKey?: string;
   beforeStart?: (sandbox: Sandbox) => Promise<void>;
 }
 
@@ -45,6 +51,27 @@ export interface SandboxLifecycleEvent {
   exit_code?: number;
   reason?: string;
   error?: string;
+}
+
+export function lifecycleErrorEvent(
+  error: unknown,
+  secrets: readonly string[],
+): SandboxLifecycleEvent {
+  const details = redactEvent(safeExceptionAttributes(error), secrets);
+  return {
+    type: "error",
+    at: new Date().toISOString(),
+    error: typeof details.error === "string" ? details.error : "[UNAVAILABLE]",
+  };
+}
+
+export function stopDiagnostics(params: unknown): Pick<SandboxLifecycleEvent, "exit_code" | "reason"> {
+  const exitCode = safeOwnDataProperty(params, "exitCode");
+  const reason = safeOwnDataProperty(params, "reason");
+  return {
+    ...(typeof exitCode === "number" ? { exit_code: exitCode } : {}),
+    ...(typeof reason === "string" ? { reason } : {}),
+  };
 }
 
 export interface SandboxLifecycleSnapshot {
@@ -119,10 +146,14 @@ export function buildSandboxWebSocketUrl(workerUrl: string, sessionId: string): 
 export function sandboxProcessEnv(options: SandboxProcessEnvOptions): Record<string, string> {
   return {
     CODEVIL_DO_WS_URL: options.wsUrl,
-    CODEVIL_API_KEY: options.apiKey,
+    CODEVIL_SANDBOX_WS_TOKEN: options.wsToken,
     CODEVIL_WORKSPACE: "/workspace",
     CODEVIL_PROVIDER: options.provider,
-    CODEVIL_LLM_KEY_FILE: "/run/secrets/llm_key",
+    ...(options.providerConfig && Object.keys(options.providerConfig).length > 0
+      ? { CODEVIL_PROVIDER_CONFIG: JSON.stringify(options.providerConfig) }
+      : {}),
+    ...(options.proxyBase ? { CODEVIL_PROXY_BASE: options.proxyBase } : {}),
+    ...(options.proxyTokens ? { CODEVIL_PROXY_TOKENS: JSON.stringify(options.proxyTokens) } : {}),
   };
 }
 
@@ -155,8 +186,17 @@ export async function setCodevilSandboxKeepAlive(
 export async function recordSandboxLifecycleEvent(
   storage: SandboxLifecycleStorage,
   event: SandboxLifecycleEvent,
+  secrets: readonly string[],
 ): Promise<void> {
-  await storage.put(SANDBOX_LIFECYCLE_EVENT_KEY, event);
+  await storage.put(SANDBOX_LIFECYCLE_EVENT_KEY, redactEvent(event, secrets));
+}
+
+/** Sanitize state before it crosses a Durable Object storage boundary. */
+export function redactSandboxKeepAliveState(
+  state: SandboxKeepAliveState,
+  secrets: readonly string[],
+): SandboxKeepAliveState {
+  return redactEvent(state, secrets);
 }
 
 export function shouldDeferSandboxActivityExpiry(state: SandboxKeepAliveState | undefined): boolean {
@@ -169,13 +209,6 @@ export async function provisionSandbox(options: ProvisionSandboxOptions): Promis
   await retrySandboxOperation(() =>
     setCodevilSandboxKeepAlive(sandbox as CodevilKeepAliveSandbox, true, "session provisioning"),
   );
-
-  await retrySandboxOperation(() => sandbox.mkdir("/run/secrets", { recursive: true }));
-
-  const llmKey = options.llmKey;
-  if (llmKey) {
-    await retrySandboxOperation(() => sandbox.writeFile("/run/secrets/llm_key", llmKey));
-  }
 
   const env = sandboxProcessEnv(options);
   await retrySandboxOperation(() => sandbox.writeFile(
@@ -226,9 +259,9 @@ function retryDelay(baseDelayMs: number, attempt: number): number {
 }
 
 function isTransientSandboxError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-
-  const message = error.message.toLowerCase();
+  const candidate = safeExceptionAttributes(error).error;
+  if (typeof candidate !== "string") return false;
+  const message = candidate.toLowerCase();
   return message.includes("503")
     || message.includes("temporarily unavailable")
     || message.includes("no container instance")
@@ -246,11 +279,12 @@ export async function readProcessLogs(
   binding: DurableObjectNamespace<Sandbox>,
   sessionId: string,
   processId: string,
+  secrets: readonly string[],
 ): Promise<{ stdout: string; stderr: string } | null> {
   try {
     const { getSandbox } = await import("@cloudflare/sandbox");
     const sandbox = getCodevilSandbox(getSandbox, binding, sessionId);
-    return await sandbox.getProcessLogs(processId);
+    return redactEvent(await sandbox.getProcessLogs(processId), secrets);
   } catch {
     return null;
   }
@@ -260,6 +294,7 @@ export async function readSandboxDiagnostics<Binding>(
   binding: Binding,
   sessionId: string,
   processId: string,
+  secrets: readonly string[],
 ): Promise<SandboxDiagnostics> {
   const { getSandbox } = await import("@cloudflare/sandbox");
   const sandbox = getCodevilSandbox(
@@ -271,12 +306,13 @@ export async function readSandboxDiagnostics<Binding>(
     binding,
     sessionId,
   );
-  return collectSandboxDiagnostics(sandbox as SandboxLogReader & CodevilLifecycleSandbox, processId);
+  return collectSandboxDiagnostics(sandbox as SandboxLogReader & CodevilLifecycleSandbox, processId, secrets);
 }
 
 export async function collectSandboxDiagnostics(
   sandbox: SandboxLogReader & CodevilLifecycleSandbox,
   processId: string,
+  secrets: readonly string[],
 ): Promise<SandboxDiagnostics> {
   const [logs, lifecycle] = await Promise.allSettled([
     sandbox.getProcessLogs(processId),
@@ -286,18 +322,19 @@ export async function collectSandboxDiagnostics(
   ]);
 
   const errors: SandboxDiagnostics["errors"] = {};
-  if (logs.status === "rejected") errors.logs = errorMessage(logs.reason);
-  if (lifecycle.status === "rejected") errors.lifecycle = errorMessage(lifecycle.reason);
+  if (logs.status === "rejected") errors.logs = errorMessage(logs.reason, secrets);
+  if (lifecycle.status === "rejected") errors.lifecycle = errorMessage(lifecycle.reason, secrets);
 
   return {
-    logs: logs.status === "fulfilled" ? logs.value : null,
-    lifecycle: lifecycle.status === "fulfilled" ? lifecycle.value : null,
+    logs: logs.status === "fulfilled" ? redactEvent(logs.value, secrets) : null,
+    lifecycle: lifecycle.status === "fulfilled" ? redactEvent(lifecycle.value, secrets) : null,
     ...(Object.keys(errors).length > 0 ? { errors } : {}),
   };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function errorMessage(error: unknown, secrets: readonly string[]): string {
+  const details = redactEvent(safeExceptionAttributes(error), secrets);
+  return typeof details.error === "string" ? details.error : "[UNAVAILABLE]";
 }
 
 export function buildSandboxDisconnectLogPayload(

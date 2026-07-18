@@ -1,0 +1,67 @@
+# Copy this file to wrangler.operator.toml and fill in values created in your
+# Cloudflare account. It is intentionally ignored by Git.
+#
+# Deploy with: wrangler deploy --config wrangler.operator.toml
+# Keep the binding names below unchanged: Worker code depends on them.
+
+name = "your-codevil-worker"
+main = "src/index.ts"
+compatibility_date = "2026-04-07"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+upload_source_maps = true
+
+[vars]
+EMAIL_PROVIDER = "none"
+CODEVIL_WEB_ORIGIN = "https://your-web-origin.example"
+CODEVIL_PREVIEW_ORIGIN = "https://your-preview-origin.example"
+BACKUP_BUCKET_NAME = "your-backup-bucket"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+
+# To route a custom domain, add a [[routes]] block here with the domain and
+# Cloudflare zone that belong to this deployment.
+
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[[containers]]
+class_name = "Sandbox"
+image = "../../Dockerfile.sandbox"
+instance_type = "standard-1"
+max_instances = 5
+
+[[durable_objects.bindings]]
+name = "ORCHESTRATOR"
+class_name = "Orchestrator"
+
+[[durable_objects.bindings]]
+name = "Sandbox"
+class_name = "Sandbox"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "your-d1-database-name"
+database_id = "your-d1-database-id"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BACKUP_BUCKET"
+bucket_name = "your-r2-bucket-name"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Orchestrator"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Sandbox"]

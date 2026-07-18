@@ -5,8 +5,8 @@ import {
   type Severity,
 } from "@codevil/shared";
 import { isHealthCheckPath } from "./health.js";
-
-const workerLogger = createComponentLogger("worker");
+import { redactEvent } from "./redaction.js";
+import { collectWorkerSecretValues, type WorkerSecretEnv } from "./worker-env.js";
 
 const SESSION_PATH_RE = /^\/sessions\/([^/]+)/;
 
@@ -31,7 +31,13 @@ export function isWebSocketUpgradeResponse(response: Response): boolean {
 // breaks the handshake in workerd.
 export function observeRoutedResponse(
   routed: Response,
-  ctx: { requestId: string; method: string; path: string; startedAt: number },
+  ctx: {
+    requestId: string;
+    method: string;
+    path: string;
+    startedAt: number;
+    secrets: readonly string[];
+  },
 ): Response {
   if (isWebSocketUpgradeResponse(routed)) return routed;
 
@@ -43,7 +49,7 @@ export function observeRoutedResponse(
     status: response.status,
     durationMs: Date.now() - ctx.startedAt,
     sessionId: extractSessionIdFromPath(ctx.path),
-  });
+  }, ctx.secrets);
   return response;
 }
 
@@ -54,7 +60,7 @@ export function logHttpApiRequest(opts: {
   status: number;
   durationMs: number;
   sessionId?: string;
-}): void {
+}, secrets: readonly string[]): void {
   const { requestId, method, path, status, durationMs, sessionId } = opts;
 
   if (isHealthCheckPath(path) && status < 400) return;
@@ -67,7 +73,7 @@ export function logHttpApiRequest(opts: {
   };
   if (sessionId) attributes.session_id = sessionId;
 
-  workerLog(severity, "request.http", attributes);
+  workerLog(severity, "request.http", attributes, secrets);
 }
 
 export function handleUncaughtHttpError(
@@ -78,13 +84,14 @@ export function handleUncaughtHttpError(
     path: string;
     startedAt: number;
     withCors: (response: Response) => Response;
+    secrets: readonly string[];
   },
 ): Response {
   workerLogException("request.http.failed", error, {
     request_id: ctx.requestId,
     duration_ms: Date.now() - ctx.startedAt,
     request: { method: ctx.method, path: ctx.path },
-  });
+  }, ctx.secrets);
   return ctx.withCors(withRequestId(
     Response.json({ error: "Internal error" }, { status: 500 }),
     ctx.requestId,
@@ -95,8 +102,14 @@ export function workerLog(
   severity: Parameters<ComponentLogger["log"]>[0],
   event: string,
   attributes: Record<string, unknown> = {},
+  secrets: readonly string[],
 ): void {
-  workerLogger.log(severity, event, attributes);
+  redactLogger(createComponentLogger("worker"), secrets).log(severity, event, attributes);
+}
+
+/** Create a Worker logger bound to one explicit request or Durable Object environment. */
+export function workerLoggerForEnv(env: WorkerSecretEnv): ComponentLogger {
+  return redactLogger(createComponentLogger("worker"), collectWorkerSecretValues(env));
 }
 
 export function workerLogForSession(
@@ -104,8 +117,9 @@ export function workerLogForSession(
   severity: Parameters<ComponentLogger["log"]>[0],
   event: string,
   attributes: Record<string, unknown> = {},
+  secrets: readonly string[],
 ): void {
-  const logger = createComponentLogger("worker");
+  const logger = redactLogger(createComponentLogger("worker"), secrets);
   logger.withSessionId(sessionId);
   logger.log(severity, event, attributes);
 }
@@ -114,23 +128,47 @@ export function workerLogException(
   event: string,
   error: unknown,
   attributes: Record<string, unknown> = {},
+  secrets: readonly string[],
 ): void {
-  logException(workerLogger, event, error, attributes);
+  logException(redactLogger(createComponentLogger("worker"), secrets), event, error, attributes);
 }
 
-export function workerLogSessionException(
+/**
+ * Log a session exception with the complete credential inventory bound from
+ * the Worker environment. Prefer this at Worker request boundaries so callers
+ * cannot accidentally omit deployment secrets from redaction.
+ */
+export function workerLogSessionExceptionForEnv(
   sessionId: string,
   event: string,
   error: unknown,
+  env: WorkerSecretEnv,
   attributes: Record<string, unknown> = {},
 ): void {
-  const logger = createComponentLogger("worker");
+  const logger = workerLoggerForEnv(env);
   logger.withSessionId(sessionId);
   logException(logger, event, error, attributes);
 }
 
-export function sandboxLifecycleLogger(sessionId?: string): ComponentLogger {
-  const logger = createComponentLogger("worker");
+export function sandboxLifecycleLogger(
+  secrets: readonly string[],
+  sessionId?: string,
+): ComponentLogger {
+  const logger = redactLogger(createComponentLogger("worker"), secrets);
   if (sessionId) logger.withSessionId(sessionId);
   return logger;
+}
+
+function redactLogger(logger: ComponentLogger, secrets: readonly string[]): ComponentLogger {
+  return {
+    log(severity, event, attributes = {}) {
+      logger.log(severity, event, redactEvent(attributes, secrets));
+    },
+    withTraceId(traceId) {
+      logger.withTraceId(traceId);
+    },
+    withSessionId(sessionId) {
+      logger.withSessionId(sessionId);
+    },
+  };
 }

@@ -75,8 +75,10 @@ export class PreviewManager {
     }
 
     if (this.state.state === "starting") {
-      sandboxLogger().log("WARN", "preview_start_ignored", { reason: "already_starting" });
-      return;
+      // A newer user request owns this lifecycle generation. Reap the old
+      // startup before launching the replacement so it cannot become ready
+      // after the new command has been selected.
+      await this.terminateChild();
     }
 
     if (aborted()) return;
@@ -146,7 +148,13 @@ export class PreviewManager {
       const crashedCommand = this.state.command;
       this.state = { state: "idle" };
 
-      if (!this.stopping && wasRunning && this.autoRestartCount < MAX_PREVIEW_AUTO_RESTARTS) {
+      if (!wasRunning) {
+        // The start() await owns startup failure cleanup and emits its single
+        // terminal notification through stop().
+        return;
+      }
+
+      if (!this.stopping && this.autoRestartCount < MAX_PREVIEW_AUTO_RESTARTS) {
         this.autoRestartCount++;
         const restartGeneration = this.stopGeneration;
         sandboxLogger().log("INFO", "preview_auto_restart", {
@@ -183,7 +191,15 @@ export class PreviewManager {
       this.autoRestartCount = 0;
       this.options.onReady(command);
     } catch (error) {
+      // A stop or replacement can make a readiness/child failure stale while
+      // the await above is in flight. Never let that older operation stop or
+      // report an error for the preview that replaced it.
+      const current = this.state as PreviewState;
+      if (aborted() || (current.state !== "idle" && current.child !== child)) return;
+
+      const failureGeneration = this.stopGeneration;
       await this.stop();
+      if (this.stopGeneration !== failureGeneration + 1) return;
       this.options.onError(withRecentLogs(
         error instanceof Error ? error.message : String(error),
         recentLogs,
@@ -193,16 +209,21 @@ export class PreviewManager {
 
   async stop(): Promise<void> {
     this.stopping = true;
-    this.stopGeneration++;
+    const stopGeneration = ++this.stopGeneration;
     this.autoRestartCount = 0;
 
     if (this.state.state === "idle") {
-      this.options.onStopped();
+      if (stopGeneration === this.stopGeneration) this.options.onStopped();
       return;
     }
 
     await this.terminateChild();
-    this.options.onStopped();
+    // A new user start may have begun while the old child was being reaped.
+    // In that case its generation owns lifecycle notifications.
+    const current = this.state as PreviewState;
+    if (stopGeneration === this.stopGeneration && current.state === "idle") {
+      this.options.onStopped();
+    }
   }
 
   private async terminateChild(): Promise<void> {

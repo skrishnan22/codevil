@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   buildCreatePullRequestRequest,
-  credentialRequestAllowed,
   createDraftPullRequest,
   parseGitHubRepo,
 } from "../dist/github.js";
@@ -14,26 +13,6 @@ test("parseGitHubRepo extracts owner and repo from https URLs", () => {
     owner: "acme",
     repo: "private-app",
   });
-});
-
-test("credentialRequestAllowed accepts only the configured GitHub repo", () => {
-  const sessionRepo = "https://github.com/acme/private-app.git";
-
-  assert.equal(credentialRequestAllowed(sessionRepo, {
-    type: "credential_request",
-    request_id: "cred_1",
-    protocol: "https",
-    host: "github.com",
-    path: "acme/private-app.git",
-  }), true);
-
-  assert.equal(credentialRequestAllowed(sessionRepo, {
-    type: "credential_request",
-    request_id: "cred_2",
-    protocol: "https",
-    host: "github.com",
-    path: "other/private-app.git",
-  }), false);
 });
 
 test("buildCreatePullRequestRequest creates a GitHub API draft PR request", () => {

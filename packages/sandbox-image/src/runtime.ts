@@ -58,7 +58,7 @@ export type {
   AgentDriver,
   AgentDriverFactory,
   GitDriver,
-  GitCredential,
+  ProxyCapabilities,
   PushBranchOptions,
   SandboxRuntimeOptions,
 } from "./runtime-types.js";
@@ -71,13 +71,13 @@ import type {
   AskQuestionParams,
   CreatePullRequestToolOptions,
   GitDriver,
+  ProxyCapabilities,
   RepoState,
   SandboxRuntimeOptions,
 } from "./runtime-types.js";
 import {
   AGENT_PREVIEW_KEY,
   addCost,
-  credentialRequestFromRepo,
   detectLibc,
   fallbackConsolidation,
   inferFrameworkFromCommand,
@@ -100,13 +100,16 @@ function agentTurnErrorAttributes(error: unknown): Record<string, unknown> {
 export class SandboxRuntime {
   private readonly workspace: string;
   private readonly provider: string;
+  private readonly providerConfig: import("@codevil/shared").ProviderPublicConfig | undefined;
   private readonly llmKey: string | undefined;
+  private readonly proxyBase: string | undefined;
+  private proxyTokens: ProxyCapabilities | undefined;
+  private readonly proxySessionId: string | undefined;
   private readonly send: (message: SandboxToDOMessage) => void;
   private readonly agentFactory: AgentDriverFactory;
   private readonly git: GitDriver;
   private readonly verifier: Verifier;
   private readonly commandRunner: CommandRunner;
-  private readonly credentialTimeoutMs: number;
   private repo: RepoState = { state: "uninit" };
   private agent: AgentDriver | undefined;
   private activeRunId: string | undefined;
@@ -117,22 +120,30 @@ export class SandboxRuntime {
   constructor(options: SandboxRuntimeOptions) {
     this.workspace = options.workspace;
     this.provider = options.provider ?? "anthropic";
+    this.providerConfig = options.providerConfig;
     this.llmKey = options.llmKey;
+    this.proxyBase = options.proxyBase;
+    this.proxyTokens = options.proxyTokens;
+    this.proxySessionId = options.proxySessionId;
     this.send = options.send;
     this.agentFactory = options.agentFactory;
     this.git = options.git;
     this.commandRunner = options.commandRunner ?? new ShellCommandRunner();
     this.verifier = options.verifier ?? new RepositoryVerifier(this.commandRunner);
-    this.credentialTimeoutMs = options.credentialTimeoutMs ?? 10_000;
     this.rpc = new SandboxRpcCoordinator({
       send: this.send,
-      credentialTimeoutMs: this.credentialTimeoutMs,
       askQuestionTimeoutMs: options.askQuestionTimeoutMs,
     });
   }
 
   async handleMessage(message: DOToSandboxMessage): Promise<void> {
     try {
+      if (message.type === "proxy_capabilities") {
+        this.proxyTokens = message.tokens as ProxyCapabilities;
+        await this.git.refreshGitProxyCapability?.(message.tokens.git);
+        await this.agent?.refreshProxyCapabilities?.(this.proxyTokens);
+        return;
+      }
       // Bootstrap or refresh the tracer from any trace_id present on the wire.
       // Init carries it for clone/setup spans; phase-starting messages carry
       // both trace_id and parent_span_id so sandbox spans nest under the DO's
@@ -166,9 +177,6 @@ export class SandboxRuntime {
           return;
         case "create_pr":
           await this.handleCreatePullRequest(message, parent);
-          return;
-        case "credential_response":
-          this.rpc.handleCredentialResponse(message);
           return;
         case "create_pr_response":
           this.rpc.handleCreatePRResponse(message);
@@ -226,22 +234,18 @@ export class SandboxRuntime {
       : undefined;
 
     this.send({ type: "clone_started" });
-    const credentialRequest = credentialRequestFromRepo(repo);
-    const credential = credentialRequest
-      ? await this.rpc.requestCredential(credentialRequest)
-      : undefined;
     if (restoredFromCache && existsSync(join(repoDir, ".git"))) {
       await this.maybeSpan("sandbox.repo_refresh", { attributes: { repo } }, async () => {
         this.send({ type: "clone_progress", line: `Refreshing cached repository in ${repoDir}` });
         await this.git.refresh(repo, repoDir, (line) => {
           this.send({ type: "clone_progress", line });
-        }, credential, dependencyCleanExcludesForMarker(restoredDependencyMarker));
+        }, dependencyCleanExcludesForMarker(restoredDependencyMarker));
       });
     } else {
       await this.maybeSpan("sandbox.clone", { attributes: { repo } }, () =>
         this.git.clone(repo, repoDir, (line) => {
           this.send({ type: "clone_progress", line });
-        }, credential),
+        }),
       );
     }
 
@@ -299,7 +303,11 @@ export class SandboxRuntime {
       mode: "coding",
       model,
       provider: provider ?? this.provider,
+      providerConfig: this.providerConfig,
       llmKey: this.llmKey,
+      proxyBase: this.proxyBase,
+      proxyTokens: this.proxyTokens,
+      proxySessionId: this.proxySessionId,
       onEvent: (event) => {
         // Validate Pi events at the SDK boundary. Known shapes narrow; unknown
         // event types pass through opaquely so a Pi version bump can't kill
@@ -341,7 +349,11 @@ export class SandboxRuntime {
         mode: "coding",
         model,
         provider: provider ?? this.provider,
+        providerConfig: this.providerConfig,
         llmKey: this.llmKey,
+        proxyBase: this.proxyBase,
+        proxyTokens: this.proxyTokens,
+        proxySessionId: this.proxySessionId,
         onEvent: (event) => {
           const validated = parseInbound(PiAgentEventSchema, event, "pi_agent_event");
           if (validated) this.send({ type: "agent_event", event: validated });
@@ -400,15 +412,10 @@ export class SandboxRuntime {
       body: options.body,
       draft: options.draft ?? true,
       push: async () => {
-        const credentialRequest = credentialRequestFromRepo(repo.url);
-        const credential = credentialRequest
-          ? await this.rpc.requestCredential(credentialRequest)
-          : undefined;
         await this.git.pushBranch({
           cwd: repo.dir,
           branch,
           commitMessage: options.commit_message?.trim() || options.title,
-          credential,
         });
       },
     });
@@ -442,7 +449,11 @@ export class SandboxRuntime {
               round: message.round,
               model: message.model,
               provider: message.provider ?? this.provider,
+              providerConfig: this.providerConfig,
               llmKey: this.llmKey,
+              proxyBase: this.proxyBase,
+              proxyTokens: this.proxyTokens,
+              proxySessionId: this.proxySessionId,
               plan: message.plan,
               annotations: message.annotations,
               askQuestion,
@@ -521,10 +532,6 @@ export class SandboxRuntime {
     parent: SpanContext | undefined,
   ): Promise<void> {
     const repo = this.requireRepo();
-    const credentialRequest = credentialRequestFromRepo(repo.url);
-    const credential = credentialRequest
-      ? await this.rpc.requestCredential(credentialRequest)
-      : undefined;
     await this.maybeSpan(
       "sandbox.push_branch",
       { parent, attributes: { branch: message.branch } },
@@ -533,7 +540,6 @@ export class SandboxRuntime {
           cwd: repo.dir,
           branch: message.branch,
           commitMessage: message.commit_message,
-          credential,
         }),
     );
 

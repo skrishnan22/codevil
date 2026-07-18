@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isRecord } from "@codevil/shared";
 import { workerLogForSession } from "../../logging.js";
-import type { Env } from "../../worker-env.js";
+import { collectWorkerSecretValues, type Env } from "../../worker-env.js";
 import {
   externalActorRowId,
   externalParticipantId,
@@ -177,7 +177,7 @@ export async function processSlackQuestionAction(
       error: update.error,
       channel_id: action.channelId,
       message_ts: action.messageTs,
-    });
+    }, collectWorkerSecretValues(env));
   }
   if (result.status === "already_answered") {
     await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "This question was already answered.");

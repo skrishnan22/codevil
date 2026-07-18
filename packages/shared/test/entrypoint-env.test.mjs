@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   EntrypointEnvSchema,
   parseEntrypointEnv,
+  parseProviderPublicConfig,
   pickEntrypointEnvFields,
 } from "../dist/index.js";
 
@@ -33,4 +34,28 @@ test("pickEntrypointEnvFields: only keeps entrypoint keys", () => {
 
   assert.deepEqual(picked, { CODEVIL_PROVIDER: "opencode-go" });
   assert.equal(EntrypointEnvSchema.safeParse(picked).success, true);
+});
+
+test("parseProviderPublicConfig accepts only the declared Cloudflare identifiers", () => {
+  assert.deepEqual(
+    parseProviderPublicConfig(JSON.stringify({
+      CLOUDFLARE_ACCOUNT_ID: "account_123",
+      CLOUDFLARE_GATEWAY_ID: "gateway_456",
+    })),
+    {
+      CLOUDFLARE_ACCOUNT_ID: "account_123",
+      CLOUDFLARE_GATEWAY_ID: "gateway_456",
+    },
+  );
+});
+
+test("parseProviderPublicConfig fails closed on malformed or undeclared sandbox configuration", () => {
+  assert.throws(() => parseProviderPublicConfig("{"), /Invalid provider configuration JSON/);
+  assert.throws(
+    () => parseProviderPublicConfig(JSON.stringify({
+      CLOUDFLARE_ACCOUNT_ID: "account_123",
+      NODE_OPTIONS: "--require arbitrary-module",
+    })),
+    /Invalid provider configuration/,
+  );
 });

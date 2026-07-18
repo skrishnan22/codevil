@@ -96,7 +96,7 @@ test("init runs repository setup after clone", async () => {
   }
 });
 
-test("init uses credential_response for authenticated GitHub clone", async () => {
+test("init never requests a GitHub credential over the sandbox socket", async () => {
   const sent = [];
   const git = new FakeGitDriver();
   const runtime = new SandboxRuntime({
@@ -106,27 +106,14 @@ test("init uses credential_response for authenticated GitHub clone", async () =>
     git,
   });
 
-  const init = runtime.handleMessage({ type: "init", repo: "https://github.com/example/app.git" });
-  await new Promise((resolve) => setImmediate(resolve));
-
-  const request = sent.find((message) => message.type === "credential_request");
-  assert.equal(request.host, "github.com");
-  assert.equal(request.path, "example/app.git");
-
-  await runtime.handleMessage({
-    type: "credential_response",
-    request_id: request.request_id,
-    username: "x-access-token",
-    password: "ghp_secret",
-  });
-  await init;
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app.git" });
 
   assert.deepEqual(git.calls[0], [
     "clone",
     "https://github.com/example/app.git",
     "/workspace/repo",
-    { username: "x-access-token", password: "ghp_secret" },
   ]);
+  assert.equal(sent.some((message) => message.type === "credential_request"), false);
 });
 
 test("init refreshes a restored cached repository instead of cloning", async () => {
@@ -712,6 +699,26 @@ test("sandbox dispatcher lets create_pr_response resolve a tool call during an a
   assert.deepEqual(calls, ["agent_turn", "create_pr_response"]);
 });
 
+test("sandbox dispatcher applies proxy capability rotation while main work is blocked", async () => {
+  const calls = [];
+  let releaseTurn;
+  const runtime = {
+    async handleMessage(message) {
+      calls.push(message.type);
+      if (message.type === "agent_turn") await new Promise((resolve) => { releaseTurn = resolve; });
+    },
+  };
+  const dispatch = createSandboxMessageDispatcher(runtime);
+
+  dispatch({ type: "agent_turn", run_id: "run_1", prompt: "slow", model: "coder" });
+  await new Promise((resolve) => setImmediate(resolve));
+  dispatch({ type: "proxy_capabilities", tokens: { "anthropic-messages": "fresh" }, sandbox_ws_token: "fresh-ws" });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(calls, ["agent_turn", "proxy_capabilities"]);
+  releaseTurn();
+});
+
 test("sandbox dispatcher consumes protocol_error without queueing", async () => {
   const calls = [];
   const runtime = {
@@ -760,12 +767,13 @@ test("PreviewManager includes recent process output when startup times out", asy
 test("PreviewManager reports child exit before the readiness timeout", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-exit-"));
   const errors = [];
+  const stopped = [];
   const manager = new PreviewManager({
     cwd: workspace,
     readinessTimeoutMs: 500,
     onStarting() {},
     onReady() {},
-    onStopped() {},
+    onStopped: () => stopped.push(true),
     onError: (message) => errors.push(message),
   });
 
@@ -777,6 +785,7 @@ test("PreviewManager reports child exit before the readiness timeout", async () 
 
     assert.match(errors[0], /Preview command exited before becoming healthy \(code 7\)\./);
     assert.doesNotMatch(errors[0], /Preview server did not become healthy/);
+    assert.equal(stopped.length, 1, "startup failure must publish exactly one terminal stop");
   } finally {
     await manager.stop();
     await rm(workspace, { recursive: true, force: true });
@@ -977,6 +986,108 @@ test("PreviewManager stop terminates a running child within the grace period", a
     await manager.stop();
     assert.ok(Date.now() - started < 8_000, "stop should not hang waiting for child exit");
   } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager ignores stale startup completion after stop", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-stale-stop-"));
+  const ready = [];
+  const errors = [];
+  const stopped = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 2_000,
+    onStarting() {},
+    onReady: (command) => ready.push(command),
+    onStopped: () => stopped.push(true),
+    onError: (message) => errors.push(message),
+  });
+
+  try {
+    const starting = manager.start({
+      command: "node -e \"setTimeout(() => require('http').createServer((req, res) => res.end('ok')).listen(59982, '127.0.0.1'), 500)\"",
+      port: 59982,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await manager.stop();
+    await starting;
+
+    assert.equal(ready.length, 0);
+    assert.equal(errors.length, 0, "a cancelled start must not surface a stale error");
+    assert.equal(stopped.length, 1, "only the explicit stop should publish stopped");
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager replaces a still-starting preview with the newer command", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-starting-replacement-"));
+  const oldPort = 50_000 + (process.pid % 5_000);
+  const replacementPort = oldPort + 1;
+  const starts = [];
+  const stopped = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 2_000,
+    onStarting: (command) => starts.push(command),
+    onReady() {},
+    onStopped: () => stopped.push(true),
+    onError() {},
+  });
+
+  try {
+    const first = manager.start({
+      command: `node -e "setTimeout(() => require('http').createServer((req, res) => res.end('old')).listen(${oldPort}, '127.0.0.1'), 500)"`,
+      port: oldPort,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    await manager.start({ command: previewHttpServerCommand(replacementPort), port: replacementPort });
+    await first;
+
+    assert.deepEqual(starts.map((command) => command.port), [oldPort, replacementPort]);
+  } finally {
+    await manager.stop();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("PreviewManager does not publish stale stopped after a replacement start", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-stale-replacement-"));
+  const stopped = [];
+  const manager = new PreviewManager({
+    cwd: workspace,
+    readinessTimeoutMs: 2_000,
+    onStarting() {},
+    onReady() {},
+    onStopped: () => stopped.push(true),
+    onError() {},
+  });
+
+  try {
+    const first = manager.start({
+      command: "node -e \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)\"",
+      port: 59981,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const stopping = manager.stop();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await manager.start({ command: previewHttpServerCommand(59980), port: 59980 });
+    const stoppedBeforeOldStopCompletes = stopped.length;
+    await stopping;
+    await first;
+
+    assert.equal(
+      stopped.length,
+      stoppedBeforeOldStopCompletes,
+      "the old stop must not overwrite the replacement preview state",
+    );
+    await manager.stop();
+    assert.equal(stopped.length, stoppedBeforeOldStopCompletes + 1);
+  } finally {
+    await manager.stop();
     await rm(workspace, { recursive: true, force: true });
   }
 });
@@ -1407,6 +1518,24 @@ test("execute switches to coding tools and reports execution completion", async 
   });
 });
 
+test("proxy capability refresh updates the live agent without a restart", async () => {
+  const agent = new FakeAgentDriver({ plan: { plan: "## Plan", cost: zeroCost } });
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    proxyTokens: { "anthropic-messages": "old-capability" },
+    send: () => {},
+    agentFactory: () => agent,
+    git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  await runtime.handleMessage({ type: "plan", run_id: "run_1", prompt: "plan", model: "planner" });
+  await runtime.handleMessage({ type: "proxy_capabilities", tokens: { "anthropic-messages": "renewed-capability" } });
+
+  assert.deepEqual(agent.calls.at(-1), ["refreshProxyCapabilities", { "anthropic-messages": "renewed-capability" }]);
+});
+
 test("execute runs verification and retries fixes before reporting completion", async () => {
   const sent = [];
   const agent = new FakeAgentDriver({
@@ -1565,8 +1694,8 @@ class FakeGitDriver {
     this.options = options;
   }
 
-  async clone(repo, destination, onProgress, credential) {
-    this.calls.push(credential ? ["clone", repo, destination, credential] : ["clone", repo, destination]);
+  async clone(repo, destination, onProgress) {
+    this.calls.push(["clone", repo, destination]);
     await mkdir(destination, { recursive: true }).catch(() => {});
     if (this.options.createNpmRepo) {
       await createNpmRepo(destination);
@@ -1578,13 +1707,11 @@ class FakeGitDriver {
     onProgress(`Cloning ${repo} into ${destination}`);
   }
 
-  async refresh(repo, destination, onProgress, credential, cleanExcludes = []) {
+  async refresh(repo, destination, onProgress, cleanExcludes = []) {
     this.calls.push(
-      credential
-        ? ["refresh", repo, destination, credential, cleanExcludes]
-        : cleanExcludes.length > 0
-          ? ["refresh", repo, destination, cleanExcludes]
-          : ["refresh", repo, destination],
+      cleanExcludes.length > 0
+        ? ["refresh", repo, destination, cleanExcludes]
+        : ["refresh", repo, destination],
     );
     if (this.options.createCodevilSetup) {
       await mkdir(join(destination, ".codevil"), { recursive: true });
@@ -1670,6 +1797,10 @@ class FakeAgentDriver {
   async consolidateAnnotations(input) {
     this.calls.push(["consolidateAnnotations", input]);
     return this.responses.consolidation;
+  }
+
+  async refreshProxyCapabilities(tokens) {
+    this.calls.push(["refreshProxyCapabilities", tokens]);
   }
 
   async switchToExecution(model) {

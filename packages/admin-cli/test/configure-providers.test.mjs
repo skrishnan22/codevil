@@ -47,7 +47,7 @@ test("configureProviders marks configured providers, supports multiple selection
 
   await configureProviders({
     prompt: createPrompt({
-      textAnswers: ["2,3"],
+      textAnswers: ["10,1"],
       hiddenAnswers: ["openrouter-secret", "openai-secret"],
     }),
     wrangler: {
@@ -68,7 +68,7 @@ test("configureProviders marks configured providers, supports multiple selection
 
   assert.deepEqual(validations, [
     { provider: "OpenRouter", key: "openrouter-secret" },
-    { provider: "OpenAI Platform", key: "openai-secret" },
+    { provider: "OpenAI", key: "openai-secret" },
   ]);
   assert.deepEqual(uploads, [
     {
@@ -78,11 +78,10 @@ test("configureProviders marks configured providers, supports multiple selection
   ]);
 
   const transcript = output.entries.map((entry) => entry.message).join("\n");
-  assert.match(transcript, /1\. OpenCode Go/);
-  assert.match(transcript, /2\. OpenRouter/);
-  assert.match(transcript, /3\. OpenAI Platform \(configured\)/);
+  assert.match(transcript, /1\. OpenAI \(configured\)/);
+  assert.match(transcript, /10\. OpenRouter/);
   assert.match(transcript, /OpenRouter: validated/);
-  assert.match(transcript, /OpenAI Platform: validated/);
+  assert.match(transcript, /OpenAI: validated/);
   assert.doesNotMatch(transcript, /openrouter-secret|openai-secret/);
 });
 
@@ -113,7 +112,7 @@ test("configureProviders rejects blank secrets and re-prompts before validating 
   });
 
   assert.deepEqual(validations, ["retry-secret"]);
-  assert.deepEqual(uploads, [{ OPENCODE_API_KEY: "retry-secret" }]);
+  assert.deepEqual(uploads, [{ OPENAI_API_KEY: "retry-secret" }]);
   assert.match(output.entries.map((entry) => entry.message).join("\n"), /cannot be blank/i);
 });
 
@@ -182,8 +181,8 @@ test("configureProviders retries unavailable validation when requested", async (
   });
 
   assert.equal(attempts, 2);
-  assert.deepEqual(uploads, [{ OPENCODE_API_KEY: "retry-me" }]);
-  assert.match(output.entries.map((entry) => entry.message).join("\n"), /OpenCode Go: validated/);
+  assert.deepEqual(uploads, [{ OPENAI_API_KEY: "retry-me" }]);
+  assert.match(output.entries.map((entry) => entry.message).join("\n"), /OpenAI: validated/);
 });
 
 test("configureProviders allows skipping unavailable validation but cancels upload on negative response", async () => {
@@ -192,7 +191,7 @@ test("configureProviders allows skipping unavailable validation but cancels uplo
 
   await configureProviders({
     prompt: createPrompt({
-      textAnswers: ["2", "skip"],
+      textAnswers: ["10", "skip"],
       hiddenAnswers: ["skip-secret"],
     }),
     wrangler: {
@@ -223,7 +222,7 @@ test("configureProviders allows skipping unavailable validation but cancels uplo
     () =>
       configureProviders({
         prompt: createPrompt({
-          textAnswers: ["2", "no"],
+        textAnswers: ["10", "no"],
           hiddenAnswers: ["cancel-secret"],
         }),
         wrangler: {
@@ -276,10 +275,39 @@ test("configureProviders re-prompts when unavailable validation decision is blan
   });
 
   assert.equal(attempts, 2);
-  assert.deepEqual(uploads, [{ OPENCODE_API_KEY: "retry-secret" }]);
+  assert.deepEqual(uploads, [{ OPENAI_API_KEY: "retry-secret" }]);
   const transcript = output.entries.map((entry) => entry.message).join("\n");
   assert.match(transcript, /Enter retry, skip, or no\/cancel/i);
-  assert.match(transcript, /OpenCode Go: skipped validation/);
+  assert.match(transcript, /OpenAI: skipped validation/);
+});
+
+test("configureProviders collects required public provider configuration once without printing it", async () => {
+  const uploads = [];
+  const output = createOutput();
+
+  await configureProviders({
+    prompt: createPrompt({
+      textAnswers: ["29", "skip", "account-id"],
+      hiddenAnswers: ["cloudflare-key"],
+    }),
+    wrangler: {
+      async whoami() {},
+      async configuredSecrets() { return new Set(); },
+      async uploadSecrets(secrets) { uploads.push(secrets); },
+    },
+    validator: async () => ({
+      status: "unavailable",
+      message: "Live credential validation is not available for Cloudflare Workers AI.",
+    }),
+    output,
+  });
+
+  assert.deepEqual(uploads, [{
+    CLOUDFLARE_API_KEY: "cloudflare-key",
+    CLOUDFLARE_ACCOUNT_ID: "account-id",
+  }]);
+  const transcript = output.entries.map((entry) => entry.message).join("\n");
+  assert.doesNotMatch(transcript, /cloudflare-key|account-id/);
 });
 
 test("runCli handles help, provider setup, non-tty provider usage, unknown commands, and safe error messages", async () => {

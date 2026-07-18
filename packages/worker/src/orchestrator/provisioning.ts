@@ -1,5 +1,5 @@
+import { safeExceptionAttributes, type Tracer } from "@codevil/shared";
 import { redactEvent } from "../redaction.js";
-import type { Tracer } from "@codevil/shared";
 
 interface SandboxProvisioningTraceOptions<T> {
   tracer: Tracer;
@@ -27,9 +27,9 @@ export async function traceSandboxProvisioning<T>(
 }
 
 function redactedProvisioningError(error: unknown, secrets: readonly string[]): Error {
-  const attributes = redactEvent(provisioningErrorAttributes(error), secrets);
-  const redacted = new Error(String(attributes.message));
-  redacted.name = String(attributes.name ?? "Error");
+  const attributes = redactEvent(safeExceptionAttributes(error), secrets);
+  const redacted = new Error(typeof attributes.error === "string" ? attributes.error : "[UNAVAILABLE]");
+  redacted.name = typeof attributes.name === "string" ? attributes.name : "Error";
   if (typeof attributes.stack === "string") redacted.stack = attributes.stack;
 
   for (const [key, value] of Object.entries(attributes)) {
@@ -43,17 +43,4 @@ function redactedProvisioningError(error: unknown, secrets: readonly string[]): 
   }
 
   return redacted;
-}
-
-function provisioningErrorAttributes(error: unknown): Record<string, unknown> {
-  const structured = typeof error === "object" && error !== null
-    ? Object.fromEntries(Object.entries(error))
-    : {};
-
-  return {
-    ...structured,
-    name: error instanceof Error ? error.name : undefined,
-    message: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
-  };
 }

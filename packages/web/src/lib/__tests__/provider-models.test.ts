@@ -46,7 +46,14 @@ describe("listProviderModels", () => {
 
   it("rejects unknown providers", async () => {
     await expect(
-      listProviderModels("anthropic", async () => new Response("{}", { status: 200 })),
+      listProviderModels("not-a-provider", async () => new Response("{}", { status: 200 })),
     ).rejects.toThrow(/Unknown provider/);
+  });
+
+  it("returns no catalog options without fetching for providers that require a typed model id", async () => {
+    const fetcher = vi.fn();
+
+    await expect(listProviderModels("anthropic", fetcher as typeof fetch)).resolves.toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

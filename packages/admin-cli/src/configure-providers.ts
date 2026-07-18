@@ -45,14 +45,28 @@ export async function configureProviders(options: {
 
   const selectedIndices = await promptForProviderSelection(prompt, output);
   const secretsToUpload: Record<string, string> = {};
+  const credentialsBySecret = new Map<string, string>();
+  const validationBySecret = new Map<string, ProviderSummary["status"]>();
+  const configuredValues = new Set<string>();
   const summary: ProviderSummary[] = [];
 
   for (const selectedIndex of selectedIndices) {
     const provider = LLM_PROVIDERS[selectedIndex - 1];
-    const key = await promptForSecret(prompt, output, provider);
-    const status = await validateSelection(prompt, output, validator, provider, key);
+    let key = credentialsBySecret.get(provider.secretName);
+    let status = validationBySecret.get(provider.secretName);
+    if (!key || !status) {
+      key = await promptForSecret(prompt, output, provider);
+      status = await validateSelection(prompt, output, validator, provider, key);
+      credentialsBySecret.set(provider.secretName, key);
+      validationBySecret.set(provider.secretName, status);
+    }
 
     secretsToUpload[provider.secretName] = key;
+    for (const configKey of provider.configKeys) {
+      if (configuredValues.has(configKey)) continue;
+      secretsToUpload[configKey] = await promptForPublicConfig(prompt, output, configKey, provider);
+      configuredValues.add(configKey);
+    }
     summary.push({
       displayName: provider.displayName,
       status,
@@ -65,6 +79,23 @@ export async function configureProviders(options: {
   for (const item of summary) {
     output.log(`${item.displayName}: ${item.status}`);
   }
+}
+
+async function promptForPublicConfig(
+  prompt: Prompt,
+  output: Output,
+  configKey: string,
+  provider: LLMProviderDefinition,
+): Promise<string> {
+  while (true) {
+    const value = await prompt.text(`Enter ${formatConfigKey(configKey)} for ${provider.displayName}: `);
+    if (value.trim().length > 0) return value.trim();
+    output.error(`${formatConfigKey(configKey)} cannot be blank.`);
+  }
+}
+
+function formatConfigKey(configKey: string): string {
+  return configKey.toLowerCase().split("_").map((part) => part[0].toUpperCase() + part.slice(1)).join(" ");
 }
 
 async function promptForProviderSelection(prompt: Prompt, output: Output): Promise<number[]> {

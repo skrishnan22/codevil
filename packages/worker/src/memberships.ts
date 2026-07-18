@@ -42,14 +42,21 @@ export function activeMembershipByUserSelect(userId: string): SqlStatement {
 
 export function createOwnerMembershipInsert(userId: string, now: string): SqlStatement {
   return {
+    // This is deliberately one conditional statement rather than a
+    // SELECT-then-INSERT sequence. Setup is a one-time privilege boundary,
+    // and concurrent D1 requests must not be able to observe "no owner" and
+    // both promote themselves.
     sql: `INSERT INTO memberships (
       user_id,
       role,
       status,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?)`,
-    bindings: [userId, "owner", "active", now, now],
+    ) SELECT ?, ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM memberships WHERE role = ? AND status = ?
+      )`,
+    bindings: [userId, "owner", "active", now, now, "owner", "active"],
   };
 }
 

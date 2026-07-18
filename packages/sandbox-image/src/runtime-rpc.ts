@@ -1,8 +1,6 @@
 import type { DOToSandboxMessage, SandboxToDOMessage } from "@codevil/shared";
-import type { GitCredential } from "./runtime-types.js";
 import type { AskQuestionOutcome, AskQuestionParams, CreatePullRequestToolOptions } from "./runtime-types.js";
 
-type CredentialRequestMessage = Extract<SandboxToDOMessage, { type: "credential_request" }>;
 type CreatePRRequestMessage = Extract<SandboxToDOMessage, { type: "create_pr_request" }>;
 type AskQuestionRequestMessage = Extract<SandboxToDOMessage, { type: "ask_question_request" }>;
 
@@ -10,12 +8,7 @@ const DEFAULT_ASK_QUESTION_TIMEOUT_MS = 600_000;
 
 export class SandboxRpcCoordinator {
   private readonly send: (message: SandboxToDOMessage) => void;
-  private readonly credentialTimeoutMs: number;
   private readonly askQuestionTimeoutMs: number;
-  private credentialRequests = new Map<string, {
-    resolve(credential: GitCredential | undefined): void;
-    timeout: ReturnType<typeof setTimeout>;
-  }>();
   private pullRequestRequests = new Map<string, {
     resolve(result: { url: string }): void;
     reject(error: Error): void;
@@ -28,44 +21,10 @@ export class SandboxRpcCoordinator {
 
   constructor(options: {
     send: (message: SandboxToDOMessage) => void;
-    credentialTimeoutMs: number;
     askQuestionTimeoutMs?: number;
   }) {
     this.send = options.send;
-    this.credentialTimeoutMs = options.credentialTimeoutMs;
     this.askQuestionTimeoutMs = options.askQuestionTimeoutMs ?? DEFAULT_ASK_QUESTION_TIMEOUT_MS;
-  }
-
-  async requestCredential(request: Omit<CredentialRequestMessage, "type" | "request_id">): Promise<GitCredential | undefined> {
-    if (this.credentialTimeoutMs <= 0) return undefined;
-
-    const requestId = `cred_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    this.send({ type: "credential_request", request_id: requestId, ...request });
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.credentialRequests.delete(requestId);
-        resolve(undefined);
-      }, this.credentialTimeoutMs);
-
-      this.credentialRequests.set(requestId, { resolve, timeout });
-    });
-  }
-
-  handleCredentialResponse(message: Extract<DOToSandboxMessage, { type: "credential_response" }>): void {
-    const pending = this.credentialRequests.get(message.request_id);
-    if (!pending) return;
-
-    clearTimeout(pending.timeout);
-    this.credentialRequests.delete(message.request_id);
-
-    if (message.error || !message.username || !message.password) {
-      this.send({ type: "status", message: `Credential request denied: ${message.error ?? "missing credential"}` });
-      pending.resolve(undefined);
-      return;
-    }
-
-    pending.resolve({ username: message.username, password: message.password });
   }
 
   async createPullRequest(options: {

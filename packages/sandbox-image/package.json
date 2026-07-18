@@ -10,9 +10,8 @@
   },
   "dependencies": {
     "@codevil/shared": "workspace:*",
-    "@mariozechner/pi-ai": "^0.73.1",
-    "@mariozechner/pi-coding-agent": "^0.73.1",
-    "@sinclair/typebox": "^0.34.49",
+    "@earendil-works/pi-ai": "^0.80.3",
+    "@earendil-works/pi-coding-agent": "^0.80.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {

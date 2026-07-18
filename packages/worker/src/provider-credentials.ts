@@ -1,11 +1,14 @@
-import { getProviderDefinition, LLM_PROVIDERS } from "@codevil/shared";
+import {
+  getProviderDefinition,
+  LLM_PROVIDER_CAPABILITIES,
+  type ProviderPublicConfig,
+  type ProviderPublicConfigKey,
+  type WorkerProviderSecretName,
+} from "@codevil/shared";
 
-export interface ProviderCredentialEnv {
-  OPENCODE_API_KEY?: string;
-  OPENROUTER_API_KEY?: string;
-  OPENAI_API_KEY?: string;
+export type ProviderCredentialEnv = Partial<Record<WorkerProviderSecretName, string>> & {
   CODEVIL_LLM_KEY?: string;
-}
+} & Partial<Record<ProviderPublicConfigKey, string>>;
 
 export interface ProvisioningCredentialContext {
   llmKey: string;
@@ -20,14 +23,7 @@ export function resolveProviderCredential(
   const definition = getProviderDefinition(provider);
   if (!definition) return legacy;
 
-  switch (definition.secretName) {
-    case "OPENCODE_API_KEY":
-      return normalizeCredential(env.OPENCODE_API_KEY) ?? legacy;
-    case "OPENROUTER_API_KEY":
-      return normalizeCredential(env.OPENROUTER_API_KEY) ?? legacy;
-    case "OPENAI_API_KEY":
-      return normalizeCredential(env.OPENAI_API_KEY) ?? legacy;
-  }
+  return normalizeCredential(env[definition.secretName]) ?? legacy;
 }
 
 export function requireProviderCredential(
@@ -52,10 +48,35 @@ export function getProvisioningCredentialContext(
   };
 }
 
+/**
+ * Return only registry-declared non-secret configuration for a provider.
+ * Required values fail before the sandbox starts, rather than leaving Pi to
+ * issue requests containing unresolved URL placeholders.
+ */
+export function requireProviderPublicConfig(
+  env: ProviderCredentialEnv,
+  provider: string,
+): ProviderPublicConfig {
+  const definition = getProviderDefinition(provider);
+  if (!definition) throw new Error("Unsupported LLM provider");
+
+  const config: ProviderPublicConfig = {};
+  const missing: string[] = [];
+  for (const key of definition.configKeys) {
+    const value = normalizeCredential(env[key]);
+    if (!value) missing.push(key);
+    else config[key] = value;
+  }
+  if (missing.length > 0) {
+    throw new Error(`${definition.displayName} is missing required configuration: ${missing.join(", ")}`);
+  }
+  return config;
+}
+
 export function collectProviderCredentialSecrets(env: ProviderCredentialEnv): string[] {
   return [...new Set(
     [
-      ...LLM_PROVIDERS.map((provider) => env[provider.secretName]),
+      ...LLM_PROVIDER_CAPABILITIES.map((provider) => env[provider.secretName]),
       env.CODEVIL_LLM_KEY,
     ]
       .map(normalizeCredential)
@@ -65,5 +86,6 @@ export function collectProviderCredentialSecrets(env: ProviderCredentialEnv): st
 
 function normalizeCredential(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  return value.trim() === "" ? undefined : value;
+  const normalized = value.trim();
+  return normalized === "" ? undefined : normalized;
 }

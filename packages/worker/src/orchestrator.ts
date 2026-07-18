@@ -15,6 +15,7 @@ import {
   clientValidationErrorMessage,
   parseInbound,
   createTracer,
+  safeExceptionAttributes,
   setValidationDropSink,
   tracerValidationDropSink,
   type Span,
@@ -33,8 +34,8 @@ import {
   sandboxReconnectDeadline,
   sandboxReconnectExpired,
 } from "./sandbox-connection.js";
-import { collectProviderCredentialSecrets } from "./provider-credentials.js";
 import { redactEvent } from "./redaction.js";
+import { collectWorkerSecretValues } from "./worker-env.js";
 import {
   sanitizeDisplayName,
   sanitizeParticipantId,
@@ -48,6 +49,7 @@ import {
   type SocketAuthContext,
 } from "./ws-authorization.js";
 import { sessionIdFromWebSocketPath, verifySocketAuthToken } from "./ws-token.js";
+import { verifySandboxWebSocketToken } from "./sandbox-ws-token.js";
 import { sendSnapshotIfBehind } from "./snapshot-frame.js";
 export { sendSnapshotIfBehind } from "./snapshot-frame.js";
 import {
@@ -65,6 +67,7 @@ import {
 } from "./orchestrator/session-guards.js";
 export { traceIdFromSessionId } from "./orchestrator/session-guards.js";
 import { runOrchestratorSchemaMigrations } from "./orchestrator/schema-migrations.js";
+import { DirectoryUpdateQueue } from "./orchestrator/directory-update-queue.js";
 import type { OrchestratorHost } from "./orchestrator/host.js";
 import { SessionEventLog } from "./orchestrator/event-log.js";
 import { notifyExternalConversation } from "./integrations/notify-external-conversation.js";
@@ -106,12 +109,15 @@ import {
   initializeSandboxConnection,
   provisionSessionSandbox,
 } from "./orchestrator/sandbox-handlers.js";
-import { runSessionDirectoryUpdateWithRetry } from "./session-directory.js";
+import {
+  nextSessionDirectoryTimestamp,
+  runSessionDirectoryUpdateWithRetry,
+} from "./session-directory.js";
 import {
   answerQuestionFromIntegration as answerQuestionFromIntegrationFn,
   type IntegrationQuestionAnswerResult,
 } from "./orchestrator/question-answer.js";
-import { workerLogForSession, workerLogSessionException } from "./logging.js";
+import { workerLogForSession, workerLogSessionExceptionForEnv } from "./logging.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
 
@@ -123,19 +129,20 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   redactionSecrets: string[];
   private tracer: Tracer | null = null;
   private phaseSpans = new Map<SessionState, Span>();
+  private directoryUpdates = new DirectoryUpdateQueue();
+  private pendingDirectoryPatch: {
+    room_state?: string;
+    sandbox_state?: string;
+    active_run_state?: string | null;
+  } = {};
+  private lastDirectoryUpdateAt = "";
   eventLog: SessionEventLog;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.ctx = ctx as DurableObjectState<{}>;
     this.workerEnv = env;
-    this.redactionSecrets = [
-      env.CODEVIL_API_KEY,
-      ...collectProviderCredentialSecrets(env),
-      env.GITHUB_PAT,
-      env.R2_ACCESS_KEY_ID,
-      env.R2_SECRET_ACCESS_KEY,
-    ].filter((secret): secret is string => Boolean(secret));
+    this.redactionSecrets = collectWorkerSecretValues(env);
     this.sql = ctx.storage.sql;
     this.eventLog = new SessionEventLog(
       this.sql,
@@ -280,7 +287,12 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
 
     if (this.meta.state === "provisioning_sandbox" && now >= createdAt + 60_000) {
-      const logs = await readProcessLogs(this.workerEnv.Sandbox, this.meta.session_id, "codevil-agent");
+      const logs = await readProcessLogs(
+        this.workerEnv.Sandbox,
+        this.meta.session_id,
+        "codevil-agent",
+        this.redactionSecrets,
+      );
       this.getTracer()?.log("ERROR", "sandbox.timeout", {
         stdout: logs?.stdout ?? "(none)",
         stderr: logs?.stderr ?? "(none)",
@@ -310,7 +322,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     const isSandbox = url.pathname.endsWith("/sandbox/ws");
 
     if (isSandbox) {
-      return this.acceptSandboxWebSocket();
+      return this.acceptSandboxWebSocket(request, url);
     }
 
     // Hydrate snapshot and session meta from SQLite on cold-start BEFORE reading
@@ -365,11 +377,22 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private acceptSandboxWebSocket(): Response {
+  private async acceptSandboxWebSocket(request: Request, url: URL): Promise<Response> {
     this.loadMeta();
     if (!this.meta) {
       return new Response("Session not initialized", { status: 409 });
     }
+
+    if (sandboxSessionIdFromPath(url.pathname) !== this.meta.session_id) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    const capability = await verifySandboxWebSocketToken(
+      url.searchParams.get("sandbox_ws_token"),
+      this.meta.session_id,
+      this.workerEnv.CODEVIL_PROXY_SIGNING_SECRET ?? "",
+    );
+    if (!capability) return new Response("Unauthorized", { status: 401 });
 
     const attachedSandboxCount = this.ctx.getWebSockets("sandbox").length;
     const mode = sandboxConnectionMode(this.meta.state, this.meta.sandbox_disconnected_at, attachedSandboxCount);
@@ -391,6 +414,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server, ["sandbox"]);
+    server.serializeAttachment({ sandbox: { aud: capability.aud, role: capability.role, sessionId: capability.sid } });
     initializeSandboxConnection(this, server, mode);
 
     if (mode === "resume") {
@@ -408,6 +432,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     if (typeof message !== "string") return;
 
     if (this.ctx.getWebSockets("sandbox").includes(ws)) {
+      if (!this.isAuthenticatedSandboxSocket(ws)) return;
       await dispatchSandboxSocketMessage(this, ws, message);
       return;
     }
@@ -498,6 +523,13 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
   }
 
+  private isAuthenticatedSandboxSocket(ws: WebSocket): boolean {
+    const attachment = ws.deserializeAttachment() as { sandbox?: { aud?: unknown; role?: unknown; sessionId?: unknown } } | null;
+    return attachment?.sandbox?.aud === "sandbox_ws"
+      && attachment.sandbox.role === "sandbox"
+      && attachment.sandbox.sessionId === this.meta?.session_id;
+  }
+
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
     const isSandbox = this.ctx.getWebSockets("sandbox").includes(ws);
     this.loadMeta();
@@ -547,7 +579,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.loadMeta();
     this.getTracer()?.log("ERROR", "ws.error", {
       source: isSandbox ? "sandbox" : "cli",
-      error: error instanceof Error ? error.message : String(error),
+      ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
     });
     try { ws.close(1011, "WebSocket error"); } catch { /* already closed */ }
   }
@@ -621,6 +653,9 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       component: "orchestrator",
       trace_id: traceIdFromSessionId(this.meta.session_id),
       session_id: this.meta.session_id,
+      // Trace records include errors, stacks, span events, and nested diagnostics.
+      // Redact at the final sink boundary so new call sites cannot bypass it.
+      transform: (line) => redactEvent(line, this.redactionSecrets),
     });
     setValidationDropSink(tracerValidationDropSink(this.tracer));
     return this.tracer;
@@ -690,7 +725,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       await sandbox.stop();
     } catch (error) {
       this.getTracer()?.log("ERROR", "sandbox.stop.failed", {
-        error: error instanceof Error ? error.message : String(error),
+        ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
       });
     }
     this.closeSandboxSockets(reason);
@@ -714,7 +749,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
         workerLogForSession(this.meta.session_id, "DEBUG", "external_notification.schedule", {
           cursor,
           event_type: redactedEvent.type,
-        });
+        }, this.redactionSecrets);
         this.ctx.waitUntil(notifyExternalConversation({
           env: this.workerEnv,
           sessionId: this.meta.session_id,
@@ -723,7 +758,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
           event: redactedEvent,
         }));
       } catch (error) {
-        workerLogSessionException(this.meta.session_id, "external_notification.schedule.failed", error, {
+        workerLogSessionExceptionForEnv(this.meta.session_id, "external_notification.schedule.failed", error, this.workerEnv, {
           cursor,
           event_type: event.type,
         });
@@ -790,28 +825,88 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.loadMeta();
     if (!this.meta) return;
 
+    // Coalesce updates that accumulate while a D1 write is in flight. Each
+    // field keeps its latest value, so a terminal state cannot be erased by a
+    // burst containing unrelated field updates.
+    Object.assign(this.pendingDirectoryPatch, patch);
+    const update = this.directoryUpdates.enqueue(() => {
+      const pendingPatch = this.pendingDirectoryPatch;
+      this.pendingDirectoryPatch = {};
+      return this.persistDirectoryUpdate(pendingPatch);
+    }, { key: this.meta.session_id });
+    this.ctx.waitUntil(update);
+  }
+
+  private nextDirectoryUpdateAt(): string {
     const now = new Date().toISOString();
+    if (now > this.lastDirectoryUpdateAt) {
+      this.lastDirectoryUpdateAt = now;
+    } else {
+      this.lastDirectoryUpdateAt = new Date(
+        Date.parse(this.lastDirectoryUpdateAt) + 1,
+      ).toISOString();
+    }
+    return this.lastDirectoryUpdateAt;
+  }
+
+  private async persistDirectoryUpdate(patch: {
+    room_state?: string;
+    sandbox_state?: string;
+    active_run_state?: string | null;
+  }): Promise<void> {
+    if (!this.meta) return;
+
     const entries: [string, unknown][] = [
-      ["updated_at", now],
-      ["last_event_at", now],
+      ["updated_at", ""],
+      ["last_event_at", ""],
     ];
     if (patch.room_state !== undefined) entries.push(["room_state", patch.room_state]);
     if (patch.sandbox_state !== undefined) entries.push(["sandbox_state", patch.sandbox_state]);
     if (patch.active_run_state !== undefined) entries.push(["active_run_state", patch.active_run_state]);
 
     const assignments = entries.map(([key]) => `${key} = ?`).join(", ");
-    const bindings = [...entries.map(([, value]) => value), this.meta.session_id];
-    const sql = `UPDATE sessions SET ${assignments} WHERE id = ?`;
+    // A timed-out D1 request may still finish later. Do not let that older
+    // request overwrite a newer state that has already reached the directory.
+    const sql = `UPDATE sessions SET ${assignments} WHERE id = ? AND last_event_at < ?`;
 
-    this.ctx.waitUntil(
-      runSessionDirectoryUpdateWithRetry(this.workerEnv.DB, sql, bindings, {
+    // A restarted DO starts with an empty in-memory clock. A zero-row update
+    // means this timestamp was not newer than D1 (or a late attempt already
+    // won), so read the baseline and retry with a strictly greater value.
+    for (let conflictAttempt = 0; conflictAttempt < 3; conflictAttempt++) {
+      const now = this.nextDirectoryUpdateAt();
+      entries[0][1] = now;
+      entries[1][1] = now;
+      const bindings = [...entries.map(([, value]) => value), this.meta.session_id, now];
+      const result = await runSessionDirectoryUpdateWithRetry(this.workerEnv.DB, sql, bindings, {
         onFailure: (error) => {
           this.getTracer()?.log("ERROR", "session_directory.update.failed", {
-            error: error instanceof Error ? error.message : String(error),
+            ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
           });
         },
-      }),
-    );
+      });
+      if (!result) return;
+      if (Number(result.meta.changes ?? 0) > 0) return;
+
+      const current = await this.workerEnv.DB.prepare(
+        "SELECT last_event_at FROM sessions WHERE id = ?",
+      ).bind(this.meta.session_id).first<{ last_event_at: string }>();
+      if (!current) {
+        this.getTracer()?.log("ERROR", "session_directory.update.conflict", {
+          session_id: this.meta.session_id,
+          reason: "session_not_found",
+        });
+        return;
+      }
+      this.lastDirectoryUpdateAt = nextSessionDirectoryTimestamp(
+        this.lastDirectoryUpdateAt,
+        current.last_event_at,
+      );
+    }
+
+    this.getTracer()?.log("ERROR", "session_directory.update.conflict", {
+      session_id: this.meta.session_id,
+      reason: "retry_exhausted",
+    });
   }
 
   freezePlanRevision(runId: string, round: number, markdown: string): void {
@@ -898,7 +993,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   private armNextAlarmSafe(now?: number): Promise<void> {
     return this.armNextAlarm(now).catch((error) => {
       this.getTracer()?.log("ERROR", "alarm.arm.failed", {
-        error: error instanceof Error ? error.message : String(error),
+        ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
       });
     });
   }
@@ -916,7 +1011,12 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     state: SessionState;
   }): Promise<void> {
     try {
-      const diagnostics = await readSandboxDiagnostics(this.workerEnv.Sandbox, options.sessionId, "codevil-agent");
+      const diagnostics = await readSandboxDiagnostics(
+        this.workerEnv.Sandbox,
+        options.sessionId,
+        "codevil-agent",
+        this.redactionSecrets,
+      );
       const payload = buildSandboxDisconnectLogPayload({
         sessionId: options.sessionId,
         closeCode: options.closeCode,
@@ -935,7 +1035,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
         close_code: options.closeCode,
         close_reason: options.closeReason || "none",
         state: options.state,
-        error: error instanceof Error ? error.message : String(error),
+        ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
       });
     }
   }
@@ -1005,4 +1105,9 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
     return answerQuestionFromIntegrationFn(this, args);
   }
+}
+
+function sandboxSessionIdFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/sessions\/([^/]+)\/sandbox\/ws$/);
+  return match?.[1] ?? null;
 }

@@ -206,6 +206,19 @@ export function sessionDirectoryFailureUpdate(sessionId: string, now: string): S
   };
 }
 
+/**
+ * Returns a timestamp that is strictly newer than a persisted directory
+ * baseline. Durable Objects can restart with an empty in-memory clock, and
+ * wall clocks can be behind a value previously written by another attempt.
+ */
+export function nextSessionDirectoryTimestamp(candidate: string, persistedBaseline: string): string {
+  if (candidate > persistedBaseline) return candidate;
+
+  const parsedBaseline = Date.parse(persistedBaseline);
+  if (!Number.isFinite(parsedBaseline)) return candidate;
+  return new Date(parsedBaseline + 1).toISOString();
+}
+
 export async function runSessionDirectoryUpdateWithRetry(
   db: D1Database,
   sql: string,
@@ -213,17 +226,21 @@ export async function runSessionDirectoryUpdateWithRetry(
   options: {
     attempts?: number;
     backoffMs?: number;
+    attemptTimeoutMs?: number;
     onFailure: (error: unknown) => void;
   },
-): Promise<void> {
+): Promise<D1Result<unknown> | undefined> {
   const attempts = options.attempts ?? 3;
   const backoffMs = options.backoffMs ?? 50;
+  const attemptTimeoutMs = options.attemptTimeoutMs ?? 5_000;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      await db.prepare(sql).bind(...bindings).run();
-      return;
+      return await withAttemptTimeout(
+        db.prepare(sql).bind(...bindings).run(),
+        attemptTimeoutMs,
+      );
     } catch (error) {
       lastError = error;
       if (attempt < attempts - 1) {
@@ -233,6 +250,23 @@ export async function runSessionDirectoryUpdateWithRetry(
   }
 
   options.onFailure(lastError);
+  return undefined;
+}
+
+async function withAttemptTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`Session directory update attempt timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }
 
 export function recentSessionsSelect(cutoffIso: string, limit: number): SqlStatement {

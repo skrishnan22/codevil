@@ -1,4 +1,4 @@
-import { workerLogSessionException } from "./logging.js";
+import { workerLogSessionExceptionForEnv } from "./logging.js";
 import {
   buildSessionSummary,
   legacyDirectoryGuardColumns,
@@ -77,7 +77,7 @@ export async function createSession(
     const failedAt = new Date().toISOString();
     const failure = sessionDirectoryFailureUpdate(sessionId, failedAt);
     await env.DB.prepare(failure.sql).bind(...failure.bindings).run();
-    workerLogSessionException(sessionId, "session.init.failed", error);
+    workerLogSessionExceptionForEnv(sessionId, "session.init.failed", error, env);
     throw error;
   }
 

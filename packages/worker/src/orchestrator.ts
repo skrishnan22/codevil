@@ -111,6 +111,7 @@ import {
   answerQuestionFromIntegration as answerQuestionFromIntegrationFn,
   type IntegrationQuestionAnswerResult,
 } from "./orchestrator/question-answer.js";
+import { workerLogForSession, workerLogSessionException } from "./logging.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
 
@@ -370,11 +371,13 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       return new Response("Session not initialized", { status: 409 });
     }
 
-    const mode = sandboxConnectionMode(this.meta.state, this.meta.sandbox_disconnected_at);
+    const attachedSandboxCount = this.ctx.getWebSockets("sandbox").length;
+    const mode = sandboxConnectionMode(this.meta.state, this.meta.sandbox_disconnected_at, attachedSandboxCount);
     if (mode === "reject") {
       this.getTracer()?.log("WARN", "sandbox.ws.rejected", {
         state: this.meta.state,
         disconnected_at: this.meta.sandbox_disconnected_at,
+        attached_sandbox_count: attachedSandboxCount,
       });
       return new Response("Sandbox connection is not expected", { status: 409 });
     }
@@ -382,6 +385,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.getTracer()?.log("INFO", "sandbox.ws.connected", {
       state: this.meta.state,
       mode,
+      attached_sandbox_count: attachedSandboxCount,
     });
 
     const pair = new WebSocketPair();
@@ -705,13 +709,25 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   appendAndBroadcast(event: DOToCLIEvent): number | null {
     const cursor = this.eventLog.appendAndBroadcast(event);
     if (cursor !== null && this.meta) {
-      this.ctx.waitUntil(notifyExternalConversation({
-        env: this.workerEnv,
-        sessionId: this.meta.session_id,
-        workerOrigin: this.meta.worker_url,
-        cursor,
-        event: redactEvent(event, this.redactionSecrets),
-      }));
+      try {
+        const redactedEvent = redactEvent(event, this.redactionSecrets);
+        workerLogForSession(this.meta.session_id, "DEBUG", "external_notification.schedule", {
+          cursor,
+          event_type: redactedEvent.type,
+        });
+        this.ctx.waitUntil(notifyExternalConversation({
+          env: this.workerEnv,
+          sessionId: this.meta.session_id,
+          workerOrigin: this.meta.worker_url,
+          cursor,
+          event: redactedEvent,
+        }));
+      } catch (error) {
+        workerLogSessionException(this.meta.session_id, "external_notification.schedule.failed", error, {
+          cursor,
+          event_type: event.type,
+        });
+      }
     }
     return cursor;
   }

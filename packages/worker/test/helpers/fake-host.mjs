@@ -88,6 +88,10 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
       waitUntil(promise) {
         backgroundWork.push(Promise.resolve(promise).catch(() => {}));
       },
+      getWebSockets(tag) {
+        if (tag !== "sandbox") return [];
+        return options.sandboxConnected === false ? [] : [{}];
+      },
     },
     redactionSecrets: [],
 

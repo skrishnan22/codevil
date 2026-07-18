@@ -111,7 +111,7 @@ function questionActions(
         }
         elements.push({
           type: "button",
-          action_id: "codevil_question_answer",
+          action_id: `codevil_question_answer_${index}`,
           text: plainText(truncate(option.label, MAX_SLACK_OPTION_TEXT_LENGTH)),
           value,
         });

@@ -38,6 +38,22 @@ test("parseSlackQuestionAction parses a direct option button", async () => {
     optionIndexes: [0],
     actionTs: "171951.1111",
   });
+  assert.deepEqual(await parse(basePayload({
+    actions: [{
+      action_id: "codevil_question_answer_3",
+      action_ts: "171951.1111",
+      value: JSON.stringify({ v: 1, q: "question_1", i: 3 }),
+    }],
+  })), {
+    teamId: "T123",
+    userId: "U123",
+    channelId: "C123",
+    messageTs: "171951.0002",
+    threadTs: "171951.0001",
+    requestId: "question_1",
+    optionIndexes: [3],
+    actionTs: "171951.1111",
+  });
 });
 
 test("parseSlackQuestionAction reads selected values from block state", async () => {

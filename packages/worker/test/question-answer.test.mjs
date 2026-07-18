@@ -33,11 +33,17 @@ function question(overrides = {}) {
   };
 }
 
-function fixture(row = question()) {
+function fixture(row = question(), options = {}) {
   const broadcasts = [];
   const sandboxMessages = [];
+  const sandboxSockets = options.sandboxConnected === false ? [] : [{}];
   const host = {
     meta: { session_id: "ses_123", created_by: { id: "creator", name: "Creator" } },
+    ctx: {
+      getWebSockets(tag) {
+        return tag === "sandbox" ? sandboxSockets : [];
+      },
+    },
     sql: {
       exec(sql, ...bindings) {
         if (sql.includes("SELECT") && sql.includes("FROM questions")) {
@@ -103,6 +109,42 @@ test("Slack answer validation rejects invalid ordinals and cardinality", async (
     assert.equal(state.row.status, "open");
     assert.equal(state.broadcasts.length, 0);
   }
+});
+
+test("Slack answer fails without consuming the question when the sandbox is unavailable", async () => {
+  const state = fixture(question(), { sandboxConnected: false });
+  const result = await answer(state.host, {
+    requestId: "question_1",
+    optionIndexes: [0],
+    actor: slackActor,
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    status: "sandbox_unavailable",
+    error: "Sandbox is reconnecting. Please try again in a moment.",
+  });
+  assert.equal(state.row.status, "open");
+  assert.equal(state.broadcasts.length, 0);
+  assert.equal(state.sandboxMessages.length, 0);
+});
+
+test("Slack answer reports sandbox unavailability before selection validation", async () => {
+  const state = fixture(question(), { sandboxConnected: false });
+  const result = await answer(state.host, {
+    requestId: "question_1",
+    optionIndexes: [9],
+    actor: slackActor,
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    status: "sandbox_unavailable",
+    error: "Sandbox is reconnecting. Please try again in a moment.",
+  });
+  assert.equal(state.row.status, "open");
+  assert.equal(state.broadcasts.length, 0);
+  assert.equal(state.sandboxMessages.length, 0);
 });
 
 test("the first accepted answer wins and retries return persisted state", async () => {

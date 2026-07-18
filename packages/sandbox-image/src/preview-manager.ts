@@ -1,7 +1,7 @@
-import { createServer, request as httpRequest } from "node:http";
+import { request as httpRequest } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import type { Readable } from "node:stream";
 
 import type { PreviewApp, PreviewFramework } from "@codevil/shared";
@@ -284,17 +284,6 @@ export function detectPreviewApps(root: string): PreviewApp[] {
   }
 
   return apps;
-}
-
-/**
- * Backward-compatible single-result wrapper kept for legacy callers and tests.
- * Returns the first detected app's command (preferring root over subpackages).
- */
-export function detectPreviewCommand(root: string): PreviewCommand | undefined {
-  const apps = detectPreviewApps(root);
-  if (apps.length === 0) return undefined;
-  const first = apps[0];
-  return appToCommand(first, root);
 }
 
 export function appToCommand(app: PreviewApp, root: string): PreviewCommand {
@@ -659,19 +648,4 @@ function withRecentLogs(message: string, recentLogs: string[]): string {
 
 function stripAnsi(text: string): string {
   return text.replace(/\[[0-9;?]*[ -/]*[@-~]/g, "");
-}
-
-export function fakePreviewServer(port: number): Promise<{ close(): Promise<void> }> {
-  const server = createServer((_req, res) => {
-    res.writeHead(200, { "content-type": "text/plain" });
-    res.end("ok");
-  });
-  return new Promise((resolve, reject) => {
-    server.on("error", reject);
-    server.listen(port, "127.0.0.1", () => {
-      resolve({
-        close: () => new Promise((closeResolve) => server.close(() => closeResolve())),
-      });
-    });
-  });
 }

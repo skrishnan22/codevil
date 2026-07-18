@@ -1,9 +1,5 @@
 import type { AuthRole } from "@codevil/shared";
-
-export interface SqlStatement {
-  sql: string;
-  bindings: unknown[];
-}
+import type { SqlStatement } from "./sql.js";
 
 export interface MembershipRow {
   user_id: string;

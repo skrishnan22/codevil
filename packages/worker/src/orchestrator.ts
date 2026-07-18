@@ -59,7 +59,6 @@ import {
   PHASE_SPAN_NAMES,
   SNAPSHOT_TERMINAL_EVENT_TYPES,
 } from "./orchestrator/types.js";
-import { traceSandboxProvisioning } from "./orchestrator/provisioning.js";
 export { traceSandboxProvisioning } from "./orchestrator/provisioning.js";
 import { proxyPreviewRequest } from "./orchestrator/preview.js";
 import {
@@ -71,6 +70,7 @@ import { runOrchestratorSchemaMigrations } from "./orchestrator/schema-migration
 import { DirectoryUpdateQueue } from "./orchestrator/directory-update-queue.js";
 import type { OrchestratorHost } from "./orchestrator/host.js";
 import { SessionEventLog } from "./orchestrator/event-log.js";
+import { notifyExternalConversation } from "./integrations/notify-external-conversation.js";
 import { loadSessionMeta, saveSessionMeta } from "./orchestrator/session-meta.js";
 import { sessionWideEventGroup } from "./orchestrator/session-telemetry.js";
 import {
@@ -113,6 +113,10 @@ import {
   nextSessionDirectoryTimestamp,
   runSessionDirectoryUpdateWithRetry,
 } from "./session-directory.js";
+import {
+  answerQuestionFromIntegration as answerQuestionFromIntegrationFn,
+  type IntegrationQuestionAnswerResult,
+} from "./orchestrator/question-answer.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
 
@@ -733,8 +737,18 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     saveSessionMeta(this.sql, this.meta);
   }
 
-  appendAndBroadcast(event: DOToCLIEvent): void {
-    this.eventLog.appendAndBroadcast(event);
+  appendAndBroadcast(event: DOToCLIEvent): number | null {
+    const cursor = this.eventLog.appendAndBroadcast(event);
+    if (cursor !== null && this.meta) {
+      this.ctx.waitUntil(notifyExternalConversation({
+        env: this.workerEnv,
+        sessionId: this.meta.session_id,
+        workerOrigin: this.meta.worker_url,
+        cursor,
+        event: redactEvent(event, this.redactionSecrets),
+      }));
+    }
+    return cursor;
   }
 
   sendToSandbox(message: DOToSandboxMessage): void {
@@ -1042,6 +1056,38 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
 
     return proxyPreviewRequest(request, this.meta, token, this.workerEnv.Sandbox);
+  }
+
+  submitAgentRequest(args: {
+    text: string;
+    displayText?: string;
+    actor: ParticipantIdentity;
+    planFirst?: boolean;
+  }): { ok: true } | { ok: false; status: number; error: string } {
+    this.loadMeta();
+    if (!this.meta) {
+      return { ok: false, status: 409, error: "Session not initialized" };
+    }
+
+    if (!args.text.trim()) {
+      return { ok: true };
+    }
+
+    this.appendAndBroadcast({ type: "participant_joined", participant: args.actor });
+    handleAgentRequest(this, args.text, args.actor, args.planFirst ?? false, args.displayText);
+    return { ok: true };
+  }
+
+  answerQuestionFromIntegration(args: {
+    requestId: string;
+    optionIndexes: number[];
+    actor: ParticipantIdentity;
+  }): IntegrationQuestionAnswerResult {
+    this.loadMeta();
+    if (!this.meta) {
+      return { ok: false, status: "not_open", error: "Session not initialized" };
+    }
+    return answerQuestionFromIntegrationFn(this, args);
   }
 }
 

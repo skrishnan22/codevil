@@ -13,7 +13,6 @@ import {
   severityToOutcome,
   wideEventOutcomeFromStatus,
   type EmittedWideEvent,
-  type WideEventGroups,
 } from "./wide-event.js";
 
 export type {
@@ -60,12 +59,6 @@ export interface Span {
   setStatus(code: SpanStatusCode, message?: string): void;
   end(): void;
 }
-
-/** @deprecated Use EmittedWideEvent with record_type "span". */
-export type EmittedSpan = EmittedWideEvent;
-
-/** @deprecated Use EmittedWideEvent with record_type "point". */
-export type EmittedLog = EmittedWideEvent;
 
 export type TracerSink = (line: EmittedWideEvent) => void;
 
@@ -131,7 +124,6 @@ class LiveSpan implements Span {
   private readonly _ctx: SpanContext;
   private readonly _name: string;
   private readonly _component: Component;
-  private readonly _kind: SpanKind;
   private readonly _parent?: SpanContext;
   private readonly _session_id?: string;
   private readonly _start: number;
@@ -154,7 +146,6 @@ class LiveSpan implements Span {
     this._ctx = args.ctx;
     this._name = args.name;
     this._component = args.component;
-    this._kind = args.kind;
     this._parent = args.parent;
     this._session_id = args.session_id;
     this._sink = args.sink;

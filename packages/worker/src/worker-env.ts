@@ -14,6 +14,8 @@ export type WorkerSecretEnv = Partial<Record<WorkerProviderSecretName, string>> 
   CODEVIL_SETUP_TOKEN?: string;
   RESEND_API_KEY?: string;
   CODEVIL_PROXY_SIGNING_SECRET?: string;
+  SLACK_BOT_TOKEN?: string;
+  SLACK_SIGNING_SECRET?: string;
 };
 
 /**
@@ -34,6 +36,8 @@ export function collectWorkerSecretValues(env: WorkerSecretEnv): string[] {
     env.CODEVIL_SETUP_TOKEN,
     env.RESEND_API_KEY,
     env.CODEVIL_PROXY_SIGNING_SECRET,
+    env.SLACK_BOT_TOKEN,
+    env.SLACK_SIGNING_SECRET,
   ].map(normalizeSecret).filter((secret): secret is string => secret !== undefined))];
 }
 
@@ -66,4 +70,7 @@ export interface Env extends WorkerSecretEnv {
   RESEND_API_KEY?: string;
   RESEND_FROM?: string;
   CODEVIL_APP_NAME?: string;
+  SLACK_BOT_TOKEN?: string;
+  SLACK_SIGNING_SECRET?: string;
+  CODEVIL_SLACK_BOT_USER_ID?: string;
 }

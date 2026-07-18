@@ -182,19 +182,11 @@ function readOptionValue(argv: string[], index: number, option: string): string 
   return value;
 }
 
-function parsePositiveInteger(value: string, option: string): number {
-  const number = Number(value);
-  if (!Number.isInteger(number) || number <= 0) {
-    throw new Error(`${option} must be a positive integer`);
-  }
-  return number;
-}
-
 export function usage(): string {
   return [
     "Usage:",
     "  codevil init [--endpoint URL] [--api-key KEY] [--provider PROVIDER] [--plan-model MODEL] [--exec-model MODEL]",
-    "  codevil run --repo REPO_URL [--provider PROVIDER] [--plan-model MODEL] [--exec-model MODEL] [--max-cost COST] [--max-time TIME] [--max-steps N] [--debug] <prompt>",
+    "  codevil run --repo REPO_URL [--provider PROVIDER] [--plan-model MODEL] [--exec-model MODEL] [--max-time TIME] [--debug] <prompt>",
     "  codevil models list [--provider PROVIDER]",
     "  codevil models check <provider>/<model>",
   ].join("\n");

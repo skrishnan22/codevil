@@ -233,6 +233,7 @@ export type {
   SandboxCloneProgress,
   SandboxPlanReady,
   AgentTurnComplete,
+  AgentTurnFailed,
   CreatePRRequest,
   ExecutionComplete,
   SandboxVerificationStarted,
@@ -276,6 +277,7 @@ export {
   SandboxCloneProgressSchema,
   SandboxPlanReadySchema,
   AgentTurnCompleteSchema,
+  AgentTurnFailedSchema,
   CreatePRRequestSchema,
   ExecutionCompleteSchema,
   SandboxVerificationStartedSchema,
@@ -397,7 +399,6 @@ export type { ActivityEntryStatus } from "./session-snapshot-schema.js";
 export type {
   ProjectionContext,
   SessionSnapshot,
-  ProjectedSessionView,
 } from "./projections.js";
 export {
   emptyPreviewState,
@@ -414,8 +415,6 @@ export {
   reduceQuestions,
   mapEventToChat,
   mapEventToActivity,
-  projectEvent,
-  projectEvents,
 } from "./projections.js";
 
 export {
@@ -442,7 +441,6 @@ export type { ParseFailure } from "./wire-parsing.js";
 export {
   parseReplayEvent,
   parseSessionSnapshot,
-  setParseFailureSink,
 } from "./wire-parsing.js";
 
 export type {
@@ -495,8 +493,6 @@ export type {
   SpanStatus,
   SpanOptions,
   Span,
-  EmittedSpan,
-  EmittedLog,
   TracerSink,
   Tracer,
   CreateTracerOptions,

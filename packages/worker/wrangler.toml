@@ -32,6 +32,9 @@ image = "../../Dockerfile.sandbox"
 instance_type = "standard-1"
 max_instances = 5
 
+  [containers.ssh]
+  enabled = false
+
 [[durable_objects.bindings]]
 name = "ORCHESTRATOR"
 class_name = "Orchestrator"

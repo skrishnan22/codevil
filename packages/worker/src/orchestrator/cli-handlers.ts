@@ -21,6 +21,7 @@ import {
   loadQuestionRow,
   questionAnswerDeniedMessage,
 } from "./questions-store.js";
+import { applyQuestionAnswer } from "./question-answer.js";
 import type { OrchestratorHost } from "./host.js";
 import {
   decisionRejection,
@@ -91,6 +92,7 @@ export function handleAgentRequest(
   text: string,
   actor: ParticipantIdentity,
   planFirst: boolean,
+  displayText?: string,
 ): void {
   if (!host.meta) return;
 
@@ -108,7 +110,7 @@ export function handleAgentRequest(
     type: "agent_request",
     run_id: run.id,
     actor,
-    text: run.text,
+    text: displayText?.trim() || run.text,
     created_at: run.created_at,
   });
 
@@ -449,37 +451,13 @@ export function handleQuestionAnswer(
     return;
   }
 
-  const now = new Date().toISOString();
-  const optionIds = msg.option_ids ?? [];
-  const answerJson = JSON.stringify({ option_ids: optionIds, freeform: msg.freeform });
-
-  host.sql.exec(
-    `UPDATE questions
-     SET status = 'answered', answer_json = ?, answered_by_id = ?, answered_by_name = ?, answered_at = ?
-     WHERE request_id = ?`,
-    answerJson,
-    actor.id,
-    actor.name,
-    now,
-    msg.request_id,
-  );
-
-  host.appendAndBroadcast({
-    type: "question_answered",
-    request_id: msg.request_id,
-    option_ids: optionIds,
-    ...(msg.freeform !== undefined ? { freeform: msg.freeform } : {}),
-    answered_by: actor,
-    answered_at: now,
+  const result = applyQuestionAnswer(host, {
+    requestId: msg.request_id,
+    optionIds: msg.option_ids,
+    freeform: msg.freeform,
+    actor,
   });
-
-  host.sendToSandbox({
-    type: "ask_question_response",
-    request_id: msg.request_id,
-    option_ids: optionIds,
-    ...(msg.freeform !== undefined ? { freeform: msg.freeform } : {}),
-    answered_by: actor,
-  });
+  if (!result.ok) host.appendAndBroadcast({ type: "error", message: result.error });
 }
 
 export function cancelOpenQuestions(host: OrchestratorHost, runId: string, reason: string): void {

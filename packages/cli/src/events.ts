@@ -1,5 +1,6 @@
 import type { DOToCLIEvent } from "@codevil/shared";
 import {
+  isRecord,
   parseReplayEvent,
   ReplayBatchFrameSchema,
   SnapshotFrameSchema,
@@ -146,8 +147,4 @@ function renderAgentEvent(event: unknown): string[] {
     return [`Agent: ${event.type}`];
   }
   return ["Agent event received"];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

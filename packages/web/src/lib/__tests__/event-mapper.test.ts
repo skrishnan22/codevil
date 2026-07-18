@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapEventToChat, mapEventToActivity, projectEvent } from "@codevil/shared";
+import { applyToChatActivity, mapEventToChat, mapEventToActivity } from "@codevil/shared";
 import type { ProjectionContext } from "@codevil/shared";
 import type { DOToCLIEvent } from "@codevil/shared";
 
@@ -255,15 +255,15 @@ describe("mapEventToChat", () => {
   });
 });
 
-describe("projectEvent", () => {
+describe("applyToChatActivity", () => {
   it("coalesces streamed message updates into one thinking entry", () => {
     const ctx = makeCtx();
-    const first = projectEvent(
+    const first = applyToChatActivity(
       { messages: [], activityLog: [] },
       { type: "agent_event", event: { type: "message_update", content: "Analyzing " } },
       ctx,
     );
-    const second = projectEvent(
+    const second = applyToChatActivity(
       first,
       { type: "agent_event", event: { type: "message_update", content: "the repo." } },
       ctx,
@@ -277,7 +277,7 @@ describe("projectEvent", () => {
 
   it("coalesces Pi assistant text deltas into one thinking entry", () => {
     const ctx = makeCtx();
-    const first = projectEvent(
+    const first = applyToChatActivity(
       { messages: [], activityLog: [] },
       {
         type: "agent_event",
@@ -288,7 +288,7 @@ describe("projectEvent", () => {
       },
       ctx,
     );
-    const second = projectEvent(
+    const second = applyToChatActivity(
       first,
       {
         type: "agent_event",
@@ -305,7 +305,7 @@ describe("projectEvent", () => {
   });
 
   it("keeps markdown heading deltas out of durable conversation messages", () => {
-    const projected = projectEvent(
+    const projected = applyToChatActivity(
       { messages: [], activityLog: [] },
       {
         type: "agent_event",
@@ -326,7 +326,7 @@ describe("projectEvent", () => {
   });
 
   it("keeps agent_end final assistant text in activity only", () => {
-    const projected = projectEvent(
+    const projected = applyToChatActivity(
       { messages: [], activityLog: [] },
       {
         type: "agent_event",
@@ -345,7 +345,7 @@ describe("projectEvent", () => {
   });
 
   it("does not promote agent_end text when a plan message exists", () => {
-    const projected = projectEvent(
+    const projected = applyToChatActivity(
       {
         messages: [
           {
@@ -375,12 +375,12 @@ describe("projectEvent", () => {
 
   it("updates a running tool entry when the matching tool ends", () => {
     const ctx = makeCtx();
-    const started = projectEvent(
+    const started = applyToChatActivity(
       { messages: [], activityLog: [] },
       { type: "agent_event", event: { type: "tool_execution_start", tool: "bash", args: { command: "pnpm test" } } },
       ctx,
     );
-    const ended = projectEvent(
+    const ended = applyToChatActivity(
       started,
       { type: "agent_event", event: { type: "tool_execution_end", tool: "bash", args: { command: "pnpm test" }, result: "PASS", success: true } },
       ctx,
@@ -394,7 +394,7 @@ describe("projectEvent", () => {
 
   it("updates Pi tool events using toolCallId", () => {
     const ctx = makeCtx();
-    const started = projectEvent(
+    const started = applyToChatActivity(
       { messages: [], activityLog: [] },
       {
         type: "agent_event",
@@ -407,7 +407,7 @@ describe("projectEvent", () => {
       },
       ctx,
     );
-    const ended = projectEvent(
+    const ended = applyToChatActivity(
       started,
       {
         type: "agent_event",
@@ -429,7 +429,7 @@ describe("projectEvent", () => {
   });
 
   it("renders generic Pi lifecycle events in the activity pane", () => {
-    const projected = projectEvent(
+    const projected = applyToChatActivity(
       { messages: [], activityLog: [] },
       { type: "agent_event", event: { type: "agent_start" } },
       makeCtx(),

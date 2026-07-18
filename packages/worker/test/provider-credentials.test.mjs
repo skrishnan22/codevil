@@ -25,6 +25,9 @@ test("collectWorkerSecretValues includes every deployment credential used by wor
     GOOGLE_CLIENT_SECRET: "google-secret",
     CODEVIL_SETUP_TOKEN: "setup-secret",
     RESEND_API_KEY: "resend-secret",
+    CODEVIL_PROXY_SIGNING_SECRET: "proxy-signing-secret",
+    SLACK_BOT_TOKEN: "slack-bot-secret",
+    SLACK_SIGNING_SECRET: "slack-signing-secret",
   });
 
   assert.deepEqual(secrets, [
@@ -38,6 +41,9 @@ test("collectWorkerSecretValues includes every deployment credential used by wor
     "google-secret",
     "setup-secret",
     "resend-secret",
+    "proxy-signing-secret",
+    "slack-bot-secret",
+    "slack-signing-secret",
   ]);
 });
 

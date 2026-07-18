@@ -33,8 +33,4 @@ export function costFromSessionStats(session: AgentSession): CostInfo {
   };
 }
 
-export function emptySessionCostSnapshot(): SessionCostSnapshot {
-  return { inputTokens: 0, outputTokens: 0, costUsd: 0 };
-}
-
 export { zeroCost };

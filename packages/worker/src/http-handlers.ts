@@ -48,7 +48,7 @@ import {
 } from "./auth-redirect.js";
 import { configuredWebOrigins, missingAuthConfigKeys } from "./auth-config.js";
 import { createEmailProvider } from "./email.js";
-import { can, isRecord, type AuthAction, CreateInvitationRequestSchema, SetupClaimRequestSchema } from "@codevil/shared";
+import { can, type AuthAction, CreateInvitationRequestSchema, SetupClaimRequestSchema } from "@codevil/shared";
 import {
   getCodevilSandbox,
   readSandboxDiagnostics,

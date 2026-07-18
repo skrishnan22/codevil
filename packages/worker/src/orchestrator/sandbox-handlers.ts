@@ -170,6 +170,9 @@ export async function dispatchSandboxSocketMessage(
     case "agent_turn_complete":
       handleSandboxAgentTurnComplete(host, parsed.run_id, parsed.response, parsed.cost);
       return;
+    case "agent_turn_failed":
+      handleSandboxAgentTurnFailed(host, parsed.run_id, parsed.message);
+      return;
     case "create_pr_request":
       await handleCreatePullRequestRequest(host, ws, parsed);
       return;
@@ -457,6 +460,17 @@ export function handleSandboxAgentTurnComplete(
     cost,
   });
   completeActiveRun(host);
+}
+
+export function handleSandboxAgentTurnFailed(
+  host: OrchestratorHost,
+  runId: string,
+  message: string,
+): void {
+  if (!host.meta?.active_run || host.meta.state !== "executing") return;
+  if (host.meta.active_run.id !== runId) return;
+  cancelOpenQuestions(host, runId, "run failed");
+  failActiveRunAndReturnReady(host, message);
 }
 
 export function handleSandboxVerificationStarted(

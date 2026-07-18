@@ -30,15 +30,3 @@ export function checkAgentRunnableModel(providerId: string, modelId: string): bo
     return false;
   }
 }
-
-export function parseProviderModelRef(ref: string): { provider: string; modelId: string } {
-  const slash = ref.indexOf("/");
-  if (slash <= 0 || slash === ref.length - 1) {
-    throw new Error(`Expected provider/model, got: ${ref}`);
-  }
-
-  return {
-    provider: ref.slice(0, slash),
-    modelId: ref.slice(slash + 1),
-  };
-}

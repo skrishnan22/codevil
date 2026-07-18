@@ -102,6 +102,7 @@ export class PiAgentDriver implements AgentDriver {
   private providerConfig: ProviderPublicConfig | undefined;
   private latestAssistantText = "";
   private streamedAssistantText = "";
+  private activeTurnMessageStart: number | undefined;
 
   async start(options: AgentStartOptions): Promise<void> {
     const authStorage = AuthStorage.inMemory();
@@ -161,7 +162,7 @@ export class PiAgentDriver implements AgentDriver {
     session.subscribe((event) => {
       const delta = extractAssistantDeltaFromEvent(event);
       if (delta) this.streamedAssistantText += delta;
-      const text = extractAssistantTextFromEvent(event);
+      const text = extractAssistantTextFromEvent(event, this.activeTurnMessageStart ?? 0);
       if (text) this.latestAssistantText = text;
       options.onEvent(event);
     });
@@ -180,14 +181,36 @@ export class PiAgentDriver implements AgentDriver {
     const session = this.requireSession();
     this.latestAssistantText = "";
     this.streamedAssistantText = "";
+    const messageStart = session.messages.length;
+    this.activeTurnMessageStart = messageStart;
     const before = snapshotSessionCost(session);
-    await session.prompt(prompt);
-    await waitForQueuedAgentEvents(session);
-    const cost = costSinceSnapshot(before, snapshotSessionCost(session));
-    return {
-      response: this.latestAssistantText || latestAssistantText(session.messages) || this.streamedAssistantText.trim(),
-      cost,
-    };
+    try {
+      await session.prompt(prompt);
+      await waitForQueuedAgentEvents(session);
+      const freshMessages = session.messages.slice(messageStart);
+      const failure = latestAssistantFailure(freshMessages);
+      if (failure) {
+        throw new AgentTurnError({
+          stopReason: failure.stopReason,
+          errorMessage: failure.errorMessage,
+          newMessageCount: freshMessages.length,
+        });
+      }
+
+      const response = latestAssistantText(freshMessages)
+        || this.latestAssistantText
+        || this.streamedAssistantText.trim();
+      if (!response) {
+        throw new AgentTurnError({ newMessageCount: freshMessages.length });
+      }
+
+      return {
+        response,
+        cost: costSinceSnapshot(before, snapshotSessionCost(session)),
+      };
+    } finally {
+      this.activeTurnMessageStart = undefined;
+    }
   }
 
   async plan(prompt: string): Promise<PlanResult> {
@@ -326,11 +349,32 @@ async function createCodevilResourceLoader(
   return { agentDir, resourceLoader };
 }
 
-export function extractAssistantTextFromEvent(event: unknown): string {
+export class AgentTurnError extends Error {
+  readonly stopReason: string | undefined;
+  readonly errorMessage: string | undefined;
+  readonly newMessageCount: number;
+
+  constructor(options: { stopReason?: string; errorMessage?: string; newMessageCount: number }) {
+    const detail = options.errorMessage?.trim();
+    const reason = options.stopReason ? ` (${options.stopReason})` : "";
+    super(detail
+      ? `Agent turn failed${reason}: ${detail}`
+      : `Agent turn completed without a fresh assistant response${reason}.`);
+    this.name = "AgentTurnError";
+    this.stopReason = options.stopReason;
+    this.errorMessage = detail;
+    this.newMessageCount = options.newMessageCount;
+  }
+}
+
+export function extractAssistantTextFromEvent(event: unknown, messageStart = 0): string {
   if (!isRecord(event) || typeof event.type !== "string") return "";
 
   if (event.type === "agent_end" && Array.isArray(event.messages)) {
-    return latestAssistantText(event.messages);
+    const messages = messageStart > 0 && event.messages.length >= messageStart
+      ? event.messages.slice(messageStart)
+      : event.messages;
+    return latestAssistantText(messages);
   }
 
   if (
@@ -377,6 +421,22 @@ function latestAssistantText(messages: readonly unknown[]): string {
   }
 
   return "";
+}
+
+function latestAssistantFailure(
+  messages: readonly unknown[],
+): { stopReason: string; errorMessage?: string } | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (!isRecord(message) || message.role !== "assistant") continue;
+    const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+    if (stopReason !== "error" && stopReason !== "aborted") return undefined;
+    return {
+      stopReason,
+      ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}),
+    };
+  }
+  return undefined;
 }
 
 export function consolidationPrompt(input: ConsolidationInput): string {

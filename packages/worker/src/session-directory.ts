@@ -7,6 +7,7 @@ import {
   type SandboxState,
   type SessionSummary,
 } from "@codevil/shared";
+import type { SqlStatement } from "./sql.js";
 
 /** Legacy D1 guard columns retained for schema compatibility; cost enforcement removed in v1. */
 const LEGACY_DIRECTORY_MAX_COST = "";
@@ -43,11 +44,6 @@ export interface SessionDirectoryRow {
   created_at: string;
   updated_at: string;
   last_event_at: string;
-}
-
-export interface SqlStatement {
-  sql: string;
-  bindings: unknown[];
 }
 
 const DEFAULT_MAX_IDLE_TIME = "10m";

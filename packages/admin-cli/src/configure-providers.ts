@@ -5,11 +5,13 @@ import { validateProviderCredential } from "./provider-validation.js";
 import { parseNumericMultiSelect, type Prompt } from "./prompt.js";
 import { createTerminalPrompt } from "./prompt.js";
 import { createWranglerClient, type WranglerClient } from "./wrangler.js";
+import {
+  createConsoleOutput,
+  safeErrorMessage,
+  type Output,
+} from "./console-output.js";
 
-export interface Output {
-  log(message: string): void;
-  error(message: string): void;
-}
+export type { Output } from "./console-output.js";
 
 export type ProviderValidator = (
   provider: LLMProviderDefinition,
@@ -102,7 +104,7 @@ async function promptForProviderSelection(prompt: Prompt, output: Output): Promi
     try {
       return parseNumericMultiSelect(response, LLM_PROVIDERS.length);
     } catch (error) {
-      output.error(getSafeErrorMessage(error));
+      output.error(safeErrorMessage(error));
     }
   }
 }
@@ -164,19 +166,4 @@ async function validateSelection(
       output.error("Enter retry, skip, or no/cancel.");
     }
   }
-}
-
-function createConsoleOutput(): Output {
-  return {
-    log(message) {
-      console.log(message);
-    },
-    error(message) {
-      console.error(message);
-    },
-  };
-}
-
-function getSafeErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown error.";
 }

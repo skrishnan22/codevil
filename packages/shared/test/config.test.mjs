@@ -13,6 +13,8 @@ test("ConfigSchema validates a complete config file shape", () => {
     defaults: DEFAULT_CONFIG,
   });
   assert.equal(parsed.defaults.provider, "opencode-go");
+  assert.equal(parsed.defaults.plan_model, "deepseek-v4-flash");
+  assert.equal(parsed.defaults.exec_model, "deepseek-v4-flash");
 });
 
 test("ConfigSchema rejects invalid endpoints", () => {

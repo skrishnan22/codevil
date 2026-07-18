@@ -211,6 +211,36 @@ test("dispatchSandboxSocketMessage error during executing fails the active run a
   assert.equal(failed.message, "agent crashed");
 });
 
+test("dispatchSandboxSocketMessage maps agent_turn_failed to the matching run failure", async () => {
+  const active = createAgentRun({
+    actor,
+    text: "run task",
+    now: "2026-06-03T00:00:00.000Z",
+    id: "run_exec",
+  });
+  active.state = "executing";
+
+  const { host, broadcasts, transitions } = createFakeHost({
+    state: "executing",
+    active_run: active,
+  });
+  const { ws, sent } = createWsRecorder();
+
+  await dispatchSandboxSocketMessage(host, ws, JSON.stringify({
+    type: "agent_turn_failed",
+    run_id: "run_exec",
+    message: "provider request failed",
+  }));
+
+  assert.equal(sent.length, 0);
+  assert.equal(host.meta.state, "ready");
+  assert.ok(transitions.some((transition) => transition.to === "ready"));
+  assert.ok(!broadcasts.some((event) => event.type === "agent_response"));
+  const failed = broadcasts.find((event) => event.type === "agent_run_failed");
+  assert.equal(failed?.run_id, "run_exec");
+  assert.equal(failed?.message, "provider request failed");
+});
+
 test("dispatchSandboxSocketMessage error outside executing transitions session to failed", async () => {
   const { host, broadcasts, transitions } = createFakeHost({ state: "cloning_repo" });
   const { ws } = createWsRecorder();

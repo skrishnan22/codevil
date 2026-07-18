@@ -19,7 +19,7 @@ export interface OrchestratorHost {
 
   loadMeta(): void;
   saveMeta(): void;
-  appendAndBroadcast(event: DOToCLIEvent): void;
+  appendAndBroadcast(event: DOToCLIEvent): number | null;
   transition(to: SessionState): boolean;
   sendToSandbox(message: DOToSandboxMessage): void;
   trackCost(cost: CostInfo): void;

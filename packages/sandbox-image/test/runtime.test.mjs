@@ -9,7 +9,6 @@ import {
   SandboxRuntime,
   ShellCommandRunner,
   detectPreviewApps,
-  detectPreviewCommand,
   detectSetupCommand,
   detectVerificationCommand,
   parsePreviewDiscovery,
@@ -496,7 +495,7 @@ test("detectSetupCommand uses non-interactive npm install flags", async () => {
   }
 });
 
-test("detectPreviewCommand prefers Vite dev scripts and port 5173", async () => {
+test("detectPreviewApps prefers Vite dev scripts and port 5173", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-vite-"));
   try {
     await writeFile(join(workspace, "package.json"), JSON.stringify({
@@ -505,7 +504,11 @@ test("detectPreviewCommand prefers Vite dev scripts and port 5173", async () => 
     }));
     await writeFile(join(workspace, "pnpm-lock.yaml"), "");
 
-    assert.deepEqual(detectPreviewCommand(workspace), {
+    assert.deepEqual(detectPreviewApps(workspace)[0], {
+      key: ".",
+      name: workspace.split("/").at(-1),
+      cwd: workspace,
+      framework: "vite",
       command: "pnpm dev -- --host 0.0.0.0 --port 5173",
       port: 5173,
     });
@@ -606,7 +609,7 @@ test("detectPreviewApps uses the root package manager for workspace apps", async
   }
 });
 
-test("detectPreviewCommand remaps Next.js away from port 3000", async () => {
+test("detectPreviewApps remaps Next.js away from port 3000", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "codevil-preview-next-"));
   try {
     await writeFile(join(workspace, "package.json"), JSON.stringify({
@@ -614,10 +617,13 @@ test("detectPreviewCommand remaps Next.js away from port 3000", async () => {
       dependencies: { next: "^15.0.0" },
     }));
 
-    assert.deepEqual(detectPreviewCommand(workspace), {
+    assert.deepEqual(detectPreviewApps(workspace)[0], {
+      key: ".",
+      name: workspace.split("/").at(-1),
+      cwd: workspace,
+      framework: "next",
       command: "npm run dev -- --hostname 0.0.0.0 --port 3001",
       port: 3001,
-      readinessTimeoutMs: 120_000,
     });
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -1224,6 +1230,42 @@ test("agent_turn starts a coding Pi session, forwards events, and sends the fina
   ]);
 });
 
+test("agent_turn reports a run-scoped failure and starts a fresh agent for the next turn", async () => {
+  const sent = [];
+  const failedAgent = new FakeAgentDriver({ turn: new Error("provider request failed") });
+  const recoveredAgent = new FakeAgentDriver({
+    turn: { response: "fresh response", cost: zeroCost },
+  });
+  const agents = [failedAgent, recoveredAgent];
+  const runtime = new SandboxRuntime({
+    workspace: "/workspace",
+    send: (message) => sent.push(message),
+    agentFactory: () => agents.shift(),
+    git: new FakeGitDriver(),
+    credentialTimeoutMs: 0,
+  });
+
+  await runtime.handleMessage({ type: "init", repo: "https://github.com/example/app" });
+  await runtime.handleMessage({ type: "agent_turn", run_id: "run_failed", prompt: "first", model: "coder" });
+
+  assert.deepEqual(sent.at(-1), {
+    type: "agent_turn_failed",
+    run_id: "run_failed",
+    message: "provider request failed",
+  });
+  assert.equal(failedAgent.disposed, true);
+
+  await runtime.handleMessage({ type: "agent_turn", run_id: "run_recovered", prompt: "second", model: "coder" });
+
+  assert.ok(recoveredAgent.calls.some(([name]) => name === "start"));
+  assert.deepEqual(sent.at(-1), {
+    type: "agent_turn_complete",
+    run_id: "run_recovered",
+    response: "fresh response",
+    cost: zeroCost,
+  });
+});
+
 test("plan starts a coding Pi session with a run-bound question callback", async () => {
   const sent = [];
   const agent = new FakeAgentDriver({
@@ -1740,8 +1782,11 @@ class FakeAgentDriver {
   async turn(prompt) {
     this.calls.push(["turn", prompt]);
     this.onEvent?.({ type: "agent_start" });
-    if (Array.isArray(this.responses.turn)) return this.responses.turn.shift();
-    return this.responses.turn;
+    const response = Array.isArray(this.responses.turn)
+      ? this.responses.turn.shift()
+      : this.responses.turn;
+    if (response instanceof Error) throw response;
+    return response;
   }
 
   async refine(feedback) {

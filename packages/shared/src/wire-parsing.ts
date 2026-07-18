@@ -18,7 +18,7 @@ export interface ParseFailure {
 
 type ParseFailureSink = (failure: ParseFailure) => void;
 
-let failureSink: ParseFailureSink = (failure) => {
+const failureSink: ParseFailureSink = (failure) => {
   emitLog({
     severity: "ERROR",
     event: "parse_failure",
@@ -29,10 +29,6 @@ let failureSink: ParseFailureSink = (failure) => {
     },
   });
 };
-
-export function setParseFailureSink(next: ParseFailureSink): void {
-  failureSink = next;
-}
 
 /**
  * Parse a persisted or replayed DO→CLI event.

@@ -8,6 +8,7 @@ wrangler.operator.toml
 .env.production
 **/bin
 .superpowers/
+.worktrees/
 .agents/skills
 .claude/skills
 redesign

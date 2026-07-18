@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check:migrations": "node scripts/check-d1-migrations.mjs",
     "dev": "wrangler dev",
-    "deploy": "pnpm --filter @codevil/web run build && wrangler deploy",
+    "deploy": "pnpm --filter '@codevil/web...' run build && wrangler deploy",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "pnpm run build && node --test test/*.test.mjs"
@@ -13,11 +14,12 @@
   "dependencies": {
     "@cloudflare/sandbox": "^0.12.1",
     "@codevil/shared": "workspace:*",
-    "better-auth": "^1.6.14"
+    "better-auth": "^1.6.14",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260401.0",
+    "@cloudflare/workers-types": "^4.20260611.1",
     "typescript": "^5.8.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "~4.100.0"
   }
 }

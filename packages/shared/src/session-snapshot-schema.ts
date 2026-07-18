@@ -125,7 +125,6 @@ export const SessionSnapshotSchema = z.object({
 });
 
 export type ChatMessageRole = z.infer<typeof ChatMessageRoleSchema>;
-export type ChatMessageVariant = z.infer<typeof ChatMessageVariantSchema>;
 export type ChatMessageMeta = z.infer<typeof ChatMessageMetaSchema>;
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 export type ActivityEntry = z.infer<typeof ActivityEntrySchema>;

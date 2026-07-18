@@ -1,4 +1,9 @@
-import { configureProviders, type Output } from "./configure-providers.js";
+import { configureProviders } from "./configure-providers.js";
+import {
+  createConsoleOutput,
+  safeErrorMessage,
+  type Output,
+} from "./console-output.js";
 import {
   createTerminalPrompt,
   PromptCancelledError,
@@ -58,7 +63,7 @@ export async function runCli(
       return;
     }
 
-    output.error(getSafeErrorMessage(error));
+    output.error(safeErrorMessage(error));
     setExitCode(1);
   }
 }
@@ -68,21 +73,6 @@ function printHelp(output: Output) {
   output.log("Commands:");
   output.log("  providers    Configure provider credentials interactively");
   output.log("  --help, -h   Show this help message");
-}
-
-function createConsoleOutput(): Output {
-  return {
-    log(message) {
-      console.log(message);
-    },
-    error(message) {
-      console.error(message);
-    },
-  };
-}
-
-function getSafeErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unknown error.";
 }
 
 if (isDirectExecution()) {

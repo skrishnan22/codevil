@@ -70,7 +70,7 @@ export class SessionEventLog {
     );
   }
 
-  appendAndBroadcast(event: DOToCLIEvent): void {
+  appendAndBroadcast(event: DOToCLIEvent): number | null {
     const validated = DOToCLIEventSchema.safeParse(event);
     if (!validated.success) {
       this.getTracer()?.log("ERROR", "event.append.rejected", {
@@ -79,7 +79,7 @@ export class SessionEventLog {
         ),
         issues: validated.error.issues,
       });
-      return;
+      return null;
     }
 
     const redacted = redactEvent(validated.data, this.redactionSecrets);
@@ -127,6 +127,7 @@ export class SessionEventLog {
     } else {
       this.scheduleSnapshotPersist();
     }
+    return row.id;
   }
 
   persistSnapshot(): void {

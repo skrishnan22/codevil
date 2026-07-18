@@ -18,6 +18,7 @@ export interface Env extends WorkerSecretEnv {
   R2_SECRET_ACCESS_KEY?: string;
   BACKUP_BUCKET_NAME?: string;
   CODEVIL_PREVIEW_ORIGIN?: string;
+  SLACK_BOT_TOKEN?: string;
 }
 
 export interface InitOptions {

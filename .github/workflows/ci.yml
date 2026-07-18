@@ -61,6 +61,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -77,8 +78,15 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Generate production Wrangler config
+        run: pnpm --filter @codevil/worker exec node scripts/write-deployment-config.mjs
+
       - name: Check for pending D1 migrations
         run: pnpm --filter @codevil/worker run check:migrations
+        env:
+          CODEVIL_WRANGLER_CONFIG: .wrangler.deploy.toml
 
       - name: Deploy to Cloudflare
-        run: pnpm run deploy
+        run: |
+          pnpm --filter @codevil/web run build
+          pnpm --filter @codevil/worker exec wrangler deploy --config .wrangler.deploy.toml

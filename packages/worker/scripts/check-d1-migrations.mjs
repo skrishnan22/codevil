@@ -9,6 +9,7 @@ const D1_DATABASE_BINDING = "DB";
 const MIGRATION_CHECK_TIMEOUT_MS = 60_000;
 const APPLY_COMMAND =
   `pnpm --filter @codevil/worker exec wrangler d1 migrations apply ${D1_DATABASE_BINDING} --remote`;
+const DEPLOYMENT_CONFIG_ENV = "CODEVIL_WRANGLER_CONFIG";
 
 function stripAnsi(value) {
   return value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "");
@@ -120,17 +121,20 @@ export function runMigrationCheck({
   stderr = process.stderr,
 } = {}) {
   const workerDirectory = fileURLToPath(new URL("..", import.meta.url));
+  const configPath = env[DEPLOYMENT_CONFIG_ENV]?.trim();
+  const args = [
+    "exec",
+    "wrangler",
+    "d1",
+    "migrations",
+    "list",
+    D1_DATABASE_BINDING,
+    "--remote",
+    ...(configPath ? ["--config", configPath] : []),
+  ];
   const result = spawn(
     "pnpm",
-    [
-      "exec",
-      "wrangler",
-      "d1",
-      "migrations",
-      "list",
-      D1_DATABASE_BINDING,
-      "--remote",
-    ],
+    args,
     {
       cwd: workerDirectory,
       encoding: "utf8",

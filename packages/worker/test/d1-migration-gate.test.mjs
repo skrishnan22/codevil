@@ -121,6 +121,37 @@ test("queries the remote DB binding through the package Wrangler binary", () => 
   assert.deepEqual(stderr, []);
 });
 
+test("uses the generated deployment config when one is supplied", () => {
+  const calls = [];
+
+  const exitCode = runMigrationCheck({
+    env: {
+      CLOUDFLARE_API_TOKEN: "test-token",
+      CODEVIL_WRANGLER_CONFIG: ".wrangler.deploy.toml",
+    },
+    spawn(command, args) {
+      calls.push({ command, args });
+      return { status: 0, stdout: "✅ No migrations to apply!\n", stderr: "" };
+    },
+    writers: createRecorder(),
+    stdout: { write() {} },
+    stderr: { write() {} },
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls[0].args, [
+    "exec",
+    "wrangler",
+    "d1",
+    "migrations",
+    "list",
+    "DB",
+    "--remote",
+    "--config",
+    ".wrangler.deploy.toml",
+  ]);
+});
+
 test("reports a clear failure when the Wrangler migration check times out", () => {
   const recorder = createRecorder();
   const timeoutError = Object.assign(new Error("spawnSync pnpm ETIMEDOUT"), {

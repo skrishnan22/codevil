@@ -46,10 +46,42 @@ export async function notifyExternalConversation(
   const intent = externalNotificationIntent(input.event);
   if (!intent) return;
 
+  const log = (
+    severity: "DEBUG" | "INFO" | "WARN" | "ERROR",
+    event: string,
+    attributes: Record<string, unknown> = {},
+  ): void => {
+    workerLogForSession(input.sessionId, severity, event, {
+      cursor: input.cursor,
+      event_type: input.event.type,
+      ...attributes,
+    });
+  };
+
+  log("DEBUG", "external_notification.mapped", { intent_type: intent.type });
+
   try {
     const destination = await firstDestination(input.env.DB, input.sessionId);
-    if (!destination) return;
-    if (destination.provider !== "slack" || !input.env.SLACK_BOT_TOKEN) return;
+    if (!destination) {
+      log("DEBUG", "external_notification.skipped", { reason: "no_destination" });
+      return;
+    }
+    if (destination.provider !== "slack") {
+      log("DEBUG", "external_notification.skipped", {
+        reason: "unsupported_provider",
+        provider: destination.provider,
+      });
+      return;
+    }
+    if (!input.env.SLACK_BOT_TOKEN) {
+      log("WARN", "external_notification.skipped", {
+        reason: "missing_slack_bot_token",
+        provider: destination.provider,
+        channel_id: destination.external_channel_id,
+        thread_ts: destination.external_conversation_id,
+      });
+      return;
+    }
 
     const externalEventId = `outbound:${input.sessionId}:${input.cursor}`;
     const claimed = dedupeEventInsert(
@@ -62,7 +94,22 @@ export async function notifyExternalConversation(
       .prepare(claimed.sql)
       .bind(...claimed.bindings)
       .run();
-    if (Number(claim.meta.changes ?? 0) === 0) return;
+    if (Number(claim.meta.changes ?? 0) === 0) {
+      log("DEBUG", "external_notification.skipped", {
+        reason: "duplicate",
+        provider: destination.provider,
+        external_event_id: externalEventId,
+      });
+      return;
+    }
+
+    log("INFO", "external_notification.claimed", {
+      provider: destination.provider,
+      intent_type: intent.type,
+      external_event_id: externalEventId,
+      channel_id: destination.external_channel_id,
+      thread_ts: destination.external_conversation_id,
+    });
 
     const api = deps.slackApi ?? createSlackWebApi();
     const sleep = deps.sleep ?? sleepFor;

@@ -12,7 +12,7 @@ export type IntegrationQuestionAnswerResult =
     }
   | {
       ok: false;
-      status: "not_found" | "not_open" | "invalid_selection";
+      status: "not_found" | "not_open" | "invalid_selection" | "sandbox_unavailable";
       error: string;
     };
 
@@ -54,6 +54,13 @@ export function applyQuestionAnswer(
 
   const selection = validateSelection(question, input);
   if (!selection.ok) return selection;
+  if (host.ctx.getWebSockets("sandbox").length === 0) {
+    return {
+      ok: false,
+      status: "sandbox_unavailable",
+      error: "Sandbox is reconnecting. Please try again in a moment.",
+    };
+  }
 
   const now = new Date().toISOString();
   const answerJson = JSON.stringify({

@@ -66,9 +66,10 @@ test("single-choice questions use direct answer buttons", () => {
   const actions = message.blocks.find((block) => block.type === "actions");
   assert.deepEqual(actions.elements.map((element) => element.type), ["button", "button", "button"]);
   assert.deepEqual(actions.elements.slice(0, 2).map((element) => element.action_id), [
-    "codevil_question_answer",
-    "codevil_question_answer",
+    "codevil_question_answer_0",
+    "codevil_question_answer_1",
   ]);
+  assert.equal(new Set(actions.elements.map((element) => element.action_id)).size, actions.elements.length);
   assert.deepEqual(actions.elements.slice(0, 2).map((element) => JSON.parse(element.value)), [
     { v: 1, q: "question_1", i: 0 },
     { v: 1, q: "question_1", i: 1 },

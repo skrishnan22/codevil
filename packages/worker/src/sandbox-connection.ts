@@ -7,9 +7,11 @@ export type SandboxConnectionMode = "initialize" | "resume" | "reject";
 export function sandboxConnectionMode(
   state: SessionState,
   disconnectedAt: string | undefined,
+  attachedSandboxCount = 1,
 ): SandboxConnectionMode {
   if (state === "provisioning_sandbox") return "initialize";
   if (!isTerminalState(state) && disconnectedAt) return "resume";
+  if (state !== "ready" && !isTerminalState(state) && attachedSandboxCount === 0) return "resume";
   return "reject";
 }
 

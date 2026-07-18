@@ -129,6 +129,24 @@ test("Slack answer fails without consuming the question when the sandbox is unav
   assert.equal(state.sandboxMessages.length, 0);
 });
 
+test("Slack answer reports sandbox unavailability before selection validation", async () => {
+  const state = fixture(question(), { sandboxConnected: false });
+  const result = await answer(state.host, {
+    requestId: "question_1",
+    optionIndexes: [9],
+    actor: slackActor,
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    status: "sandbox_unavailable",
+    error: "Sandbox is reconnecting. Please try again in a moment.",
+  });
+  assert.equal(state.row.status, "open");
+  assert.equal(state.broadcasts.length, 0);
+  assert.equal(state.sandboxMessages.length, 0);
+});
+
 test("the first accepted answer wins and retries return persisted state", async () => {
   const state = fixture();
   const first = await answer(state.host, {

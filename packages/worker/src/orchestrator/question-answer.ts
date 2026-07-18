@@ -52,8 +52,6 @@ export function applyQuestionAnswer(
     return { ok: false, status: "not_open", error: "Question is no longer open" };
   }
 
-  const selection = validateSelection(question, input);
-  if (!selection.ok) return selection;
   if (host.ctx.getWebSockets("sandbox").length === 0) {
     return {
       ok: false,
@@ -61,6 +59,8 @@ export function applyQuestionAnswer(
       error: "Sandbox is reconnecting. Please try again in a moment.",
     };
   }
+  const selection = validateSelection(question, input);
+  if (!selection.ok) return selection;
 
   const now = new Date().toISOString();
   const answerJson = JSON.stringify({

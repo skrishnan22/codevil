@@ -65,6 +65,7 @@ export function parseSlackQuestionAction(payload: unknown): SlackQuestionAction 
   const parsed = SlackBlockActionSchema.safeParse(payload);
   if (!parsed.success) return null;
   const action = parsed.data.actions[0];
+  // Keep the bare action id for in-flight messages rendered before buttons were indexed.
   const isDirectAnswer = action.action_id === "codevil_question_answer"
     || action.action_id.startsWith("codevil_question_answer_");
   if (!isDirectAnswer && action.action_id !== "codevil_question_submit") {

@@ -16,13 +16,13 @@ pnpm exec wrangler login
 cp packages/worker/.env.example packages/worker/.env.production
 ```
 
-Set `GITHUB_PAT`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in `packages/worker/.env.production`. Generate independent random values for `CODEVIL_API_KEY`, `CODEVIL_SETUP_TOKEN`, and `BETTER_AUTH_SECRET` by running this command separately for each secret and pasting a different result each time:
+Set `GITHUB_PAT`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in `packages/worker/.env.production`. Generate independent random values for `CODEVIL_API_KEY`, `CODEVIL_SETUP_TOKEN`, `CODEVIL_PROXY_SIGNING_SECRET`, and `BETTER_AUTH_SECRET` by running this command separately for each secret and pasting a different result each time:
 
 ```sh
 openssl rand -hex 32
 ```
 
-Replace every `REPLACE_ME` placeholder before upload. Never upload the example placeholders unchanged. Once all six values are set, upload the file through Wrangler's existing bootstrap path:
+Replace every `REPLACE_ME` placeholder before upload. Never upload the example placeholders unchanged. Once all seven values are set, upload the file through Wrangler's existing bootstrap path:
 
 ```sh
 cd packages/worker
@@ -47,6 +47,8 @@ pnpm providers
 ```
 
 `pnpm providers` uses hidden TTY prompts and attempts to validate every selected provider credential before uploading it directly as a deployment-wide Cloudflare Worker secret. If validation is unavailable, the operator must explicitly retry, skip validation, or cancel. The command accepts no secret flags and can be rerun to add providers or rotate keys. Provider keys are not stored in D1 or project files.
+
+For the GitHub Actions production deploy, set the protected `production` environment variable `CODEVIL_WEB_ORIGIN` to the HTTPS origin serving the web UI (for this deployment, `https://codevil-ui.pages.dev`). The deployment fails closed if it is empty or malformed, preventing credentialed browser requests from silently receiving an unusable wildcard CORS response.
 
 In the Google OAuth client, add the deployed Worker origin as an authorized JavaScript origin and add `<worker-origin>/api/auth/callback/google` as an authorized redirect URI. Google OAuth is required even if GitHub is configured.
 

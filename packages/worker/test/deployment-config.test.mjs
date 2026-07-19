@@ -37,9 +37,12 @@ test("operator config and local variables are templates, not deployment credenti
   }
 });
 
-test("deployment overlay adds only a validated D1 id to the portable config", () => {
+test("deployment overlay adds a validated D1 id and explicit web origin", () => {
   const portable = [
     'name = "codevil"',
+    "",
+    "[vars]",
+    'CODEVIL_WEB_ORIGIN = "http://localhost:5173,http://localhost:8787"',
     "",
     "[[d1_databases]]",
     'binding = "DB"',
@@ -50,11 +53,30 @@ test("deployment overlay adds only a validated D1 id to the portable config", ()
   const overlay = buildDeploymentConfig(
     portable,
     "11111111-2222-4333-8444-555555555555",
+    "https://codevil-ui.pages.dev",
   );
 
   assert.match(overlay, /database_id = "11111111-2222-4333-8444-555555555555"/);
+  assert.match(overlay, /^CODEVIL_WEB_ORIGIN = "https:\/\/codevil-ui\.pages\.dev"$/m);
   assert.equal((overlay.match(/^database_id\s*=/gm) ?? []).length, 1);
   assert.doesNotMatch(overlay, /account_id\s*=/);
+});
+
+test("deployment overlay requires a valid production web origin", () => {
+  const portable = [
+    "[vars]",
+    'CODEVIL_WEB_ORIGIN = "http://localhost:5173,http://localhost:8787"',
+    "",
+    "[[d1_databases]]",
+    'binding = "DB"',
+    'database_name = "codevil"',
+    'migrations_dir = "migrations"',
+  ].join("\n");
+
+  assert.throws(
+    () => buildDeploymentConfig(portable, "11111111-2222-4333-8444-555555555555", "not a URL"),
+    /CODEVIL_WEB_ORIGIN/i,
+  );
 });
 
 test("deployment overlay rejects an unsafe D1 id", () => {
@@ -68,6 +90,7 @@ test("production CI generates and uses a D1 deployment overlay", async () => {
   const workflow = await readFile(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
 
   assert.match(workflow, /CLOUDFLARE_D1_DATABASE_ID: \$\{\{ secrets\.CLOUDFLARE_D1_DATABASE_ID \}\}/);
+  assert.match(workflow, /CODEVIL_WEB_ORIGIN: \$\{\{ vars\.CODEVIL_WEB_ORIGIN \}\}/);
   assert.match(workflow, /write-deployment-config\.mjs/);
   assert.match(workflow, /CODEVIL_WRANGLER_CONFIG: \.wrangler\.deploy\.toml/);
   assert.match(workflow, /wrangler deploy --config \.wrangler\.deploy\.toml/);

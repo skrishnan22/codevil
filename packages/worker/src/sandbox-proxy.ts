@@ -96,7 +96,7 @@ async function handleSandboxProxyRequest(request: Request, env: Env): Promise<Re
   if (git) {
     const [, sessionId, owner, repo, suffix = ""] = git;
     const claims = await verifyGitRequestToken(request, secret);
-    if (!claims || claims.sessionId !== sessionId) return proxyError("Unauthorized", 401);
+    if (!claims || claims.sessionId !== sessionId) return gitProxyUnauthorized();
     return proxyGit(request, env, claims, owner, repo, suffix);
   }
   return proxyError("Not found", 404);
@@ -112,7 +112,7 @@ async function proxyGit(request: Request, env: Env, claims: SandboxGitProxyClaim
   if (!isRepoPart(owner) || !isRepoPart(repo) || !isSafeGitSuffix(suffix)) return proxyError("Invalid Git repository path", 400);
   const operation = gitSmartHttpOperation(request, suffix);
   if (!operation) return proxyError("Git operation is not allowed", 400);
-  if (!gitCapabilityFromBasic(request.headers)) return proxyError("Unauthorized", 401);
+  if (!gitCapabilityFromBasic(request.headers)) return gitProxyUnauthorized();
   if (operation === "write" && `${owner}/${repo}` !== claims.primaryRepo) return proxyError("Git write is not authorized for this repository", 403);
   const pat = env.GITHUB_PAT?.trim();
   if (!pat) return proxyError("GitHub credentials are not configured", 503);
@@ -230,5 +230,11 @@ function appendSafeRelativePath(target: URL, suffix: string, search: string): UR
   upstream.pathname = `${target.pathname.replace(/\/$/, "")}/${parts.join("/")}`;
   upstream.search = search;
   return upstream;
+}
+function gitProxyUnauthorized(): Response {
+  return Response.json(
+    { error: "Unauthorized" },
+    { status: 401, headers: { "www-authenticate": 'Basic realm="Codevil sandbox Git proxy"' } },
+  );
 }
 function proxyError(error: string, status: number): Response { return Response.json({ error }, { status }); }

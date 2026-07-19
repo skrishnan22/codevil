@@ -145,6 +145,15 @@ test("Git proxy permits PAT-authenticated reads of any repository without exposi
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("Git proxy challenges unauthenticated smart-HTTP requests so Git can invoke its credential helper", async () => {
+  const response = await handleSandboxProxy(new Request(
+    "https://worker.test/sandbox-proxy/sessions/ses_s1/github/other/private.git/info/refs?service=git-upload-pack",
+  ), env);
+
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get("www-authenticate"), 'Basic realm="Codevil sandbox Git proxy"');
+});
+
 test("Git proxy canonicalizes the exact bare clone route to the .git upstream", async () => {
   const token = await createSandboxGitProxyToken(secret, { sessionId: "ses_s1", primaryRepo: "primary/app" });
   const cap = Buffer.from(`x-access-token:${token}`).toString("base64");

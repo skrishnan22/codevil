@@ -29,7 +29,8 @@ test("sandbox entrypoint and agent processes run as an unprivileged user", async
 
   assert.match(runtime, /groupadd --gid 10001 codevil/);
   assert.match(runtime, /useradd --uid 10001 --gid codevil --create-home codevil/);
-  assert.match(runtime, /chown -R codevil:codevil \/app \/workspace \/run\/secrets \/opt\/codevil/);
+  assert.match(runtime, /chown -R codevil:codevil \/app \/workspace \/opt\/codevil/);
+  assert.doesNotMatch(runtime, /\/run\/secrets/);
   assert.match(runtime, /USER codevil\s+WORKDIR \/workspace/);
   assert.doesNotMatch(runtime.slice(runtime.lastIndexOf("USER codevil")), /USER root/);
 });

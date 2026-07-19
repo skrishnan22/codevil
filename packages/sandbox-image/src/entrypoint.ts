@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-
 import WebSocket from "ws";
 
 import type { DOToSandboxMessage, SandboxToDOMessage } from "@codevil/shared";
@@ -30,27 +28,8 @@ export type { EntrypointEnv } from "@codevil/shared";
 // without ever receiving a real provider credential.
 const PROXY_CAPABILITY_REFRESH_MS = 10 * 60 * 1_000;
 
-function isNodeENOENT(error: unknown): boolean {
-  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
 function loadEnv(processEnv: Record<string, unknown>): EntrypointEnv {
-  const fromProcess = parseEntrypointEnv(processEnv);
-  if (fromProcess.CODEVIL_DO_WS_URL) return fromProcess;
-
-  try {
-    const raw = readFileSync("/run/secrets/env.json", "utf8");
-    const fileParsed = JSON.parse(raw) as Record<string, unknown>;
-    sandboxLogger().log("INFO", "sandbox.env.loaded", { source: "/run/secrets/env.json" });
-    return parseEntrypointEnv({ ...processEnv, ...fileParsed });
-  } catch (error) {
-    if (isNodeENOENT(error)) return fromProcess;
-    if (error instanceof Error && error.message.startsWith("Invalid sandbox env:")) throw error;
-    if (error instanceof SyntaxError) {
-      throw new Error("Invalid JSON in /run/secrets/env.json");
-    }
-    throw error;
-  }
+  return parseEntrypointEnv(processEnv);
 }
 
 export interface SandboxMessageRuntime {

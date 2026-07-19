@@ -132,6 +132,11 @@ export interface SandboxLogReader {
   getProcessLogs(processId: string): Promise<SandboxProcessLogs>;
 }
 
+export interface SandboxEnvironmentWriter {
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<unknown>;
+  writeFile(path: string, content: string): Promise<unknown>;
+}
+
 const DEFAULT_SANDBOX_RETRY_ATTEMPTS = 12;
 const DEFAULT_SANDBOX_RETRY_DELAY_MS = 2_000;
 const MAX_SANDBOX_RETRY_DELAY_MS = 15_000;
@@ -203,6 +208,16 @@ export function shouldDeferSandboxActivityExpiry(state: SandboxKeepAliveState | 
   return state?.active === true;
 }
 
+export async function writeSandboxProcessEnv(
+  sandbox: SandboxEnvironmentWriter,
+  env: Record<string, string>,
+): Promise<void> {
+  await retrySandboxOperation(async () => {
+    await sandbox.mkdir("/run/secrets", { recursive: true });
+    await sandbox.writeFile("/run/secrets/env.json", JSON.stringify(env));
+  });
+}
+
 export async function provisionSandbox(options: ProvisionSandboxOptions): Promise<void> {
   const { getSandbox } = await import("@cloudflare/sandbox");
   const sandbox = getCodevilSandbox(getSandbox, options.binding, options.sessionId);
@@ -211,10 +226,7 @@ export async function provisionSandbox(options: ProvisionSandboxOptions): Promis
   );
 
   const env = sandboxProcessEnv(options);
-  await retrySandboxOperation(() => sandbox.writeFile(
-    "/run/secrets/env.json",
-    JSON.stringify(env),
-  ));
+  await writeSandboxProcessEnv(sandbox, env);
 
   await options.beforeStart?.(sandbox);
 

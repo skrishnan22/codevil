@@ -16,6 +16,7 @@ import {
   setCodevilSandboxKeepAlive,
   shouldDeferSandboxActivityExpiry,
   stopDiagnostics,
+  writeSandboxProcessEnv,
 } from "../dist/sandbox.js";
 
 test("builds sandbox WebSocket URL from worker origin", () => {
@@ -52,6 +53,49 @@ test("sandbox process environment never receives the deployment API key or provi
   });
   assert.equal(env.CODEVIL_API_KEY, undefined);
   assert.doesNotMatch(JSON.stringify(env), /sk-ant-real-provider-key/);
+});
+
+test("creates the sandbox secret directory before writing its process environment", async () => {
+  const calls = [];
+  const sandbox = {
+    mkdir: async (path, options) => {
+      calls.push(["mkdir", path, options]);
+    },
+    writeFile: async (path, content) => {
+      calls.push(["writeFile", path, content]);
+    },
+  };
+
+  await writeSandboxProcessEnv(sandbox, { CODEVIL_PROVIDER: "anthropic" });
+
+  assert.deepEqual(calls, [
+    ["mkdir", "/run/secrets", { recursive: true }],
+    ["writeFile", "/run/secrets/env.json", '{"CODEVIL_PROVIDER":"anthropic"}'],
+  ]);
+});
+
+test("recreates the sandbox secret directory when a transient environment write is retried", async () => {
+  const calls = [];
+  let writes = 0;
+  const sandbox = {
+    mkdir: async (path, options) => {
+      calls.push(["mkdir", path, options]);
+    },
+    writeFile: async (path, content) => {
+      calls.push(["writeFile", path, content]);
+      writes += 1;
+      if (writes === 1) throw new Error("503 temporarily unavailable");
+    },
+  };
+
+  await writeSandboxProcessEnv(sandbox, { CODEVIL_PROVIDER: "anthropic" });
+
+  assert.deepEqual(calls.map(([operation]) => operation), [
+    "mkdir",
+    "writeFile",
+    "mkdir",
+    "writeFile",
+  ]);
 });
 
 test("sandbox process environment carries Cloudflare identifiers only in the allowlisted provider config payload", () => {

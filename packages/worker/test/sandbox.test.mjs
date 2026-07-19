@@ -8,6 +8,7 @@ import {
   collectSandboxDiagnostics,
   getCodevilSandbox,
   lifecycleErrorEvent,
+  provisionSandboxOnInstance,
   recordSandboxLifecycleEvent,
   redactSandboxKeepAliveState,
   retrySandboxOperation,
@@ -16,7 +17,6 @@ import {
   setCodevilSandboxKeepAlive,
   shouldDeferSandboxActivityExpiry,
   stopDiagnostics,
-  writeSandboxProcessEnv,
 } from "../dist/sandbox.js";
 
 test("builds sandbox WebSocket URL from worker origin", () => {
@@ -55,46 +55,41 @@ test("sandbox process environment never receives the deployment API key or provi
   assert.doesNotMatch(JSON.stringify(env), /sk-ant-real-provider-key/);
 });
 
-test("creates the sandbox secret directory before writing its process environment", async () => {
+test("provisions the agent with its environment directly and never uses the sandbox filesystem", async () => {
   const calls = [];
   const sandbox = {
-    mkdir: async (path, options) => {
-      calls.push(["mkdir", path, options]);
-    },
-    writeFile: async (path, content) => {
-      calls.push(["writeFile", path, content]);
-    },
+    setKeepAlive: async (active) => calls.push(["setKeepAlive", active]),
+    setCodevilKeepAlive: async (active, reason) => calls.push(["setCodevilKeepAlive", active, reason]),
+    mkdir: async () => assert.fail("provisioning must not create a secrets directory"),
+    writeFile: async () => assert.fail("provisioning must not write an environment file"),
+    startProcess: async (command, options) => calls.push(["startProcess", command, options]),
   };
 
-  await writeSandboxProcessEnv(sandbox, { CODEVIL_PROVIDER: "anthropic" });
+  await provisionSandboxOnInstance(sandbox, {
+    sessionId: "ses_123",
+    wsUrl: "wss://codevil.example.com/sessions/ses_123/sandbox/ws",
+    wsToken: "session-bound-ws-capability",
+    provider: "anthropic",
+    proxyBase: "https://codevil.example.com",
+    proxyTokens: { "anthropic-messages": "proxy-capability" },
+  });
 
   assert.deepEqual(calls, [
-    ["mkdir", "/run/secrets", { recursive: true }],
-    ["writeFile", "/run/secrets/env.json", '{"CODEVIL_PROVIDER":"anthropic"}'],
-  ]);
-});
-
-test("recreates the sandbox secret directory when a transient environment write is retried", async () => {
-  const calls = [];
-  let writes = 0;
-  const sandbox = {
-    mkdir: async (path, options) => {
-      calls.push(["mkdir", path, options]);
-    },
-    writeFile: async (path, content) => {
-      calls.push(["writeFile", path, content]);
-      writes += 1;
-      if (writes === 1) throw new Error("503 temporarily unavailable");
-    },
-  };
-
-  await writeSandboxProcessEnv(sandbox, { CODEVIL_PROVIDER: "anthropic" });
-
-  assert.deepEqual(calls.map(([operation]) => operation), [
-    "mkdir",
-    "writeFile",
-    "mkdir",
-    "writeFile",
+    ["setKeepAlive", true],
+    ["setCodevilKeepAlive", true, "session provisioning"],
+    ["startProcess", "node /app/packages/sandbox-image/dist/index.js", {
+      cwd: "/workspace",
+      env: {
+        CODEVIL_DO_WS_URL: "wss://codevil.example.com/sessions/ses_123/sandbox/ws",
+        CODEVIL_SANDBOX_WS_TOKEN: "session-bound-ws-capability",
+        CODEVIL_WORKSPACE: "/workspace",
+        CODEVIL_PROVIDER: "anthropic",
+        CODEVIL_PROXY_BASE: "https://codevil.example.com",
+        CODEVIL_PROXY_TOKENS: '{"anthropic-messages":"proxy-capability"}',
+      },
+      processId: "codevil-agent",
+      autoCleanup: true,
+    }],
   ]);
 });
 

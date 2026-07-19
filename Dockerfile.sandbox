@@ -47,8 +47,8 @@ COPY packages/sandbox-image/skills /opt/codevil/pi-agent/skills
 
 RUN groupadd --gid 10001 codevil \
   && useradd --uid 10001 --gid codevil --create-home codevil \
-  && mkdir -p /workspace /run/secrets \
-  && chown -R codevil:codevil /app /workspace /run/secrets /opt/codevil
+  && mkdir -p /workspace \
+  && chown -R codevil:codevil /app /workspace /opt/codevil
 
 USER codevil
 WORKDIR /workspace

@@ -62,6 +62,7 @@ test("LLM proxy preserves the provider base path, strips capability headers, and
     assert.equal(response.status, 200);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://api.openai.com/v1/responses?stream=true");
+    assert.equal(calls[0].init.redirect, "manual");
     assert.equal(calls[0].init.headers.get("authorization"), "Bearer real-provider-key");
     assert.equal(calls[0].init.headers.get("x-codevil-proxy-target"), null);
     assert.equal(calls[0].init.headers.get("x-codevil-proxy-token"), null);
@@ -140,6 +141,7 @@ test("Git proxy permits PAT-authenticated reads of any repository without exposi
     }), env);
     assert.equal(response.status, 200);
     assert.equal(calls[0].url, "https://github.com/other/private.git/info/refs?service=git-upload-pack");
+    assert.equal(calls[0].init.redirect, "manual");
     assert.equal(calls[0].init.headers.get("authorization"), `Basic ${Buffer.from("x-access-token:real-github-pat").toString("base64")}`);
     assert.equal(JSON.stringify(calls[0]).includes(token), false);
   } finally { globalThis.fetch = originalFetch; }
@@ -259,5 +261,56 @@ test("Git proxy exposes only the smart-HTTP read and primary-repository write en
     const receiveAdvertisement = await handleSandboxProxy(new Request("https://worker.test/sandbox-proxy/sessions/ses_s1/github/primary/app.git/info/refs?service=git-receive-pack", { headers }), env);
     assert.equal(receiveAdvertisement.status, 200);
     assert.equal(calls.length, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("proxy rejects upstream redirects without exposing their location", async () => {
+  const token = await createSandboxProxyToken(secret, { sessionId: "ses_s1", provider: "openai", api: "openai-responses" });
+  const telemetry = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, {
+    status: 302,
+    headers: { location: "https://redirect.test/credential-capture" },
+  });
+  try {
+    const response = await handleSandboxProxy(new Request("https://worker.test/sandbox-proxy/sessions/ses_s1/llm/openai/openai-responses/responses", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "x-codevil-proxy-target": "https://api.openai.com/v1" },
+    }), env, (event) => telemetry.push(event));
+
+    assert.equal(response.status, 502);
+    assert.equal(response.headers.get("location"), null);
+    assert.deepEqual(await response.json(), { error: "Upstream redirect is not allowed" });
+    assert.deepEqual(telemetry.map(({ durationMs, ...event }) => event), [{
+      kind: "llm",
+      provider: "openai",
+      api: "openai-responses",
+      outcome: "failed",
+      status: 502,
+      statusClass: "5xx",
+    }]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("proxy normalizes upstream fetch failures and still emits failure telemetry", async () => {
+  const token = await createSandboxGitProxyToken(secret, { sessionId: "ses_s1", primaryRepo: "primary/app" });
+  const cap = Buffer.from(`x-access-token:${token}`).toString("base64");
+  const telemetry = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError("fetch failed: secret transport detail"); };
+  try {
+    const response = await handleSandboxProxy(new Request("https://worker.test/sandbox-proxy/sessions/ses_s1/github/other/private.git/info/refs?service=git-upload-pack", {
+      headers: { authorization: `Basic ${cap}` },
+    }), env, (event) => telemetry.push(event));
+
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "Upstream request failed" });
+    assert.deepEqual(telemetry.map(({ durationMs, ...event }) => event), [{
+      kind: "git",
+      operation: "read",
+      outcome: "failed",
+      status: 502,
+      statusClass: "5xx",
+    }]);
   } finally { globalThis.fetch = originalFetch; }
 });

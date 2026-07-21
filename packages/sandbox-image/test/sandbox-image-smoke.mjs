@@ -4,6 +4,7 @@ const image = process.env.CODEVIL_SANDBOX_IMAGE ?? "codevil-sandbox:ci";
 const script = [
   'const fs = require("node:fs")',
   'if (process.getuid?.() !== 10001) throw new Error(`expected uid 10001, got ${process.getuid?.()}`)',
+  'if (process.env.HOME !== "/home/codevil") throw new Error(`unexpected HOME ${process.env.HOME}`)',
   'fs.writeFileSync("/workspace/.codevil-smoke", "workspace-ok")',
   'if (fs.readFileSync("/workspace/.codevil-smoke", "utf8") !== "workspace-ok") throw new Error("workspace IO failed")',
   'const http = require("node:http")',
@@ -19,5 +20,10 @@ const script = [
 ].join(";");
 
 execFileSync("docker", [
-  "run", "--rm", "--entrypoint", "node", image, "-e", script,
+  "run", "--rm",
+  "--env", "HOME=/home/codevil",
+  "--env", "USER=codevil",
+  "--env", "LOGNAME=codevil",
+  "--entrypoint", "setpriv", image,
+  "--reuid=10001", "--regid=10001", "--clear-groups", "--", "node", "-e", script,
 ], { stdio: "inherit", timeout: 60_000 });

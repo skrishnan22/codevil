@@ -120,7 +120,7 @@ async function proxyGit(request: Request, env: Env, claims: SandboxGitProxyClaim
   upstream.search = new URL(request.url).search;
   const headers = cleanedHeaders(request.headers);
   headers.set("authorization", `Basic ${btoa(`x-access-token:${pat}`)}`);
-  return fetch(upstream, { method: request.method, headers, body: request.body, redirect: "error" });
+  return fetchUpstream(upstream, { method: request.method, headers, body: request.body });
 }
 
 async function proxyLlm(request: Request, env: Env, claims: SandboxProxyClaims, provider: string, api: ProviderApi, suffix: string): Promise<Response> {
@@ -138,7 +138,24 @@ async function proxyLlm(request: Request, env: Env, claims: SandboxProxyClaims, 
   if (upstream.origin !== targetUrl.origin) return proxyError("Provider request path is not allowed", 400);
   const headers = cleanedHeaders(request.headers);
   headers.set(policy.header, `${policy.prefix}${key}`);
-  return fetch(upstream, { method: request.method, headers, body: request.body, redirect: "error" });
+  return fetchUpstream(upstream, { method: request.method, headers, body: request.body });
+}
+
+/**
+ * Cloudflare Workers supports only `follow` and `manual` for subrequest
+ * redirects. Keep redirect handling in one place so every credentialed proxy
+ * uses the runtime-compatible setting and retains our fail-closed policy.
+ */
+async function fetchUpstream(input: URL, init: RequestInit): Promise<Response> {
+  try {
+    const response = await fetch(input, { ...init, redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      return proxyError("Upstream redirect is not allowed", 502);
+    }
+    return response;
+  } catch {
+    return proxyError("Upstream request failed", 502);
+  }
 }
 
 async function verifyRequestToken(request: Request, secret: string, kind: "llm"): Promise<SandboxProxyClaims | undefined> {

@@ -34,6 +34,9 @@ test("builds sandbox process env with only short-lived per-Pi-API proxy capabili
     proxyBase: "https://codevil.example.com",
     proxyTokens: { "anthropic-messages": "sandbox-capability" },
   }), {
+    HOME: "/home/codevil",
+    USER: "codevil",
+    LOGNAME: "codevil",
     CODEVIL_DO_WS_URL: "wss://codevil.example.com/sessions/ses_123/sandbox/ws",
     CODEVIL_SANDBOX_WS_TOKEN: "sandbox-ws-capability",
     CODEVIL_WORKSPACE: "/workspace",
@@ -55,7 +58,7 @@ test("sandbox process environment never receives the deployment API key or provi
   assert.doesNotMatch(JSON.stringify(env), /sk-ant-real-provider-key/);
 });
 
-test("provisions the agent with its environment directly and never uses the sandbox filesystem", async () => {
+test("provisions the agent as uid 10001 with its environment directly and never uses the sandbox filesystem", async () => {
   const calls = [];
   const sandbox = {
     setKeepAlive: async (active) => calls.push(["setKeepAlive", active]),
@@ -77,9 +80,12 @@ test("provisions the agent with its environment directly and never uses the sand
   assert.deepEqual(calls, [
     ["setKeepAlive", true],
     ["setCodevilKeepAlive", true, "session provisioning"],
-    ["startProcess", "node /app/packages/sandbox-image/dist/index.js", {
+    ["startProcess", "exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js", {
       cwd: "/workspace",
       env: {
+        HOME: "/home/codevil",
+        USER: "codevil",
+        LOGNAME: "codevil",
         CODEVIL_DO_WS_URL: "wss://codevil.example.com/sessions/ses_123/sandbox/ws",
         CODEVIL_SANDBOX_WS_TOKEN: "session-bound-ws-capability",
         CODEVIL_WORKSPACE: "/workspace",

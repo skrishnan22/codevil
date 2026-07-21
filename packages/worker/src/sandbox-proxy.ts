@@ -185,9 +185,24 @@ function safeHttpsUrl(value: string): URL | undefined {
 }
 function cleanedHeaders(source: Headers): Headers {
   const headers = new Headers(source);
-  for (const key of ["authorization", "x-api-key", "x-goog-api-key", "cf-aig-authorization", PROXY_TARGET_HEADER, "host", "content-length"]) headers.delete(key);
+  // `Connection` can name additional per-connection headers. Remove those
+  // dynamically so a client cannot smuggle a future hop-by-hop header through
+  // this proxy; only delete syntactically valid names to keep malformed input
+  // from turning sanitization itself into a failed request.
+  for (const name of source.get("connection")?.split(",") ?? []) {
+    const header = name.trim().toLowerCase();
+    if (/^[a-z0-9!#$%&'*+.^_|~-]+$/.test(header)) headers.delete(header);
+  }
+  // A Worker subrequest cannot forward client transport headers or Cloudflare
+  // control headers. Git sends `connection: keep-alive`, so leaving these in
+  // turns an otherwise valid smart-HTTP request into a thrown Worker fetch.
+  for (const key of [
+    "authorization", "x-api-key", "x-goog-api-key", "cf-aig-authorization", PROXY_TARGET_HEADER,
+    "host", "content-length", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection",
+    "te", "trailer", "transfer-encoding", "upgrade", "cache-control", "origin", "range", "x-forwarded-for",
+  ]) headers.delete(key);
   for (const key of [...headers.keys()]) {
-    if (key.startsWith("x-codevil-")) headers.delete(key);
+    if (key.startsWith("x-codevil-") || key.startsWith("cf-") || key.startsWith("cf_")) headers.delete(key);
   }
   return headers;
 }

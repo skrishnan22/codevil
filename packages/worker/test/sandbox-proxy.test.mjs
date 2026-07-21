@@ -145,6 +145,36 @@ test("Git proxy permits PAT-authenticated reads of any repository without exposi
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("Git proxy drops client control headers before its GitHub subrequest", async () => {
+  const token = await createSandboxGitProxyToken(secret, { sessionId: "ses_s1", primaryRepo: "primary/app" });
+  const cap = Buffer.from(`x-access-token:${token}`).toString("base64");
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input, init) => { calls.push({ url: String(input), init }); return new Response("pack"); };
+  try {
+    const response = await handleSandboxProxy(new Request("https://worker.test/sandbox-proxy/sessions/ses_s1/github/other/private.git/info/refs?service=git-upload-pack", {
+      headers: {
+        authorization: `Basic ${cap}`,
+        connection: "keep-alive, x-hop-test, ()",
+        "x-hop-test": "remove-me",
+        "cache-control": "no-cache",
+        origin: "https://sandbox.test",
+        range: "bytes=0-10",
+        "x-forwarded-for": "192.0.2.1",
+        "cf-connecting-ip": "192.0.2.1",
+        "cf-ipcountry": "IN",
+        "git-protocol": "version=2",
+      },
+    }), env);
+
+    assert.equal(response.status, 200);
+    for (const header of ["connection", "x-hop-test", "cache-control", "origin", "range", "x-forwarded-for", "cf-connecting-ip", "cf-ipcountry"]) {
+      assert.equal(calls[0].init.headers.get(header), null, header);
+    }
+    assert.equal(calls[0].init.headers.get("git-protocol"), "version=2");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Git proxy challenges unauthenticated smart-HTTP requests so Git can invoke its credential helper", async () => {
   const response = await handleSandboxProxy(new Request(
     "https://worker.test/sandbox-proxy/sessions/ses_s1/github/other/private.git/info/refs?service=git-upload-pack",

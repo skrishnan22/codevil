@@ -21,7 +21,8 @@ test("sandbox runtime preserves Cloudflare backup support and Node development t
   assert.match(runtime, /\butil-linux\b/);
   assert.match(runtime, /npm install -g pnpm@10\.28\.1/);
   assert.doesNotMatch(runtime, /npm install -g bun@/);
-  for (const command of ["node --version", "git --version", "bun --version", "setpriv --version"]) {
+  assert.match(runtime, /major < 22 \|\| \(major === 22 && minor < 19\)/);
+  for (const command of ["git --version", "bun --version", "setpriv --version"]) {
     assert.match(runtime, new RegExp(command));
   }
 });

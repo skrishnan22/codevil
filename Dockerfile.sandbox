@@ -35,7 +35,7 @@ RUN apt-get update \
     util-linux \
   && rm -rf /var/lib/apt/lists/* \
   && npm install -g pnpm@10.28.1 \
-  && node --version \
+  && node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 19)) throw new Error(`Node ${process.versions.node} does not satisfy >=22.19`); console.log(process.version)' \
   && git --version \
   && bun --version \
   && setpriv --version

@@ -145,6 +145,9 @@ export function buildSandboxWebSocketUrl(workerUrl: string, sessionId: string): 
 
 export function sandboxProcessEnv(options: SandboxProcessEnvOptions): Record<string, string> {
   return {
+    HOME: "/home/codevil",
+    USER: "codevil",
+    LOGNAME: "codevil",
     CODEVIL_DO_WS_URL: options.wsUrl,
     CODEVIL_SANDBOX_WS_TOKEN: options.wsToken,
     CODEVIL_WORKSPACE: "/workspace",
@@ -222,7 +225,7 @@ export async function provisionSandboxOnInstance(
   await options.beforeStart?.(sandbox);
 
   await retrySandboxOperation(() => sandbox.startProcess(
-    "node /app/packages/sandbox-image/dist/index.js",
+    "exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js",
     {
       cwd: "/workspace",
       env,

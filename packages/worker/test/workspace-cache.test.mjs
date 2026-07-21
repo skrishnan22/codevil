@@ -8,8 +8,8 @@ import {
   normalizeRepoCacheKey,
 } from "../dist/workspace-cache.js";
 
-test("workspace cache version changes when installed dependencies become snapshot artifacts", () => {
-  assert.equal(WORKSPACE_CACHE_VERSION, "workspace-cache-v2");
+test("workspace cache version changes for the supported runtime and ownership boundary", () => {
+  assert.equal(WORKSPACE_CACHE_VERSION, "workspace-cache-v3");
 });
 
 test("normalizeRepoCacheKey removes credentials and unstable URL suffixes", () => {

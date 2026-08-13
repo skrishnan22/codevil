@@ -118,3 +118,31 @@ test("fresh session hydration tolerates a missing snapshot checkpoint", () => {
 
   assert.doesNotThrow(() => log.hydrateFromSql());
 });
+
+test("persisted snapshot hydration accepts legacy numeric-string cost fields", () => {
+  const sql = createEventSql();
+  const log = createLog(sql);
+  log.snapshot = {
+    ...log.snapshot,
+    cursor: 1,
+    messages: [{
+      id: "msg_1_0",
+      role: "assistant",
+      variant: "plan",
+      content: "Plan",
+      timestamp: 1,
+      meta: { cost: { input_tokens: "10", output_tokens: "20", total_cost_usd: "0.01" } },
+    }],
+  };
+  log.snapshotCursor = 1;
+  log.persistSnapshot();
+
+  const hydrated = createLog(sql);
+  hydrated.hydrateFromSql();
+
+  assert.deepEqual(hydrated.getSnapshot().messages[0].meta.cost, {
+    input_tokens: 10,
+    output_tokens: 20,
+    total_cost_usd: 0.01,
+  });
+});

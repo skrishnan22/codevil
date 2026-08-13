@@ -1,11 +1,58 @@
 import type { ExternalNotificationIntent } from "../notification-intents.js";
 import type { SlackMessageContent } from "./client.js";
 import type { QuestionOption } from "@codevil/shared";
+import type { ExternalRunPresentation } from "../external-run-presentation.js";
+import { validPullRequestUrl } from "../external-run-presentation.js";
 
 const MAX_EXTERNAL_TEXT_LENGTH = 500;
 const MAX_SLACK_MARKDOWN_CHARS = 11_500;
 const MAX_SLACK_ACTION_VALUE_LENGTH = 2_000;
 const MAX_SLACK_OPTION_TEXT_LENGTH = 75;
+
+export function renderSlackRunCard(
+  presentation: ExternalRunPresentation,
+  sessionUrl: string,
+  revision: number,
+): SlackMessageContent {
+  const details = [
+    `Phase: ${presentation.phase}`,
+    presentation.waitingFor ? `Waiting for ${presentation.waitingFor}.` : undefined,
+    presentation.summary,
+    ...presentation.actions.map((action) => `${action.status === "complete" ? "✓" : action.status === "error" ? "!" : "•"} ${action.label}`),
+  ].filter((line): line is string => Boolean(line));
+  const sources: Array<Record<string, unknown>> = [
+    { type: "url", url: sessionUrl, text: "Open session" },
+  ];
+  const prUrl = presentation.prUrl ? validPullRequestUrl(presentation.prUrl) : undefined;
+  if (prUrl) sources.push({ type: "url", url: prUrl, text: "View pull request" });
+
+  const block = {
+    type: "task_card",
+    task_id: `codevil_${presentation.runId}`.slice(0, 255),
+    title: presentation.title.slice(0, 120),
+    status: presentation.status,
+    block_id: `codevil_run_${presentation.runId}_${revision}`.slice(0, 255),
+    details: richText(details),
+    ...(presentation.status === "complete" || presentation.status === "error"
+      ? { output: richText([presentation.summary ?? (presentation.status === "complete" ? "Completed successfully." : "The Agent Run failed.")]) }
+      : {}),
+    sources,
+  };
+  return {
+    text: `Codevil: ${presentation.title} — ${presentation.status === "in_progress" ? presentation.phase : presentation.summary ?? presentation.status}. Open session: ${sessionUrl}`.slice(0, MAX_EXTERNAL_TEXT_LENGTH),
+    blocks: [block],
+  };
+}
+
+function richText(lines: string[]): Record<string, unknown> {
+  return {
+    type: "rich_text",
+    elements: [{
+      type: "rich_text_section",
+      elements: lines.map((text) => ({ type: "text", text })),
+    }],
+  };
+}
 
 export function renderSlackNotification(
   intent: ExternalNotificationIntent,

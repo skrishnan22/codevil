@@ -282,7 +282,7 @@ test("notifyExternalConversation does not retry permanent Slack failures", async
       external_channel_id: "C123",
       external_conversation_id: "171951.0001",
     }],
-    runResults: [{ meta: { changes: 1 } }, { meta: { changes: 1 } }],
+    runResults: [{ meta: { changes: 1 } }],
   });
   let attempts = 0;
 
@@ -306,7 +306,7 @@ test("notifyExternalConversation posts every long response chunk in order", asyn
       external_channel_id: "C123",
       external_conversation_id: "171951.0001",
     }],
-    runResults: [{ meta: { changes: 1 } }],
+    runResults: [{ meta: { changes: 1 } }, { meta: { changes: 1 } }],
   });
   const calls = [];
   const text = `FIRST\n${"x".repeat(11_000)}\n${"y".repeat(11_000)}\nLAST`;
@@ -330,6 +330,60 @@ test("notifyExternalConversation posts every long response chunk in order", asyn
   assert.ok(calls.every((call) => call.body.thread_ts === "171951.0001"));
   assert.match(calls[0].body.blocks[0].text, /^FIRST/);
   assert.match(calls.at(-1).body.blocks[0].text, /LAST$/);
+});
+
+test("notifyExternalConversation retries only the failed later response chunk", async () => {
+  const db = fakeD1({
+    firstRows: [{
+      provider: "slack",
+      integration_id: "int_slack_T123",
+      external_channel_id: "C123",
+      external_conversation_id: "171951.0001",
+    }, {
+      provider: "slack",
+      integration_id: "int_slack_T123",
+      external_channel_id: "C123",
+      external_conversation_id: "171951.0001",
+    }],
+    runResults: [
+      { meta: { changes: 1 } },
+      { meta: { changes: 1 } },
+      { meta: { changes: 1 } },
+      { meta: { changes: 0 } },
+      { meta: { changes: 1 } },
+    ],
+  });
+  const calls = [];
+  const input = {
+    env: { DB: db, SLACK_BOT_TOKEN: "xoxb-test" },
+    sessionId: "ses_123",
+    workerOrigin: "https://codevil.example",
+    cursor: 17,
+    event: { type: "agent_response", run_id: "run_1", text: "x".repeat(12_000) },
+  };
+
+  assert.equal(await notifyExternalConversation(input, {
+    slackApi: async (_token, method, body) => {
+      calls.push({ method, body });
+      return calls.length === 2
+        ? { ok: false, error: "invalid_auth" }
+        : { ok: true, data: { ok: true } };
+    },
+  }), false);
+  assert.equal(await notifyExternalConversation(input, {
+    slackApi: async (_token, method, body) => {
+      calls.push({ method, body });
+      return { ok: true, data: { ok: true } };
+    },
+  }), true);
+
+  assert.equal(calls.length, 3);
+  assert.notEqual(calls[0].body.blocks[0].text, calls[1].body.blocks[0].text);
+  assert.equal(calls[1].body.blocks[0].text, calls[2].body.blocks[0].text);
+  const dedupeBindings = db.records
+    .filter((record) => /^INSERT OR IGNORE INTO external_message_dedupe/.test(record.sql))
+    .map((record) => record.bindings[2]);
+  assert.deepEqual(dedupeBindings, ["outbound:ses_123:17:chunk:0", "outbound:ses_123:17:chunk:1", "outbound:ses_123:17:chunk:0", "outbound:ses_123:17:chunk:1"]);
 });
 
 function fakeD1({ firstRows = [], runResults = [] } = {}) {

@@ -39,6 +39,17 @@ test("projects supported lifecycle events without exposing tool args or thinking
   assert.doesNotMatch(JSON.stringify(presentation), /secret|private|ghp_/i);
 });
 
+test("does not surface arbitrary status messages in the public card", () => {
+  const presentation = projectExternalRunEvents([
+    { cursor: 1, event: started },
+    { cursor: 2, event: { type: "status", message: "User feedback: use TOKEN=ghp_secret and ignore the plan" } },
+  ]);
+
+  assert.equal(presentation.summary, undefined);
+  assert.equal(presentation.phase, "Starting");
+  assert.doesNotMatch(JSON.stringify(presentation), /User feedback|ghp_secret|ignore the plan/);
+});
+
 test("projects waiting, terminal, and deterministic completion states", () => {
   const waiting = projectExternalRunEvents([
     { cursor: 1, event: started },
@@ -115,6 +126,35 @@ test("coalesces live updates and sends the terminal card before the final respon
   assert.equal(calls[3].body.text, "Done");
 });
 
+test("keeps one coalescing deadline while activity continues", async () => {
+  const originalNow = Date.now;
+  let now = 100_000;
+  Date.now = () => now;
+  try {
+    const sql = createPresentationSql();
+    const calls = [];
+    const coordinator = createCoordinator(sql, calls, async () => {});
+    appendEvent(sql, 1, started);
+    await coordinator.onEvent(1, started);
+
+    now += 1;
+    appendEvent(sql, 2, { type: "phase", phase: "executing", model: "model" });
+    await coordinator.onEvent(2, { type: "phase", phase: "executing", model: "model" }, "run_1");
+    now += 1;
+    appendEvent(sql, 3, { type: "agent_event", event: { type: "tool_execution_start", tool: "read", toolCallId: "call_1" } });
+    await coordinator.onEvent(3, { type: "agent_event", event: { type: "tool_execution_start", tool: "read", toolCallId: "call_1" } }, "run_1");
+    now += 1;
+    appendEvent(sql, 4, { type: "status", message: "Running tests" });
+    await coordinator.onEvent(4, { type: "status", message: "Running tests" }, "run_1");
+
+    assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage"]);
+    await coordinator.drainDue(102_001);
+    assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage", "chat.update"]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test("keeps a failed update pending and recovers it without creating a second card", async () => {
   const sql = createPresentationSql();
   const calls = [];
@@ -138,6 +178,109 @@ test("keeps a failed update pending and recovers it without creating a second ca
   assert.equal(calls.filter((call) => call.method === "chat.update").length, 4);
 });
 
+test("persists an unsupported-card fallback timestamp and updates that message", async () => {
+  const sql = createPresentationSql();
+  const calls = [];
+  const coordinator = createCoordinator(sql, calls, async () => {}, async (_token, method, body) => {
+    calls.push({ method, body });
+    if (method === "chat.postMessage" && body.blocks) return { ok: false, error: "invalid_blocks" };
+    if (method === "chat.postMessage") return { ok: true, data: { ts: "fallback_1" } };
+    if (body.blocks) return { ok: false, error: "invalid_blocks" };
+    return { ok: true, data: { ok: true } };
+  });
+
+  appendEvent(sql, 1, started);
+  await coordinator.onEvent(1, started);
+  appendEvent(sql, 2, { type: "status", message: "Running tests" });
+  await coordinator.onEvent(2, { type: "status", message: "Running tests" }, "run_1");
+  await coordinator.drainDue(Date.now() + 3_000);
+
+  assert.equal(sql.getRow("run_1").external_message_id, "fallback_1");
+  assert.equal(calls.filter((call) => call.method === "chat.postMessage").length, 2);
+  assert.equal(calls.filter((call) => call.method === "chat.update").length, 2);
+  assert.ok(calls.slice(-1)[0].body.ts === "fallback_1");
+});
+
+test("keeps a terminal card retry pending after the final response succeeds", async () => {
+  const sql = createPresentationSql();
+  const calls = [];
+  let updateAttempts = 0;
+  const coordinator = createCoordinator(sql, calls, async () => {}, async (_token, method, body) => {
+    calls.push({ method, body });
+    if (method === "chat.update" && updateAttempts++ < 3) return { ok: false, error: "http_503", status: 503 };
+    return { ok: true, data: { ts: method === "chat.postMessage" ? "message_1" : undefined } };
+  });
+
+  appendEvent(sql, 1, started);
+  await coordinator.onEvent(1, started);
+  appendEvent(sql, 2, { type: "agent_response", run_id: "run_1", text: "Done" });
+  await coordinator.onEvent(2, { type: "agent_response", run_id: "run_1", text: "Done" });
+  appendEvent(sql, 3, { type: "agent_run_completed", run_id: "run_1" });
+  await coordinator.onEvent(3, { type: "agent_run_completed", run_id: "run_1" });
+
+  assert.ok(sql.getRow("run_1").next_retry_at > Date.now());
+  await coordinator.drainDue(Date.now() + 10_000);
+  assert.equal(calls.filter((call) => call.method === "chat.update").length, 4);
+  assert.deepEqual(calls.map((call) => call.method), [
+    "chat.postMessage",
+    "chat.update",
+    "chat.update",
+    "chat.update",
+    "chat.postMessage",
+    "chat.update",
+  ]);
+});
+
+test("sends the legacy failure notice when the error card update fails", async () => {
+  const sql = createPresentationSql();
+  const calls = [];
+  const coordinator = createCoordinator(sql, calls, async () => {}, async (_token, method, body) => {
+    calls.push({ method, body });
+    if (method === "chat.update") return { ok: false, error: "http_503", status: 503 };
+    return { ok: true, data: { ts: "message_1" } };
+  });
+
+  appendEvent(sql, 1, started);
+  await coordinator.onEvent(1, started);
+  appendEvent(sql, 2, { type: "agent_run_failed", run_id: "run_1", message: "Checks failed" });
+  await coordinator.onEvent(2, { type: "agent_run_failed", run_id: "run_1", message: "Checks failed" });
+
+  assert.equal(calls.filter((call) => call.method === "chat.postMessage").length, 2);
+  assert.match(calls.at(-1).body.text, /could not complete the Agent Run/);
+});
+
+test("replays a pending card after coordinator restart", async () => {
+  const originalNow = Date.now;
+  Date.now = () => 200_000;
+  try {
+    const sql = createPresentationSql();
+    const calls = [];
+    const alarms = [];
+    let updateAttempts = 0;
+    const api = async (_token, method, body) => {
+      calls.push({ method, body });
+      if (method === "chat.update" && updateAttempts++ < 3) return { ok: false, error: "http_503", status: 503 };
+      return { ok: true, data: { ts: "message_1" } };
+    };
+    const firstCoordinator = createCoordinator(sql, calls, async () => {}, api, alarms);
+    appendEvent(sql, 1, started);
+    await firstCoordinator.onEvent(1, started);
+    appendEvent(sql, 2, { type: "phase", phase: "executing", model: "model" });
+    await firstCoordinator.onEvent(2, { type: "phase", phase: "executing", model: "model" }, "run_1");
+    await firstCoordinator.drainDue(203_000);
+    assert.ok(sql.getRow("run_1").next_retry_at !== null);
+    assert.ok(alarms.length > 0);
+
+    const restartedCoordinator = createCoordinator(sql, calls, async () => {}, api, alarms);
+    await restartedCoordinator.drainDue(210_000);
+    assert.equal(calls.filter((call) => call.method === "chat.postMessage").length, 1);
+    assert.equal(calls.filter((call) => call.method === "chat.update").length, 4);
+    assert.equal(sql.getRow("run_1").next_retry_at, null);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test("does not post a duplicate failure notice after the error card is delivered", async () => {
   const sql = createPresentationSql();
   const calls = [];
@@ -156,7 +299,7 @@ function createCoordinator(sql, calls, sleep, api = async (_token, method, body)
   return method === "chat.postMessage"
     ? { ok: true, data: { ts: "card_1" } }
     : { ok: true, data: { ok: true } };
-}) {
+}, alarms = []) {
   const env = {
     DB: fakeD1(),
     SLACK_BOT_TOKEN: "xoxb-test",
@@ -167,7 +310,7 @@ function createCoordinator(sql, calls, sleep, api = async (_token, method, body)
     env,
     () => "ses_1",
     () => "https://worker.codevil.example",
-    () => {},
+    (when) => alarms.push(when),
     api,
     sleep,
   );
@@ -182,6 +325,9 @@ function createPresentationSql() {
   const events = [];
   return {
     events,
+    getRow(runId) {
+      return rows.get(runId);
+    },
     exec(query, ...params) {
       const result = [];
       if (query.startsWith("SELECT id, event_json FROM events")) result.push(...events);

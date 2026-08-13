@@ -85,40 +85,47 @@ export async function notifyExternalConversation(
       return false;
     }
 
-    const externalEventId = `outbound:${input.sessionId}:${input.cursor}`;
-    const claimed = dedupeEventInsert(
-      externalEventId,
-      destination.integration_id,
-      null,
-      new Date().toISOString(),
-    );
-    const claim = await input.env.DB
-      .prepare(claimed.sql)
-      .bind(...claimed.bindings)
-      .run();
-    if (Number(claim.meta.changes ?? 0) === 0) {
-      log("DEBUG", "external_notification.skipped", {
-        reason: "duplicate",
-        provider: destination.provider,
-        external_event_id: externalEventId,
-      });
-      return true;
-    }
-
-    log("INFO", "external_notification.claimed", {
-      provider: destination.provider,
-      intent_type: intent.type,
-      external_event_id: externalEventId,
-      channel_id: destination.external_channel_id,
-      thread_ts: destination.external_conversation_id,
-    });
-
     const api = deps.slackApi ?? createSlackWebApi();
     const sleep = deps.sleep ?? sleepFor;
     const random = deps.random ?? Math.random;
     const sessionUrl = externalSessionUrl(input.env, input.workerOrigin, input.sessionId);
     const messages = renderSlackNotification(intent, sessionUrl);
+    const baseExternalEventId = `outbound:${input.sessionId}:${input.cursor}`;
     for (const [messageIndex, message] of messages.entries()) {
+      const externalEventId = messages.length === 1
+        ? baseExternalEventId
+        : `${baseExternalEventId}:chunk:${messageIndex}`;
+      const claimed = dedupeEventInsert(
+        externalEventId,
+        destination.integration_id,
+        null,
+        new Date().toISOString(),
+      );
+      const claim = await input.env.DB
+        .prepare(claimed.sql)
+        .bind(...claimed.bindings)
+        .run();
+      if (Number(claim.meta.changes ?? 0) === 0) {
+        log("DEBUG", "external_notification.skipped", {
+          reason: "duplicate",
+          provider: destination.provider,
+          external_event_id: externalEventId,
+          message_index: messageIndex,
+          message_count: messages.length,
+        });
+        continue;
+      }
+
+      log("INFO", "external_notification.claimed", {
+        provider: destination.provider,
+        intent_type: intent.type,
+        external_event_id: externalEventId,
+        channel_id: destination.external_channel_id,
+        thread_ts: destination.external_conversation_id,
+        message_index: messageIndex,
+        message_count: messages.length,
+      });
+
       const result = await postSlackMessageWithRetry({
         api,
         botToken: input.env.SLACK_BOT_TOKEN,
@@ -140,10 +147,8 @@ export async function notifyExternalConversation(
         }, collectWorkerSecretValues(input.env)),
       });
       if (!result.ok) {
-        if (messageIndex === 0) {
-          const release = externalMessageDedupeDelete(destination.integration_id, externalEventId);
-          await input.env.DB.prepare(release.sql).bind(...release.bindings).run();
-        }
+        const release = externalMessageDedupeDelete(destination.integration_id, externalEventId);
+        await input.env.DB.prepare(release.sql).bind(...release.bindings).run();
         return false;
       }
     }

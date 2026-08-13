@@ -79,7 +79,7 @@ export class LiveRunCardCoordinator {
       last_delivered_cursor: existing?.last_delivered_cursor ?? 0,
       last_render_fingerprint: existing?.last_render_fingerprint ?? null,
       pending_final_response_cursor: pendingFinalResponseCursor,
-      next_retry_at: now + (shouldFlushImmediately(event) ? 0 : CARD_COALESCE_MS),
+      next_retry_at: nextRetryAt(existing?.next_retry_at ?? null, event, now),
       created_at: existing?.created_at ?? new Date(now).toISOString(),
       updated_at: new Date(now).toISOString(),
     });
@@ -117,17 +117,17 @@ export class LiveRunCardCoordinator {
         const presentation = this.project(runId);
         const fingerprint = JSON.stringify(presentation);
         if (row.last_delivered_cursor >= row.last_projected_cursor && row.last_render_fingerprint === fingerprint) {
-          if (isTerminal(presentation)) await this.deliverFinalResponse(row, presentation);
+          if (isTerminal(presentation)) await this.deliverFinalResponse(row, presentation, true);
           return;
         }
 
-    const destination = await this.destination();
+        const destination = await this.destination();
         if (!destination || !this.env.SLACK_BOT_TOKEN) return;
         const message = renderSlackRunCard(presentation, externalSessionUrl({ CODEVIL_WEB_ORIGIN: this.env.CODEVIL_WEB_ORIGIN }, this.workerOrigin(), this.sessionId()), row.last_projected_cursor);
         const delivered = await this.deliverCard(row, destination, message, presentation);
         if (!delivered.ok) {
           this.upsert({ ...row, next_retry_at: Date.now() + delivered.retryAfterMs, updated_at: new Date().toISOString() });
-          if (isTerminal(presentation)) await this.deliverFinalResponse(row, presentation);
+          if (isTerminal(presentation)) await this.deliverFinalResponse(row, presentation, false);
           this.scheduleAlarm(Date.now() + delivered.retryAfterMs);
           return;
         }
@@ -142,7 +142,7 @@ export class LiveRunCardCoordinator {
           next_retry_at: null,
           updated_at: new Date().toISOString(),
         });
-        if (isTerminal(presentation)) await this.deliverFinalResponse(this.row(runId) ?? current, presentation);
+        if (isTerminal(presentation)) await this.deliverFinalResponse(this.row(runId) ?? current, presentation, true);
 
         const latest = this.row(runId);
         if (!latest || latest.last_projected_cursor <= latest.last_delivered_cursor) return;
@@ -187,12 +187,15 @@ export class LiveRunCardCoordinator {
         return { ok: false, retryAfterMs: BASE_RETRY_DELAY_MS };
       }
       if (isUnsupportedCardFailure(posted)) {
-        const fallback = await postSlackMessage(this.api, this.env.SLACK_BOT_TOKEN!, {
+        const fallback = await retry(() => postSlackMessage(this.api, this.env.SLACK_BOT_TOKEN!, {
           channel: destination.external_channel_id,
           threadTs: destination.external_conversation_id,
-          text: `Codevil is working on: ${presentation.title}. Open session: ${externalSessionUrl({ CODEVIL_WEB_ORIGIN: this.env.CODEVIL_WEB_ORIGIN }, this.workerOrigin(), this.sessionId())}`,
-        });
-        if (fallback.ok) return { ok: true };
+          text: fallbackText(presentation, this.workerOrigin(), this.sessionId(), this.env.CODEVIL_WEB_ORIGIN),
+        }));
+        if (fallback.ok) {
+          const data = fallback.data as { ts?: unknown };
+          if (typeof data.ts === "string") return { ok: true, messageId: data.ts };
+        }
       }
       return { ok: false, retryAfterMs: retryDelay(posted, MAX_DELIVERY_ATTEMPTS) };
     }
@@ -202,19 +205,27 @@ export class LiveRunCardCoordinator {
       ts: row.external_message_id!,
       ...message,
     }));
-    return updated.ok
-      ? { ok: true, messageId: row.external_message_id }
-      : { ok: false, retryAfterMs: retryDelay(updated, MAX_DELIVERY_ATTEMPTS) };
+    if (updated.ok) return { ok: true, messageId: row.external_message_id };
+    if (isUnsupportedCardFailure(updated)) {
+      const fallback = await retry(() => updateSlackMessage(this.api, this.env.SLACK_BOT_TOKEN!, {
+        channel: destination.external_channel_id,
+        ts: row.external_message_id!,
+        text: fallbackText(presentation, this.workerOrigin(), this.sessionId(), this.env.CODEVIL_WEB_ORIGIN),
+      }));
+      if (fallback.ok) return { ok: true, messageId: row.external_message_id };
+      return { ok: false, retryAfterMs: retryDelay(fallback, MAX_DELIVERY_ATTEMPTS) };
+    }
+    return { ok: false, retryAfterMs: retryDelay(updated, MAX_DELIVERY_ATTEMPTS) };
   }
 
-  private async deliverFinalResponse(row: LiveRunPresentationRow, presentation: ExternalRunPresentation): Promise<void> {
+  private async deliverFinalResponse(row: LiveRunPresentationRow, presentation: ExternalRunPresentation, cardDelivered: boolean): Promise<void> {
     const pending = row.pending_final_response_cursor;
     if (pending === null) return;
     const events = this.eventsForRun(row.run_id);
     const response = [...events].reverse().find((entry) => entry.event.type === "agent_response");
     const terminal = [...events].reverse().find((entry) => entry.event.type === "agent_run_completed" || entry.event.type === "agent_run_failed");
     if (!terminal) return;
-    if (terminal.event.type === "agent_run_failed" && row.external_message_id) return;
+    if (terminal.event.type === "agent_run_failed" && row.external_message_id && cardDelivered) return;
     const event = response?.event.type === "agent_response"
       ? response.event
       : terminal.event.type === "agent_run_failed"
@@ -229,7 +240,7 @@ export class LiveRunCardCoordinator {
     }, { slackApi: this.api, sleep: this.sleep, random: () => 0 });
     if (delivered) {
       const latest = this.row(row.run_id);
-      if (latest) this.upsert({ ...latest, pending_final_response_cursor: null, next_retry_at: null, updated_at: new Date().toISOString() });
+      if (latest) this.upsert({ ...latest, pending_final_response_cursor: null, updated_at: new Date().toISOString() });
     } else {
       const latest = this.row(row.run_id);
       if (latest) {
@@ -320,6 +331,26 @@ function isLiveRunEvent(event: DOToCLIEvent): boolean {
 
 function shouldFlushImmediately(event: DOToCLIEvent): boolean {
   return event.type === "agent_run_started" || event.type === "question_raised" || event.type === "question_answered" || event.type === "approval_requested" || event.type === "plan_execution_started" || event.type === "agent_run_completed" || event.type === "agent_run_failed";
+}
+
+function nextRetryAt(existing: number | null, event: DOToCLIEvent, now: number): number {
+  if (shouldFlushImmediately(event)) return now;
+  if (existing !== null && existing > now) return existing;
+  return now + CARD_COALESCE_MS;
+}
+
+function fallbackText(
+  presentation: ExternalRunPresentation,
+  workerOrigin: string,
+  sessionId: string,
+  webOrigin?: string,
+): string {
+  const state = presentation.status === "complete"
+    ? "Completed successfully."
+    : presentation.status === "error"
+      ? presentation.summary ?? "The Agent Run failed."
+      : `Codevil is working on: ${presentation.title}.`;
+  return `${state} Open session: ${externalSessionUrl({ CODEVIL_WEB_ORIGIN: webOrigin }, workerOrigin, sessionId)}`;
 }
 
 function isTerminal(presentation: ExternalRunPresentation): boolean {

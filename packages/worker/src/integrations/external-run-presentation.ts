@@ -79,21 +79,34 @@ export function applyExternalRunEvent(
     case "agent_run_completed":
       return { ...current, status: "complete", phase: "Complete", summary: "Completed successfully.", waitingFor: undefined, ...(event.pr_url ? { prUrl: validPullRequestUrl(event.pr_url) } : {}) };
     case "agent_run_failed":
-      return { ...current, status: "error", phase: "Failed", summary: boundedPublicText(event.message) || "The Agent Run failed.", waitingFor: undefined };
+      return { ...current, status: "error", phase: "Failed", summary: failureSummary(event.message), waitingFor: undefined };
     default:
       return current;
   }
 }
 
 function applyStatus(current: ExternalRunPresentation, message: string): ExternalRunPresentation {
-  const safe = boundedPublicText(message);
-  const lower = safe.toLowerCase();
-  const phase = lower.includes("verif")
-    ? "Verifying"
-    : lower.includes("pull request") || lower.includes("publishing") || lower.includes("creating")
-      ? "Publishing"
-      : current.phase;
-  return { ...current, phase, ...(safe ? { summary: safe } : {}) };
+  const lower = message.toLowerCase();
+  if (lower.includes("verif") || lower.includes("test") || lower.includes("check")) {
+    return { ...current, phase: "Verifying", summary: "Running verification checks." };
+  }
+  if (lower.includes("pull request") || lower.includes("publishing") || lower.includes("creating")) {
+    return { ...current, phase: "Publishing", summary: "Publishing changes." };
+  }
+  if (lower.includes("execution") || lower.includes("plan approved")) {
+    return { ...current, phase: "Changing code", summary: "Applying changes." };
+  }
+  if (lower.includes("clone") || lower.includes("sandbox") || lower.includes("setup") || lower.includes("repository")) {
+    return { ...current, phase: "Preparing", summary: "Preparing the repository." };
+  }
+  return current;
+}
+
+function failureSummary(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("verif") || lower.includes("test") || lower.includes("check")) return "Verification failed.";
+  if (lower.includes("timeout") || lower.includes("timed out")) return "The Agent Run timed out.";
+  return "The Agent Run failed.";
 }
 
 function applyToolEvent(

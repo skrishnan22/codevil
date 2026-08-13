@@ -191,7 +191,7 @@ export class SessionEventLog {
     const snapRow = this.sql.exec(
       "SELECT cursor, state_json FROM snapshots WHERE path = ?",
       "session",
-    ).one() as { cursor: number; state_json: string } | undefined;
+    ).toArray()[0] as { cursor: number; state_json: string } | undefined;
     if (snapRow) {
       try {
         const parsed = parseSessionSnapshot(JSON.parse(snapRow.state_json));

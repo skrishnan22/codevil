@@ -284,7 +284,7 @@ export class LiveRunCardCoordinator {
   private sql(): SqlStorage { return this.storageSql; }
 
   private row(runId: string): LiveRunPresentationRow | null {
-    return (this.sql().exec("SELECT * FROM live_run_presentations WHERE run_id = ?", runId).one() as unknown as LiveRunPresentationRow | undefined) ?? null;
+    return (this.sql().exec("SELECT * FROM live_run_presentations WHERE run_id = ?", runId).toArray()[0] as unknown as LiveRunPresentationRow | undefined) ?? null;
   }
 
   private rowsDue(now: number): LiveRunPresentationRow[] {

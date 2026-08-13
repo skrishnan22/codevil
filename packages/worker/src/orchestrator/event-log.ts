@@ -7,6 +7,7 @@ import {
   safeExceptionAttributes,
   safeOwnDataProperty,
   safePrimitiveString,
+  isRecord,
   type ProjectionContext,
   type SessionSnapshot,
   type Tracer,
@@ -194,7 +195,7 @@ export class SessionEventLog {
     ).toArray()[0] as { cursor: number; state_json: string } | undefined;
     if (snapRow) {
       try {
-        const parsed = parseSessionSnapshot(JSON.parse(snapRow.state_json));
+        const parsed = parseSessionSnapshot(normalizePersistedSnapshot(JSON.parse(snapRow.state_json)));
         if (parsed) {
           this.snapshot = parsed;
           this.snapshotCursor = snapRow.cursor;
@@ -219,4 +220,32 @@ export class SessionEventLog {
       this.lastPersistedSnapshotCursor,
     ).one().count as number;
   }
+}
+
+function normalizePersistedSnapshot(raw: unknown): unknown {
+  if (!isRecord(raw) || !Array.isArray(raw.messages)) return raw;
+  return {
+    ...raw,
+    messages: raw.messages.map((message) => {
+      if (!isRecord(message) || !isRecord(message.meta) || !isRecord(message.meta.cost)) return message;
+      return {
+        ...message,
+        meta: {
+          ...message.meta,
+          cost: {
+            ...message.meta.cost,
+            input_tokens: normalizePersistedNumber(message.meta.cost.input_tokens),
+            output_tokens: normalizePersistedNumber(message.meta.cost.output_tokens),
+            total_cost_usd: normalizePersistedNumber(message.meta.cost.total_cost_usd),
+          },
+        },
+      };
+    }),
+  };
+}
+
+function normalizePersistedNumber(value: unknown): unknown {
+  if (typeof value !== "string" || value.trim() === "") return value;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : value;
 }

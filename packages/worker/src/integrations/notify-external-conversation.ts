@@ -43,9 +43,9 @@ export async function notifyExternalConversation(
     event: DOToCLIEvent;
   },
   deps: ExternalNotificationDeps = {},
-): Promise<void> {
+): Promise<boolean> {
   const intent = externalNotificationIntent(input.event);
-  if (!intent) return;
+  if (!intent) return true;
 
   const secrets = collectWorkerSecretValues(input.env);
   const log = (
@@ -66,14 +66,14 @@ export async function notifyExternalConversation(
     const destination = await firstDestination(input.env.DB, input.sessionId);
     if (!destination) {
       log("DEBUG", "external_notification.skipped", { reason: "no_destination" });
-      return;
+      return true;
     }
     if (destination.provider !== "slack") {
       log("DEBUG", "external_notification.skipped", {
         reason: "unsupported_provider",
         provider: destination.provider,
       });
-      return;
+      return true;
     }
     if (!input.env.SLACK_BOT_TOKEN) {
       log("WARN", "external_notification.skipped", {
@@ -82,7 +82,7 @@ export async function notifyExternalConversation(
         channel_id: destination.external_channel_id,
         thread_ts: destination.external_conversation_id,
       });
-      return;
+      return false;
     }
 
     const externalEventId = `outbound:${input.sessionId}:${input.cursor}`;
@@ -102,7 +102,7 @@ export async function notifyExternalConversation(
         provider: destination.provider,
         external_event_id: externalEventId,
       });
-      return;
+      return true;
     }
 
     log("INFO", "external_notification.claimed", {
@@ -144,14 +144,16 @@ export async function notifyExternalConversation(
           const release = externalMessageDedupeDelete(destination.integration_id, externalEventId);
           await input.env.DB.prepare(release.sql).bind(...release.bindings).run();
         }
-        return;
+        return false;
       }
     }
+    return true;
   } catch (error) {
     workerLogSessionExceptionForEnv(input.sessionId, "external_notification.delivery.failed", error, input.env, {
       cursor: input.cursor,
       event_type: input.event.type,
     });
+    return false;
   }
 }
 

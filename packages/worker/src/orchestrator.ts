@@ -118,6 +118,7 @@ import {
   type IntegrationQuestionAnswerResult,
 } from "./orchestrator/question-answer.js";
 import { workerLogForSession, workerLogSessionExceptionForEnv } from "./logging.js";
+import { LiveRunCardCoordinator } from "./integrations/slack/live-run-card.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
 
@@ -137,6 +138,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   } = {};
   private lastDirectoryUpdateAt = "";
   eventLog: SessionEventLog;
+  private liveRunCards: LiveRunCardCoordinator;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -218,6 +220,15 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       );
     `);
     runOrchestratorSchemaMigrations(this.sql);
+    this.liveRunCards = new LiveRunCardCoordinator(
+      this.sql,
+      this.workerEnv,
+      () => this.meta?.session_id ?? "",
+      () => this.meta?.worker_url ?? "",
+      (when) => { void this.ctx.storage.setAlarm(when); },
+    );
+    const liveRunRetryAt = this.liveRunCards.nextRetryAt();
+    if (liveRunRetryAt !== null) void this.ctx.storage.setAlarm(liveRunRetryAt);
   }
 
   async init(sessionId: string, prompt: string, repo: string, options: InitOptions): Promise<void> {
@@ -259,6 +270,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
 
     this.loadMeta();
     if (!this.meta) return;
+    await this.liveRunCards.drainDue(Date.now());
     if (isTerminalState(this.meta.state)) return;
 
     const now = Date.now();
@@ -746,17 +758,20 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     if (cursor !== null && this.meta) {
       try {
         const redactedEvent = redactEvent(event, this.redactionSecrets);
+        this.ctx.waitUntil(this.liveRunCards.onEvent(cursor, redactedEvent, this.meta.active_run?.id));
         workerLogForSession(this.meta.session_id, "DEBUG", "external_notification.schedule", {
           cursor,
           event_type: redactedEvent.type,
         }, this.redactionSecrets);
-        this.ctx.waitUntil(notifyExternalConversation({
-          env: this.workerEnv,
-          sessionId: this.meta.session_id,
-          workerOrigin: this.meta.worker_url,
-          cursor,
-          event: redactedEvent,
-        }));
+        if (event.type !== "agent_response" && event.type !== "agent_run_failed") {
+          this.ctx.waitUntil(notifyExternalConversation({
+            env: this.workerEnv,
+            sessionId: this.meta.session_id,
+            workerOrigin: this.meta.worker_url,
+            cursor,
+            event: redactedEvent,
+          }));
+        }
       } catch (error) {
         workerLogSessionExceptionForEnv(this.meta.session_id, "external_notification.schedule.failed", error, this.workerEnv, {
           cursor,
@@ -983,6 +998,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     if (this.meta.sandbox_disconnected_at) {
       deadlines.push(sandboxReconnectDeadline(this.meta.sandbox_disconnected_at));
     }
+    const presentationRetryAt = this.liveRunCards.nextRetryAt();
+    if (presentationRetryAt !== null) deadlines.push(presentationRetryAt);
 
     const nextDeadline = Math.min(...deadlines.filter((deadline) => deadline > now));
     if (Number.isFinite(nextDeadline)) {

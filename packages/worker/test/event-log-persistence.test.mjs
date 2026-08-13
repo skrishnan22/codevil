@@ -10,7 +10,7 @@ function rows(items) {
   });
 }
 
-function createEventSql() {
+function createEventSql({ strictSnapshotRead = false } = {}) {
   const events = [];
   let snapshot;
   const calls = [];
@@ -32,13 +32,26 @@ function createEventSql() {
         snapshot = { cursor: params[1], state_json: params[2] };
         return rows([]);
       }
-      if (query.includes("SELECT cursor, state_json FROM snapshots")) return rows(snapshot ? [snapshot] : []);
+      if (query.includes("SELECT cursor, state_json FROM snapshots")) {
+        const snapshotRows = snapshot ? [snapshot] : [];
+        return strictSnapshotRead ? strictRows(snapshotRows) : rows(snapshotRows);
+      }
       if (query.includes("SELECT id, event_json FROM events WHERE id >")) {
         return rows(events.filter((event) => event.id > params[0]));
       }
       return rows([]);
     },
   };
+}
+
+function strictRows(items) {
+  return Object.assign(items, {
+    one() {
+      if (items.length === 0) throw new Error("Expected exactly one result from SQL query, but got no results.");
+      return items[0];
+    },
+    toArray() { return items; },
+  });
 }
 
 function createLog(sql) {
@@ -97,4 +110,11 @@ test("event tail count is hydrated once instead of queried on every append", () 
 
   const countQueries = sql.calls.filter(({ query }) => query.includes("SELECT COUNT(*) AS count FROM events"));
   assert.equal(countQueries.length, 1);
+});
+
+test("fresh session hydration tolerates a missing snapshot checkpoint", () => {
+  const sql = createEventSql({ strictSnapshotRead: true });
+  const log = createLog(sql);
+
+  assert.doesNotThrow(() => log.hydrateFromSql());
 });

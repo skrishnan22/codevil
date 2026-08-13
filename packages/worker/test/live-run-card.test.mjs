@@ -126,6 +126,17 @@ test("coalesces live updates and sends the terminal card before the final respon
   assert.equal(calls[3].body.text, "Done");
 });
 
+test("first live card event tolerates a missing presentation row", async () => {
+  const sql = createPresentationSql({ strictPresentationRowRead: true });
+  const calls = [];
+  const coordinator = createCoordinator(sql, calls, async () => {});
+
+  appendEvent(sql, 1, started);
+  await assert.doesNotReject(() => coordinator.onEvent(1, started));
+
+  assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage"]);
+});
+
 test("keeps one coalescing deadline while activity continues", async () => {
   const originalNow = Date.now;
   let now = 100_000;
@@ -320,7 +331,7 @@ function appendEvent(sql, cursor, event) {
   sql.events.push({ id: cursor, event_json: JSON.stringify(event) });
 }
 
-function createPresentationSql() {
+function createPresentationSql({ strictPresentationRowRead = false } = {}) {
   const rows = new Map();
   const events = [];
   return {
@@ -334,6 +345,7 @@ function createPresentationSql() {
       else if (query.includes("SELECT * FROM live_run_presentations WHERE run_id")) {
         const row = rows.get(params[0]);
         if (row) result.push(row);
+        if (strictPresentationRowRead) return strictCursor(result);
       } else if (query.includes("SELECT * FROM live_run_presentations WHERE next_retry_at")) {
         result.push(...[...rows.values()].filter((row) => row.next_retry_at !== null && row.next_retry_at <= params[0]));
       } else if (query.includes("SELECT MIN(next_retry_at)")) {
@@ -349,6 +361,16 @@ function createPresentationSql() {
 
 function cursor(items) {
   return { toArray: () => items, one: () => items[0] };
+}
+
+function strictCursor(items) {
+  return {
+    toArray: () => items,
+    one() {
+      if (items.length === 0) throw new Error("Expected exactly one result from SQL query, but got no results.");
+      return items[0];
+    },
+  };
 }
 
 function fakeD1() {

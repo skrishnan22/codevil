@@ -1,4 +1,4 @@
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 function getSchemaVersion(sql: SqlStorage): number {
   const rows = sql.exec(
@@ -54,11 +54,30 @@ function migrateToV3(sql: SqlStorage): void {
   sql.exec("CREATE INDEX IF NOT EXISTS idx_live_run_presentations_retry ON live_run_presentations(next_retry_at)");
 }
 
+function migrateToV4(sql: SqlStorage): void {
+  sql.exec(`CREATE TABLE IF NOT EXISTS workspace_cache_jobs (
+    job_id TEXT PRIMARY KEY,
+    repo TEXT NOT NULL,
+    cache_version TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER,
+    started_at INTEGER,
+    snapshot_id TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+  sql.exec("CREATE INDEX IF NOT EXISTS idx_workspace_cache_jobs_next_attempt ON workspace_cache_jobs(next_attempt_at)");
+}
+
 export function runOrchestratorSchemaMigrations(sql: SqlStorage): void {
   const version = getSchemaVersion(sql);
   if (version < 1) migrateToV1(sql);
   if (version < 2) migrateToV2(sql);
   if (version < 3) migrateToV3(sql);
+  if (version < 4) migrateToV4(sql);
   if (version < CURRENT_SCHEMA_VERSION) {
     setSchemaVersion(sql, CURRENT_SCHEMA_VERSION);
   }

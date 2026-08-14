@@ -158,6 +158,33 @@ test("handleSandboxCloneComplete transitions to ready and broadcasts room_ready"
   assert.ok(fixture.broadcasts.some((e) => e.type === "status" && /ready/i.test(e.message)));
 });
 
+test("handleSandboxCloneComplete keeps queued work blocked by the pending cache job", () => {
+  const queuedRun = createAgentRun({
+    actor,
+    text: "use the prepared workspace",
+    now: "2026-06-03T00:00:00.000Z",
+    id: "run_waiting_for_cache",
+  });
+  const cacheJob = { status: "pending", attempts: 0, next_attempt_at: 1_000 };
+  const sql = {
+    exec(query) {
+      if (query.includes("SELECT * FROM workspace_cache_jobs")) {
+        return { toArray: () => [cacheJob] };
+      }
+      return [];
+    },
+  };
+  const { host } = createFakeHost(
+    { state: "cloning_repo", queued_runs: [queuedRun] },
+    { sql },
+  );
+
+  handleSandboxCloneComplete(host);
+
+  assert.equal(host.meta.active_run ?? null, null);
+  assert.deepEqual(host.meta.queued_runs.map((run) => run.id), ["run_waiting_for_cache"]);
+});
+
 test("handleSandboxPlanReady stores plan and requests approval during planning", () => {
   const active = createAgentRun({
     actor,

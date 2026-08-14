@@ -10,13 +10,16 @@ import {
   provisionSandbox,
 } from "../sandbox.js";
 import {
-  createWorkspaceCacheSnapshotForSandbox,
   restoreLatestWorkspaceCache,
   WORKSPACE_CACHE_DIR,
   WORKSPACE_CACHE_TTL_SECONDS,
   WORKSPACE_CACHE_VERSION,
   type WorkspaceCacheSandbox,
 } from "../workspace-cache.js";
+import {
+  enqueueWorkspaceCacheJob,
+  workspaceCacheJobBlocksAgentWork,
+} from "./workspace-cache-job.js";
 import type { SandboxConnectionMode } from "../sandbox-connection.js";
 import { createDraftPullRequest, normalizeGitHubRepoName } from "../github.js";
 import { getProvisioningCredentialContext, requireProviderPublicConfig } from "../provider-credentials.js";
@@ -329,8 +332,12 @@ export function handleSandboxCloneComplete(host: OrchestratorHost): void {
     host.updateDirectory({ room_state: "ready", sandbox_state: "ready" });
     host.appendAndBroadcast({ type: "status", message: "Repository cloned. Session is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
-    scheduleWorkspaceCacheSnapshot(host);
-    if (!host.meta.active_run && host.meta.queued_runs.length > 0) {
+    enqueueWorkspaceCacheJob(host);
+    if (
+      !host.meta.active_run
+      && host.meta.queued_runs.length > 0
+      && !workspaceCacheJobBlocksAgentWork(host.sql)
+    ) {
       finishRunAndDrainQueue(host, "completed");
     }
   }
@@ -368,51 +375,6 @@ async function restoreWorkspaceCacheBeforeStart(
     repo: host.meta.repo,
   });
   return false;
-}
-
-function scheduleWorkspaceCacheSnapshot(host: OrchestratorHost): void {
-  if (!host.meta) return;
-  const sessionId = host.meta.session_id;
-  const repo = host.meta.repo;
-  const startedAt = Date.now();
-  host.getTracer()?.log("INFO", "workspace_cache.create.started", {
-    repo,
-    cache_version: WORKSPACE_CACHE_VERSION,
-    backup_dir: WORKSPACE_CACHE_DIR,
-    ttl_seconds: WORKSPACE_CACHE_TTL_SECONDS,
-  });
-  host.ctx.waitUntil((async () => {
-    try {
-      const result = await createWorkspaceCacheSnapshotForSandbox({
-        db: host.workerEnv.DB,
-        binding: host.workerEnv.Sandbox,
-        sessionId,
-        repo,
-      });
-      if (result.created) {
-        host.getTracer()?.log("INFO", "workspace_cache.create.ready", {
-          snapshot_id: result.snapshotId,
-          repo,
-          duration_ms: Date.now() - startedAt,
-        });
-        return;
-      }
-      const createFailure = redactEvent({ reason: result.reason }, host.redactionSecrets) as { reason?: unknown };
-      host.getTracer()?.log("ERROR", "workspace_cache.create.failed", {
-        phase: result.phase ?? "unknown",
-        reason: createFailure.reason,
-        repo,
-        duration_ms: Date.now() - startedAt,
-      });
-    } catch (error) {
-      host.getTracer()?.log("ERROR", "workspace_cache.create.failed", {
-        phase: "sandbox_binding",
-        ...redactEvent(safeExceptionAttributes(error), host.redactionSecrets),
-        repo,
-        duration_ms: Date.now() - startedAt,
-      });
-    }
-  })());
 }
 
 export function handleSandboxPlanReady(host: OrchestratorHost, plan: string, cost: CostInfo): void {

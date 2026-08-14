@@ -30,6 +30,9 @@ export function createFakeSql(initial = {}) {
 
   return {
     exec(query, ...params) {
+      if (query.includes("SELECT * FROM workspace_cache_jobs")) {
+        return { toArray: () => [] };
+      }
       if (query.includes("SELECT request_id FROM questions")) {
         const runId = params[0];
         return questions

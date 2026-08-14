@@ -119,6 +119,10 @@ import {
 } from "./orchestrator/question-answer.js";
 import { workerLogForSession, workerLogSessionExceptionForEnv } from "./logging.js";
 import { LiveRunCardCoordinator } from "./integrations/slack/live-run-card.js";
+import {
+  nextWorkspaceCacheJobAt,
+  processWorkspaceCacheJob,
+} from "./orchestrator/workspace-cache-job.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
 
@@ -271,9 +275,14 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.loadMeta();
     if (!this.meta) return;
     await this.liveRunCards.drainDue(Date.now());
-    if (isTerminalState(this.meta.state)) return;
 
     const now = Date.now();
+    if (isTerminalState(this.meta.state)) {
+      await processWorkspaceCacheJob(this, now);
+      await this.armNextAlarm(now);
+      return;
+    }
+
     const createdAt = Date.parse(this.meta.created_at);
     const maxTimeMs = parseMaxTimeMs(this.meta.max_time);
     if (maxTimeMs !== null && now >= createdAt + maxTimeMs) {
@@ -287,6 +296,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
         message: `Session timed out after ${this.meta.max_time}.`,
       });
       await this.terminateSandbox("timed out");
+      this.armNextAlarmSafe(Date.now() - 1);
       return;
     }
 
@@ -323,9 +333,19 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
           : "Sandbox failed to connect within 60 seconds. No process output captured.",
       });
       await this.terminateSandbox("timed out");
+      this.armNextAlarmSafe(Date.now() - 1);
       return;
     }
 
+    const cacheResult = await processWorkspaceCacheJob(this, now);
+    if (
+      (cacheResult === "ready" || cacheResult === "failed")
+      && this.meta.state === "ready"
+      && !this.meta.active_run
+      && this.meta.queued_runs.length > 0
+    ) {
+      finishRunAndDrainQueueFn(this, "completed");
+    }
     this.armNextAlarmSafe(now);
   }
 
@@ -724,6 +744,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     });
     this.revokePreview();
     await this.terminateSandbox("stopped by user");
+    this.armNextAlarmSafe(Date.now() - 1);
   }
 
   private async terminateSandbox(reason: string): Promise<void> {
@@ -989,17 +1010,22 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   async armNextAlarm(now = Date.now()): Promise<void> {
-    if (!this.meta || isTerminalState(this.meta.state)) return;
+    if (!this.meta) return;
 
-    const createdAt = Date.parse(this.meta.created_at);
-    const deadlines = [createdAt + 60_000];
-    const maxTimeMs = parseMaxTimeMs(this.meta.max_time);
-    if (maxTimeMs !== null) deadlines.push(createdAt + maxTimeMs);
-    if (this.meta.sandbox_disconnected_at) {
-      deadlines.push(sandboxReconnectDeadline(this.meta.sandbox_disconnected_at));
+    const deadlines: number[] = [];
+    if (!isTerminalState(this.meta.state)) {
+      const createdAt = Date.parse(this.meta.created_at);
+      deadlines.push(createdAt + 60_000);
+      const maxTimeMs = parseMaxTimeMs(this.meta.max_time);
+      if (maxTimeMs !== null) deadlines.push(createdAt + maxTimeMs);
+      if (this.meta.sandbox_disconnected_at) {
+        deadlines.push(sandboxReconnectDeadline(this.meta.sandbox_disconnected_at));
+      }
     }
     const presentationRetryAt = this.liveRunCards.nextRetryAt();
     if (presentationRetryAt !== null) deadlines.push(presentationRetryAt);
+    const workspaceCacheRetryAt = nextWorkspaceCacheJobAt(this.sql);
+    if (workspaceCacheRetryAt !== null) deadlines.push(workspaceCacheRetryAt);
 
     const nextDeadline = Math.min(...deadlines.filter((deadline) => deadline > now));
     if (Number.isFinite(nextDeadline)) {
@@ -1080,6 +1106,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       active_run_state: activeRunId ? "failed" : null,
     });
     await this.terminateSandbox("sandbox reconnect timed out");
+    this.armNextAlarmSafe(Date.now() - 1);
   }
 
   async fetchPreview(request: Request, token: string): Promise<Response> {

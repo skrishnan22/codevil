@@ -24,14 +24,17 @@ test("accepts a reconnect for a non-terminal session with a disconnect marker", 
 
 test("rejects unsolicited and terminal reconnects", () => {
   assert.equal(sandboxConnectionMode("initializing", undefined, 0), "reject");
-  assert.equal(sandboxConnectionMode("cloning_repo", undefined, 0), "reject");
   assert.equal(sandboxConnectionMode("ready", undefined), "reject");
-  assert.equal(sandboxConnectionMode("ready", undefined, 0), "reject");
   assert.equal(sandboxConnectionMode("executing", undefined, 1), "reject");
   assert.equal(
     sandboxConnectionMode("failed", "2026-06-20T13:28:13.000Z"),
     "reject",
   );
+});
+
+test("resumes an orphaned sandbox during repository setup or an active session", () => {
+  assert.equal(sandboxConnectionMode("cloning_repo", undefined, 0), "resume");
+  assert.equal(sandboxConnectionMode("ready", undefined, 0), "resume");
 });
 
 test("resumes an active session when the sandbox socket was lost without a close marker", () => {

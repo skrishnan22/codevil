@@ -11,13 +11,14 @@ import {
 import type { OrchestratorHost } from "./host.js";
 
 export const WORKSPACE_CACHE_JOB_ID = "workspace";
-export const CACHE_JOB_QUIET_RETRY_MS = 60_000;
-export const CACHE_JOB_RETRY_BASE_MS = 30_000;
-export const CACHE_JOB_RETRY_MAX_MS = 15 * 60_000;
-export const CACHE_JOB_STALE_MS = 15 * 60_000;
-export const CACHE_JOB_MAX_ATTEMPTS = 3;
 
-export type WorkspaceCacheJobStatus = "pending" | "running" | "ready" | "failed" | "exhausted";
+export type WorkspaceCacheJobStatus =
+  | "pending"
+  | "running"
+  | "ready"
+  | "failed"
+  | "exhausted"
+  | "interrupted";
 
 export interface WorkspaceCacheJobRow {
   job_id: string;
@@ -34,8 +35,8 @@ export interface WorkspaceCacheJobRow {
   updated_at: string;
 }
 
-type CacheJobResult = "ready" | "failed" | "exhausted" | "deferred" | "missing";
-type CreateSnapshot = (input: {
+type CacheJobResult = "ready" | "failed" | "exhausted" | "interrupted" | "deferred" | "missing";
+export type CreateSnapshot = (input: {
   db: D1Database;
   binding: DurableObjectNamespace<Sandbox>;
   sessionId: string;
@@ -83,47 +84,38 @@ export function workspaceCacheJobIsRunning(sql: SqlStorage): boolean {
 
 export function workspaceCacheJobBlocksAgentWork(sql: SqlStorage): boolean {
   const status = getWorkspaceCacheJob(sql)?.status;
-  return status !== undefined && status !== "ready" && status !== "exhausted";
+  return status === "pending" || status === "running";
 }
 
 export function nextWorkspaceCacheJobAt(sql: SqlStorage): number | null {
   const rows = sql.exec(
-    "SELECT status, next_attempt_at, started_at FROM workspace_cache_jobs WHERE status <> 'ready'",
+    "SELECT status, next_attempt_at, started_at FROM workspace_cache_jobs WHERE status = 'pending'",
   ).toArray() as unknown as Array<{
     status: WorkspaceCacheJobStatus;
     next_attempt_at: number | null;
     started_at: number | null;
   }>;
-  const deadlines = rows.flatMap((row) => {
-    if (row.status === "running" && row.started_at !== null) {
-      return [row.started_at + CACHE_JOB_STALE_MS];
-    }
-    return row.next_attempt_at === null ? [] : [row.next_attempt_at];
-  });
+  const deadlines = rows.flatMap((row) => row.next_attempt_at === null ? [] : [row.next_attempt_at]);
   return deadlines.length ? Math.min(...deadlines) : null;
 }
 
-export function recoverStaleWorkspaceCacheJob(sql: SqlStorage, now = Date.now()): boolean {
-  const job = getWorkspaceCacheJob(sql);
-  if (
-    !job
-    || job.status !== "running"
-    || job.started_at === null
-    || now - job.started_at < CACHE_JOB_STALE_MS
-  ) {
-    return false;
-  }
+export function recoverWorkspaceCacheJobAfterRestart(host: OrchestratorHost, now = Date.now()): boolean {
+  const job = getWorkspaceCacheJob(host.sql);
+  if (!job) return false;
 
-  sql.exec(
-    `UPDATE workspace_cache_jobs
-     SET status = 'pending', next_attempt_at = ?, started_at = NULL,
-         last_error = ?, updated_at = ?
-     WHERE job_id = ? AND status = 'running'`,
-    now,
-    "recovered stale running cache job after Durable Object restart",
-    new Date(now).toISOString(),
-    WORKSPACE_CACHE_JOB_ID,
-  );
+  if (job.status === "pending" || job.status === "running") {
+    interruptWorkspaceCacheJob(
+      host.sql,
+      now,
+      "cache snapshot interrupted by Durable Object restart",
+    );
+  }
+  void host.ctx.storage.setAlarm(now).catch((error) => {
+    host.getTracer()?.log("ERROR", "alarm.arm.failed", {
+      ...redactEvent(safeExceptionAttributes(error), host.redactionSecrets),
+      reason: "workspace_cache_job_interrupted",
+    });
+  });
   return true;
 }
 
@@ -132,23 +124,22 @@ export async function processWorkspaceCacheJob(
   now = Date.now(),
   createSnapshot: CreateSnapshot = createWorkspaceCacheSnapshotForSandbox,
 ): Promise<CacheJobResult> {
-  let job = getWorkspaceCacheJob(host.sql);
+  const job = getWorkspaceCacheJob(host.sql);
   if (!job) return "missing";
   if (job.status === "ready") return "ready";
+  if (job.status === "failed") return "failed";
   if (job.status === "exhausted") return "exhausted";
+  if (job.status === "interrupted") return "interrupted";
+  if (job.status === "running") return "deferred";
 
   if (!isWorkspaceQuiescent(host)) {
-    deferWorkspaceCacheJob(host.sql, now + CACHE_JOB_QUIET_RETRY_MS, now);
-    return "deferred";
+    interruptWorkspaceCacheJob(
+      host.sql,
+      now,
+      "cache snapshot skipped because workspace was not quiescent",
+    );
+    return "interrupted";
   }
-
-  if (job.status === "running") {
-    if (!recoverStaleWorkspaceCacheJob(host.sql, now)) return "deferred";
-    job = getWorkspaceCacheJob(host.sql);
-    if (!job) return "missing";
-  }
-  if (job.next_attempt_at !== null && job.next_attempt_at > now) return "deferred";
-
   const attempt = claimWorkspaceCacheJob(host.sql, now);
   if (!attempt) return "deferred";
   const startedAt = Date.now();
@@ -197,28 +188,23 @@ export async function processWorkspaceCacheJob(
   }
 
   const reason = failureReason(result.reason ?? "cache snapshot was not created", host.redactionSecrets);
-  const nextAttemptAt = Date.now() + retryDelayMs(attempt);
-  const exhausted = attempt >= CACHE_JOB_MAX_ATTEMPTS;
   host.sql.exec(
     `UPDATE workspace_cache_jobs
-     SET status = ?, next_attempt_at = ?, started_at = NULL,
+     SET status = 'failed', next_attempt_at = NULL, started_at = NULL,
          last_error = ?, updated_at = ?
      WHERE job_id = ?`,
-    exhausted ? "exhausted" : "failed",
-    exhausted ? null : nextAttemptAt,
     reason,
     new Date().toISOString(),
     WORKSPACE_CACHE_JOB_ID,
   );
-  host.getTracer()?.log("ERROR", exhausted ? "workspace_cache.create.exhausted" : "workspace_cache.create.failed", {
+  host.getTracer()?.log("ERROR", "workspace_cache.create.failed", {
     phase: result.phase ?? "unknown",
     reason,
     repo: job.repo,
     duration_ms: durationMs,
     attempt,
-    ...(exhausted ? {} : { next_attempt_at: nextAttemptAt }),
   });
-  return exhausted ? "exhausted" : "failed";
+  return "failed";
 }
 
 function isWorkspaceQuiescent(host: OrchestratorHost): boolean {
@@ -238,7 +224,7 @@ function claimWorkspaceCacheJob(sql: SqlStorage, now: number): number | null {
     `UPDATE workspace_cache_jobs
      SET status = 'running', attempts = ?, started_at = ?,
          next_attempt_at = NULL, updated_at = ?
-     WHERE job_id = ? AND status IN ('pending', 'failed')`,
+     WHERE job_id = ? AND status = 'pending'`,
     attempts,
     now,
     new Date(now).toISOString(),
@@ -247,21 +233,15 @@ function claimWorkspaceCacheJob(sql: SqlStorage, now: number): number | null {
   return attempts;
 }
 
-function deferWorkspaceCacheJob(sql: SqlStorage, nextAttemptAt: number, now: number): void {
+function interruptWorkspaceCacheJob(sql: SqlStorage, now: number, reason: string): void {
   sql.exec(
     `UPDATE workspace_cache_jobs
-     SET status = 'pending', next_attempt_at = ?, started_at = NULL, updated_at = ?
-     WHERE job_id = ? AND status <> 'ready'`,
-    nextAttemptAt,
+     SET status = 'interrupted', next_attempt_at = NULL, started_at = NULL,
+         last_error = ?, updated_at = ?
+     WHERE job_id = ? AND status IN ('pending', 'running')`,
+    reason,
     new Date(now).toISOString(),
     WORKSPACE_CACHE_JOB_ID,
-  );
-}
-
-function retryDelayMs(attempt: number): number {
-  return Math.min(
-    CACHE_JOB_RETRY_MAX_MS,
-    CACHE_JOB_RETRY_BASE_MS * (2 ** Math.max(0, attempt - 1)),
   );
 }
 

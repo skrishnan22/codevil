@@ -105,6 +105,7 @@ import {
   cancelOpenQuestions as cancelOpenQuestionsFn,
 } from "./orchestrator/cli-handlers.js";
 import {
+  drainQueuedAgentWorkIfWorkspaceCacheSettled,
   dispatchSandboxSocketMessage,
   initializeSandboxConnection,
   provisionSessionSandbox,
@@ -121,7 +122,7 @@ import { workerLogForSession, workerLogSessionExceptionForEnv } from "./logging.
 import { LiveRunCardCoordinator } from "./integrations/slack/live-run-card.js";
 import {
   nextWorkspaceCacheJobAt,
-  processWorkspaceCacheJob,
+  recoverWorkspaceCacheJobAfterRestart,
 } from "./orchestrator/workspace-cache-job.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
@@ -233,6 +234,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     );
     const liveRunRetryAt = this.liveRunCards.nextRetryAt();
     if (liveRunRetryAt !== null) void this.ctx.storage.setAlarm(liveRunRetryAt);
+    recoverWorkspaceCacheJobAfterRestart(this);
   }
 
   async init(sessionId: string, prompt: string, repo: string, options: InitOptions): Promise<void> {
@@ -278,7 +280,6 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
 
     const now = Date.now();
     if (isTerminalState(this.meta.state)) {
-      await processWorkspaceCacheJob(this, now);
       await this.armNextAlarm(now);
       return;
     }
@@ -337,15 +338,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       return;
     }
 
-    const cacheResult = await processWorkspaceCacheJob(this, now);
-    if (
-      (cacheResult === "ready" || cacheResult === "exhausted")
-      && this.meta.state === "ready"
-      && !this.meta.active_run
-      && this.meta.queued_runs.length > 0
-    ) {
-      finishRunAndDrainQueueFn(this, "completed");
-    }
+    drainQueuedAgentWorkIfWorkspaceCacheSettled(this);
     this.armNextAlarmSafe(now);
   }
 
@@ -448,6 +441,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.ctx.acceptWebSocket(server, ["sandbox"]);
     server.serializeAttachment({ sandbox: { aud: capability.aud, role: capability.role, sessionId: capability.sid } });
     initializeSandboxConnection(this, server, mode);
+    drainQueuedAgentWorkIfWorkspaceCacheSettled(this);
 
     if (mode === "resume") {
       this.meta.sandbox_disconnected_at = undefined;

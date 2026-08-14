@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { createAgentRun } from "../dist/agent-runs.js";
 import {
+  drainQueuedAgentWorkIfWorkspaceCacheSettled,
   dispatchSandboxSocketMessage,
   handleSandboxCloneComplete,
   handleSandboxCloneStarted,
@@ -12,6 +13,65 @@ import {
 } from "../dist/orchestrator/sandbox-handlers.js";
 import { handleSandboxProxy } from "../dist/sandbox-proxy.js";
 import { actor, createFakeHost, createFakeTracer } from "./helpers/fake-host.mjs";
+
+function createCacheJobSql() {
+  let row = null;
+  return {
+    get row() {
+      return row;
+    },
+    exec(query, ...params) {
+      if (query.includes("INSERT INTO workspace_cache_jobs")) {
+        row ??= {
+          job_id: params[0],
+          repo: params[1],
+          cache_version: params[2],
+          source_session_id: params[3],
+          status: "pending",
+          attempts: 0,
+          next_attempt_at: params[4],
+          started_at: null,
+          snapshot_id: null,
+          last_error: null,
+          created_at: params[5],
+          updated_at: params[6],
+        };
+        return [];
+      }
+      if (query.includes("SELECT * FROM workspace_cache_jobs")) {
+        return { toArray: () => row ? [row] : [] };
+      }
+      if (query.includes("SET status = 'running'")) {
+        const [attempts, now, updatedAt] = params;
+        row.status = "running";
+        row.attempts = attempts;
+        row.started_at = now;
+        row.next_attempt_at = null;
+        row.updated_at = updatedAt;
+        return [];
+      }
+      if (query.includes("SET status = 'ready'")) {
+        const [snapshotId, updatedAt] = params;
+        row.status = "ready";
+        row.snapshot_id = snapshotId;
+        row.started_at = null;
+        row.next_attempt_at = null;
+        row.updated_at = updatedAt;
+        return [];
+      }
+      if (query.includes("SET status = 'failed'")) {
+        const [lastError, updatedAt] = params;
+        row.status = "failed";
+        row.last_error = lastError;
+        row.started_at = null;
+        row.next_attempt_at = null;
+        row.updated_at = updatedAt;
+        return [];
+      }
+      throw new Error(`Unhandled SQL: ${query}`);
+    },
+  };
+}
 
 function createWsRecorder() {
   const sent = [];
@@ -158,31 +218,127 @@ test("handleSandboxCloneComplete transitions to ready and broadcasts room_ready"
   assert.ok(fixture.broadcasts.some((e) => e.type === "status" && /ready/i.test(e.message)));
 });
 
-test("handleSandboxCloneComplete keeps queued work blocked by the pending cache job", () => {
+test("handleSandboxCloneComplete starts one cache attempt before queued Agent Runs can write", async () => {
   const queuedRun = createAgentRun({
     actor,
     text: "use the prepared workspace",
     now: "2026-06-03T00:00:00.000Z",
     id: "run_waiting_for_cache",
   });
-  const cacheJob = { status: "pending", attempts: 0, next_attempt_at: 1_000 };
-  const sql = {
-    exec(query) {
-      if (query.includes("SELECT * FROM workspace_cache_jobs")) {
-        return { toArray: () => [cacheJob] };
-      }
-      return [];
-    },
-  };
-  const { host } = createFakeHost(
+  const sql = createCacheJobSql();
+  const fixture = createFakeHost(
+    { state: "cloning_repo", queued_runs: [queuedRun] },
+    { sql },
+  );
+  let backupCalls = 0;
+  let releaseBackup;
+  const backupPending = new Promise((resolve) => { releaseBackup = resolve; });
+
+  handleSandboxCloneComplete(fixture.host, async () => {
+    backupCalls += 1;
+    return backupPending;
+  });
+
+  assert.equal(backupCalls, 1);
+  assert.equal(sql.row.status, "running");
+  assert.equal(fixture.host.meta.active_run ?? null, null);
+  assert.deepEqual(fixture.host.meta.queued_runs.map((run) => run.id), ["run_waiting_for_cache"]);
+
+  releaseBackup({ created: true, snapshotId: "wsc_clone_context" });
+  await fixture.drainBackgroundWork();
+
+  assert.equal(sql.row.status, "ready");
+  assert.equal(fixture.host.meta.active_run.id, "run_waiting_for_cache");
+  assert.deepEqual(fixture.host.meta.queued_runs, []);
+});
+
+test("handleSandboxCloneComplete drains queued Agent Runs after cache failure", async () => {
+  const queuedRun = createAgentRun({
+    actor,
+    text: "continue without a warm cache",
+    now: "2026-06-03T00:00:00.000Z",
+    id: "run_after_cache_failure",
+  });
+  const sql = createCacheJobSql();
+  const fixture = createFakeHost(
     { state: "cloning_repo", queued_runs: [queuedRun] },
     { sql },
   );
 
-  handleSandboxCloneComplete(host);
+  handleSandboxCloneComplete(fixture.host, async () => ({
+    created: false,
+    phase: "backup",
+    reason: "backup reset the Durable Object",
+  }));
+  await fixture.drainBackgroundWork();
 
-  assert.equal(host.meta.active_run ?? null, null);
-  assert.deepEqual(host.meta.queued_runs.map((run) => run.id), ["run_waiting_for_cache"]);
+  assert.equal(sql.row.status, "failed");
+  assert.equal(fixture.host.meta.active_run.id, "run_after_cache_failure");
+  assert.deepEqual(fixture.host.meta.queued_runs, []);
+});
+
+test("interrupted cache work is nonblocking when recovery alarms drain queued Agent Runs", () => {
+  const queuedRun = createAgentRun({
+    actor,
+    text: "continue after restart",
+    now: "2026-06-03T00:00:00.000Z",
+    id: "run_after_cache_interruption",
+  });
+  const sql = createCacheJobSql();
+  sql.exec(
+    "INSERT INTO workspace_cache_jobs",
+    "workspace",
+    "github.com/acme/app",
+    "workspace-cache-v3",
+    "ses_test",
+    1_000,
+    "2026-06-03T00:00:00.000Z",
+    "2026-06-03T00:00:00.000Z",
+  );
+  sql.row.status = "interrupted";
+  sql.row.next_attempt_at = null;
+  const fixture = createFakeHost(
+    { state: "ready", queued_runs: [queuedRun] },
+    { sql },
+  );
+
+  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
+
+  assert.equal(fixture.host.meta.active_run.id, "run_after_cache_interruption");
+  assert.deepEqual(fixture.host.meta.queued_runs, []);
+});
+
+test("recovery alarms leave queued Agent Runs untouched while the sandbox is disconnected", () => {
+  const queuedRun = createAgentRun({
+    actor,
+    text: "wait for sandbox reconnect",
+    now: "2026-06-03T00:00:00.000Z",
+    id: "run_after_restart_without_socket",
+  });
+  const sql = createCacheJobSql();
+  sql.exec(
+    "INSERT INTO workspace_cache_jobs",
+    "workspace",
+    "github.com/acme/app",
+    "workspace-cache-v3",
+    "ses_test",
+    1_000,
+    "2026-06-03T00:00:00.000Z",
+    "2026-06-03T00:00:00.000Z",
+  );
+  sql.row.status = "interrupted";
+  sql.row.next_attempt_at = null;
+  const fixture = createFakeHost(
+    { state: "ready", queued_runs: [queuedRun] },
+    { sql, sandboxConnected: false },
+  );
+
+  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
+
+  assert.equal(fixture.host.meta.active_run ?? null, null);
+  assert.deepEqual(fixture.host.meta.queued_runs.map((run) => run.id), [
+    "run_after_restart_without_socket",
+  ]);
 });
 
 test("handleSandboxPlanReady stores plan and requests approval during planning", () => {

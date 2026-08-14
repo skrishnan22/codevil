@@ -23,7 +23,7 @@ import {
 } from "./questions-store.js";
 import { applyQuestionAnswer } from "./question-answer.js";
 import type { OrchestratorHost } from "./host.js";
-import { workspaceCacheJobIsRunning } from "./workspace-cache-job.js";
+import { workspaceCacheJobBlocksAgentWork } from "./workspace-cache-job.js";
 import {
   decisionRejection,
   ensureActiveRun,
@@ -119,7 +119,7 @@ export function handleAgentRequest(
     active: host.meta.active_run ?? null,
     queue: host.meta.queued_runs,
   }, run, {
-    sessionReady: host.meta.state === "ready" && !workspaceCacheJobIsRunning(host.sql),
+    sessionReady: host.meta.state === "ready" && !workspaceCacheJobBlocksAgentWork(host.sql),
   });
 
   host.meta.active_run = next.active;

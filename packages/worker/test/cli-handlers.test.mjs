@@ -90,6 +90,26 @@ test("handleAgentRequest queues when idle but session is not ready", () => {
   assert.ok(!broadcasts.some((e) => e.type === "agent_run_started"));
 });
 
+test("handleAgentRequest queues while the initial workspace cache job is pending", () => {
+  const cacheJob = { status: "pending", attempts: 0, next_attempt_at: 1_000 };
+  const sql = {
+    exec(query) {
+      if (query.includes("SELECT * FROM workspace_cache_jobs")) {
+        return { toArray: () => [cacheJob] };
+      }
+      return [];
+    },
+  };
+  const { host, broadcasts } = createFakeHost({ state: "ready" }, { sql });
+
+  handleAgentRequest(host, "wait for the prepared workspace", actor, false);
+
+  assert.equal(host.meta.active_run, null);
+  assert.equal(host.meta.queued_runs.length, 1);
+  assert.ok(broadcasts.some((e) => e.type === "agent_request_queued"));
+  assert.ok(!broadcasts.some((e) => e.type === "agent_run_started"));
+});
+
 test("handleAbort cancels an active run and returns session to ready", () => {
   const active = createAgentRun({
     actor,

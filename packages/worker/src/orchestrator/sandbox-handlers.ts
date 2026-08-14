@@ -16,7 +16,10 @@ import {
   WORKSPACE_CACHE_VERSION,
   type WorkspaceCacheSandbox,
 } from "../workspace-cache.js";
-import { enqueueWorkspaceCacheJob } from "./workspace-cache-job.js";
+import {
+  enqueueWorkspaceCacheJob,
+  workspaceCacheJobBlocksAgentWork,
+} from "./workspace-cache-job.js";
 import type { SandboxConnectionMode } from "../sandbox-connection.js";
 import { createDraftPullRequest, normalizeGitHubRepoName } from "../github.js";
 import { getProvisioningCredentialContext, requireProviderPublicConfig } from "../provider-credentials.js";
@@ -330,7 +333,11 @@ export function handleSandboxCloneComplete(host: OrchestratorHost): void {
     host.appendAndBroadcast({ type: "status", message: "Repository cloned. Session is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
     enqueueWorkspaceCacheJob(host);
-    if (!host.meta.active_run && host.meta.queued_runs.length > 0) {
+    if (
+      !host.meta.active_run
+      && host.meta.queued_runs.length > 0
+      && !workspaceCacheJobBlocksAgentWork(host.sql)
+    ) {
       finishRunAndDrainQueue(host, "completed");
     }
   }

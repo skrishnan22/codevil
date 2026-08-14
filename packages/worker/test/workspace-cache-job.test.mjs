@@ -3,12 +3,14 @@ import { test } from "node:test";
 
 import {
   CACHE_JOB_QUIET_RETRY_MS,
+  CACHE_JOB_MAX_ATTEMPTS,
   CACHE_JOB_STALE_MS,
   enqueueWorkspaceCacheJob,
   getWorkspaceCacheJob,
   nextWorkspaceCacheJobAt,
   processWorkspaceCacheJob,
   recoverStaleWorkspaceCacheJob,
+  workspaceCacheJobBlocksAgentWork,
   workspaceCacheJobIsRunning,
 } from "../dist/orchestrator/workspace-cache-job.js";
 
@@ -77,11 +79,31 @@ function createSql() {
         row.updated_at = now;
         return [];
       }
+      if (query.includes("SET status = ?, next_attempt_at = ?")) {
+        const [status, next, error, now] = params;
+        const row = rows.get("workspace");
+        row.status = status;
+        row.next_attempt_at = next;
+        row.last_error = error;
+        row.started_at = null;
+        row.updated_at = now;
+        return [];
+      }
       if (query.includes("SET status = 'failed'")) {
         const [next, error, now] = params;
         const row = rows.get("workspace");
         row.status = "failed";
         row.next_attempt_at = next;
+        row.last_error = error;
+        row.started_at = null;
+        row.updated_at = now;
+        return [];
+      }
+      if (query.includes("SET status = 'exhausted'")) {
+        const [error, now] = params;
+        const row = rows.get("workspace");
+        row.status = "exhausted";
+        row.next_attempt_at = null;
         row.last_error = error;
         row.started_at = null;
         row.updated_at = now;
@@ -123,6 +145,29 @@ test("enqueue creates one durable cache job and exposes its alarm deadline", () 
 
   enqueueWorkspaceCacheJob(createHost(sql), 2_000);
   assert.equal(sql.rows.size, 1);
+});
+
+test("pending, running, and retryable jobs block agent work, but terminal jobs do not", () => {
+  const sql = createSql();
+  const host = createHost(sql);
+  enqueueWorkspaceCacheJob(host, 1_000);
+
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
+
+  sql.rows.get("workspace").status = "running";
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
+
+  sql.rows.get("workspace").status = "failed";
+  sql.rows.get("workspace").attempts = CACHE_JOB_MAX_ATTEMPTS - 1;
+  sql.rows.get("workspace").next_attempt_at = 2_000;
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
+
+  sql.rows.get("workspace").status = "exhausted";
+  sql.rows.get("workspace").next_attempt_at = null;
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
+
+  sql.rows.get("workspace").status = "ready";
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
 });
 
 test("active runs defer the job without starting a backup", async () => {
@@ -195,6 +240,32 @@ test("failed processing records a retry deadline and a later alarm can recover",
   });
   assert.equal(second, "ready");
   assert.equal(calls, 2);
+});
+
+test("persistent backup failure exhausts the job and does not retry a modified workspace", async () => {
+  const sql = createSql();
+  const host = createHost(sql);
+  enqueueWorkspaceCacheJob(host, 1_000);
+  sql.rows.get("workspace").attempts = CACHE_JOB_MAX_ATTEMPTS - 1;
+  let calls = 0;
+
+  const result = await processWorkspaceCacheJob(host, 1_000, async () => {
+    calls += 1;
+    return { created: false, phase: "backup", reason: "backup canceled" };
+  });
+
+  assert.equal(result, "exhausted");
+  assert.equal(calls, 1);
+  assert.equal(getWorkspaceCacheJob(sql).status, "exhausted");
+  assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, null);
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
+
+  const later = await processWorkspaceCacheJob(host, 60_000, async () => {
+    calls += 1;
+    return { created: true, snapshotId: "must-not-run" };
+  });
+  assert.equal(later, "exhausted");
+  assert.equal(calls, 1);
 });
 
 test("a running job past the stale threshold is recovered after a DO restart", () => {

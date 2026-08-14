@@ -15,8 +15,9 @@ export const CACHE_JOB_QUIET_RETRY_MS = 60_000;
 export const CACHE_JOB_RETRY_BASE_MS = 30_000;
 export const CACHE_JOB_RETRY_MAX_MS = 15 * 60_000;
 export const CACHE_JOB_STALE_MS = 15 * 60_000;
+export const CACHE_JOB_MAX_ATTEMPTS = 3;
 
-export type WorkspaceCacheJobStatus = "pending" | "running" | "ready" | "failed";
+export type WorkspaceCacheJobStatus = "pending" | "running" | "ready" | "failed" | "exhausted";
 
 export interface WorkspaceCacheJobRow {
   job_id: string;
@@ -33,7 +34,7 @@ export interface WorkspaceCacheJobRow {
   updated_at: string;
 }
 
-type CacheJobResult = "ready" | "failed" | "deferred" | "missing";
+type CacheJobResult = "ready" | "failed" | "exhausted" | "deferred" | "missing";
 type CreateSnapshot = (input: {
   db: D1Database;
   binding: DurableObjectNamespace<Sandbox>;
@@ -78,6 +79,11 @@ export function getWorkspaceCacheJob(sql: SqlStorage): WorkspaceCacheJobRow | nu
 
 export function workspaceCacheJobIsRunning(sql: SqlStorage): boolean {
   return getWorkspaceCacheJob(sql)?.status === "running";
+}
+
+export function workspaceCacheJobBlocksAgentWork(sql: SqlStorage): boolean {
+  const status = getWorkspaceCacheJob(sql)?.status;
+  return status !== undefined && status !== "ready" && status !== "exhausted";
 }
 
 export function nextWorkspaceCacheJobAt(sql: SqlStorage): number | null {
@@ -129,6 +135,7 @@ export async function processWorkspaceCacheJob(
   let job = getWorkspaceCacheJob(host.sql);
   if (!job) return "missing";
   if (job.status === "ready") return "ready";
+  if (job.status === "exhausted") return "exhausted";
 
   if (!isWorkspaceQuiescent(host)) {
     deferWorkspaceCacheJob(host.sql, now + CACHE_JOB_QUIET_RETRY_MS, now);
@@ -191,25 +198,27 @@ export async function processWorkspaceCacheJob(
 
   const reason = failureReason(result.reason ?? "cache snapshot was not created", host.redactionSecrets);
   const nextAttemptAt = Date.now() + retryDelayMs(attempt);
+  const exhausted = attempt >= CACHE_JOB_MAX_ATTEMPTS;
   host.sql.exec(
     `UPDATE workspace_cache_jobs
-     SET status = 'failed', next_attempt_at = ?, started_at = NULL,
+     SET status = ?, next_attempt_at = ?, started_at = NULL,
          last_error = ?, updated_at = ?
      WHERE job_id = ?`,
-    nextAttemptAt,
+    exhausted ? "exhausted" : "failed",
+    exhausted ? null : nextAttemptAt,
     reason,
     new Date().toISOString(),
     WORKSPACE_CACHE_JOB_ID,
   );
-  host.getTracer()?.log("ERROR", "workspace_cache.create.failed", {
+  host.getTracer()?.log("ERROR", exhausted ? "workspace_cache.create.exhausted" : "workspace_cache.create.failed", {
     phase: result.phase ?? "unknown",
     reason,
     repo: job.repo,
     duration_ms: durationMs,
     attempt,
-    next_attempt_at: nextAttemptAt,
+    ...(exhausted ? {} : { next_attempt_at: nextAttemptAt }),
   });
-  return "failed";
+  return exhausted ? "exhausted" : "failed";
 }
 
 function isWorkspaceQuiescent(host: OrchestratorHost): boolean {

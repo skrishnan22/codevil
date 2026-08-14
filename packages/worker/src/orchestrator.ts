@@ -339,7 +339,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
 
     const cacheResult = await processWorkspaceCacheJob(this, now);
     if (
-      (cacheResult === "ready" || cacheResult === "failed")
+      (cacheResult === "ready" || cacheResult === "exhausted")
       && this.meta.state === "ready"
       && !this.meta.active_run
       && this.meta.queued_runs.length > 0

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   WORKSPACE_CACHE_VERSION,
   buildWorkspaceSnapshotInsert,
+  createWorkspaceCacheSnapshot,
   latestWorkspaceSnapshotSelect,
   normalizeRepoCacheKey,
 } from "../dist/workspace-cache.js";
@@ -65,4 +66,48 @@ test("buildWorkspaceSnapshotInsert stores a serializable Cloudflare backup handl
       ],
     },
   );
+});
+
+test("createWorkspaceCacheSnapshot reports backup failures by phase", async () => {
+  const result = await createWorkspaceCacheSnapshot({
+    db: {},
+    sandbox: {
+      createBackup: async () => {
+        throw new Error("backup expired");
+      },
+    },
+    repo: "https://github.com/example/app.git",
+    sourceSessionId: "ses_123",
+  });
+
+  assert.deepEqual(result, {
+    created: false,
+    phase: "backup",
+    reason: "backup expired",
+  });
+});
+
+test("createWorkspaceCacheSnapshot reports D1 persistence failures by phase", async () => {
+  const result = await createWorkspaceCacheSnapshot({
+    db: {
+      prepare: () => ({
+        bind: () => ({
+          run: async () => {
+            throw new Error("D1 unavailable");
+          },
+        }),
+      }),
+    },
+    sandbox: {
+      createBackup: async () => ({ id: "backup_123", dir: "/workspace" }),
+    },
+    repo: "https://github.com/example/app.git",
+    sourceSessionId: "ses_123",
+  });
+
+  assert.deepEqual(result, {
+    created: false,
+    phase: "persist",
+    reason: "D1 unavailable",
+  });
 });

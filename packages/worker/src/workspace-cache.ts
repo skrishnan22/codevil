@@ -35,12 +35,14 @@ export interface WorkspaceSnapshotInsert {
 
 export interface WorkspaceCacheRestoreResult {
   restored: boolean;
+  phase?: "lookup" | "restore" | "mark_used";
   snapshotId?: string;
   reason?: string;
 }
 
 export interface WorkspaceCacheCreateResult {
   created: boolean;
+  phase?: "backup" | "persist";
   snapshotId?: string;
   reason?: string;
 }
@@ -139,17 +141,22 @@ export async function restoreLatestWorkspaceCache(input: {
   try {
     row = await input.db.prepare(select.sql).bind(...select.bindings).first<WorkspaceSnapshotRow>();
   } catch (error) {
-    return { restored: false, reason: errorMessage(error) };
+    return { restored: false, phase: "lookup", reason: errorMessage(error) };
   }
-  if (!row) return { restored: false, reason: "cache miss" };
+  if (!row) return { restored: false, phase: "lookup", reason: "cache miss" };
 
   try {
     await retrySandboxOperation(() => input.sandbox.restoreBackup(backupFromWorkspaceSnapshot(row)));
+  } catch (error) {
+    return { restored: false, phase: "restore", snapshotId: row.id, reason: errorMessage(error) };
+  }
+
+  try {
     const update = workspaceSnapshotUsedUpdate(row.id, input.now ?? new Date().toISOString());
     await input.db.prepare(update.sql).bind(...update.bindings).run();
     return { restored: true, snapshotId: row.id };
   } catch (error) {
-    return { restored: false, snapshotId: row.id, reason: errorMessage(error) };
+    return { restored: false, phase: "mark_used", snapshotId: row.id, reason: errorMessage(error) };
   }
 }
 
@@ -162,6 +169,7 @@ export async function createWorkspaceCacheSnapshot(input: {
   now?: string;
   ttlSeconds?: number;
 }): Promise<WorkspaceCacheCreateResult> {
+  let phase: WorkspaceCacheCreateResult["phase"] = "backup";
   try {
     const backup = await retrySandboxOperation(() =>
       input.sandbox.createBackup({
@@ -172,6 +180,7 @@ export async function createWorkspaceCacheSnapshot(input: {
         multipart: true,
       }),
     );
+    phase = "persist";
     const id = `wsc_${crypto.randomUUID().replace(/-/g, "")}`;
     const insert = buildWorkspaceSnapshotInsert({
       id,
@@ -184,7 +193,7 @@ export async function createWorkspaceCacheSnapshot(input: {
     await input.db.prepare(insert.sql).bind(...insert.bindings).run();
     return { created: true, snapshotId: id };
   } catch (error) {
-    return { created: false, reason: errorMessage(error) };
+    return { created: false, phase, reason: errorMessage(error) };
   }
 }
 

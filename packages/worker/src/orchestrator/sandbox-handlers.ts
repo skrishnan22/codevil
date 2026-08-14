@@ -12,6 +12,9 @@ import {
 import {
   createWorkspaceCacheSnapshotForSandbox,
   restoreLatestWorkspaceCache,
+  WORKSPACE_CACHE_DIR,
+  WORKSPACE_CACHE_TTL_SECONDS,
+  WORKSPACE_CACHE_VERSION,
   type WorkspaceCacheSandbox,
 } from "../workspace-cache.js";
 import type { SandboxConnectionMode } from "../sandbox-connection.js";
@@ -338,6 +341,9 @@ async function restoreWorkspaceCacheBeforeStart(
   sandbox: WorkspaceCacheSandbox,
 ): Promise<boolean> {
   if (!host.meta) return false;
+  host.getTracer()?.log("INFO", "workspace_cache.restore.started", {
+    repo: host.meta.repo,
+  });
   const result = await restoreLatestWorkspaceCache({
     db: host.workerEnv.DB,
     sandbox,
@@ -346,6 +352,7 @@ async function restoreWorkspaceCacheBeforeStart(
 
   if (result.restored) {
     host.getTracer()?.log("INFO", "workspace_cache.restore.hit", {
+      phase: "restore",
       snapshot_id: result.snapshotId,
       repo: host.meta.repo,
     });
@@ -353,9 +360,11 @@ async function restoreWorkspaceCacheBeforeStart(
     return true;
   }
 
+  const restoreFailure = redactEvent({ reason: result.reason }, host.redactionSecrets) as { reason?: unknown };
   host.getTracer()?.log("INFO", "workspace_cache.restore.miss", {
+    phase: result.phase ?? "lookup",
     snapshot_id: result.snapshotId,
-    reason: result.reason,
+    reason: restoreFailure.reason,
     repo: host.meta.repo,
   });
   return false;
@@ -365,24 +374,44 @@ function scheduleWorkspaceCacheSnapshot(host: OrchestratorHost): void {
   if (!host.meta) return;
   const sessionId = host.meta.session_id;
   const repo = host.meta.repo;
+  const startedAt = Date.now();
+  host.getTracer()?.log("INFO", "workspace_cache.create.started", {
+    repo,
+    cache_version: WORKSPACE_CACHE_VERSION,
+    backup_dir: WORKSPACE_CACHE_DIR,
+    ttl_seconds: WORKSPACE_CACHE_TTL_SECONDS,
+  });
   host.ctx.waitUntil((async () => {
-    const result = await createWorkspaceCacheSnapshotForSandbox({
-      db: host.workerEnv.DB,
-      binding: host.workerEnv.Sandbox,
-      sessionId,
-      repo,
-    });
-    if (result.created) {
-      host.getTracer()?.log("INFO", "workspace_cache.create.ready", {
-        snapshot_id: result.snapshotId,
+    try {
+      const result = await createWorkspaceCacheSnapshotForSandbox({
+        db: host.workerEnv.DB,
+        binding: host.workerEnv.Sandbox,
+        sessionId,
         repo,
       });
-      return;
+      if (result.created) {
+        host.getTracer()?.log("INFO", "workspace_cache.create.ready", {
+          snapshot_id: result.snapshotId,
+          repo,
+          duration_ms: Date.now() - startedAt,
+        });
+        return;
+      }
+      const createFailure = redactEvent({ reason: result.reason }, host.redactionSecrets) as { reason?: unknown };
+      host.getTracer()?.log("ERROR", "workspace_cache.create.failed", {
+        phase: result.phase ?? "unknown",
+        reason: createFailure.reason,
+        repo,
+        duration_ms: Date.now() - startedAt,
+      });
+    } catch (error) {
+      host.getTracer()?.log("ERROR", "workspace_cache.create.failed", {
+        phase: "sandbox_binding",
+        ...redactEvent(safeExceptionAttributes(error), host.redactionSecrets),
+        repo,
+        duration_ms: Date.now() - startedAt,
+      });
     }
-    host.getTracer()?.log("WARN", "workspace_cache.create.skipped", {
-      reason: result.reason,
-      repo,
-    });
   })());
 }
 

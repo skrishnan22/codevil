@@ -308,6 +308,39 @@ test("interrupted cache work is nonblocking when recovery alarms drain queued Ag
   assert.deepEqual(fixture.host.meta.queued_runs, []);
 });
 
+test("recovery alarms leave queued Agent Runs untouched while the sandbox is disconnected", () => {
+  const queuedRun = createAgentRun({
+    actor,
+    text: "wait for sandbox reconnect",
+    now: "2026-06-03T00:00:00.000Z",
+    id: "run_after_restart_without_socket",
+  });
+  const sql = createCacheJobSql();
+  sql.exec(
+    "INSERT INTO workspace_cache_jobs",
+    "workspace",
+    "github.com/acme/app",
+    "workspace-cache-v3",
+    "ses_test",
+    1_000,
+    "2026-06-03T00:00:00.000Z",
+    "2026-06-03T00:00:00.000Z",
+  );
+  sql.row.status = "interrupted";
+  sql.row.next_attempt_at = null;
+  const fixture = createFakeHost(
+    { state: "ready", queued_runs: [queuedRun] },
+    { sql, sandboxConnected: false },
+  );
+
+  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
+
+  assert.equal(fixture.host.meta.active_run ?? null, null);
+  assert.deepEqual(fixture.host.meta.queued_runs.map((run) => run.id), [
+    "run_after_restart_without_socket",
+  ]);
+});
+
 test("handleSandboxPlanReady stores plan and requests approval during planning", () => {
   const active = createAgentRun({
     actor,

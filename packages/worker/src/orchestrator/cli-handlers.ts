@@ -101,11 +101,13 @@ export function handleAgentRequest(
   if (!trimmed) return;
 
   const cacheJobBlocksAgentWork = workspaceCacheJobBlocksAgentWork(host.sql);
+  const sandboxConnected = host.ctx.getWebSockets("sandbox").length > 0;
   if (
     host.meta.state === "ready"
     && !host.meta.active_run
     && host.meta.queued_runs.length > 0
     && !cacheJobBlocksAgentWork
+    && sandboxConnected
   ) {
     finishRunAndDrainQueue(host, "completed");
   }
@@ -129,7 +131,7 @@ export function handleAgentRequest(
     active: host.meta.active_run ?? null,
     queue: host.meta.queued_runs,
   }, run, {
-    sessionReady: host.meta.state === "ready" && !cacheJobBlocksAgentWork,
+    sessionReady: host.meta.state === "ready" && !cacheJobBlocksAgentWork && sandboxConnected,
   });
 
   host.meta.active_run = next.active;

@@ -441,6 +441,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.ctx.acceptWebSocket(server, ["sandbox"]);
     server.serializeAttachment({ sandbox: { aud: capability.aud, role: capability.role, sessionId: capability.sid } });
     initializeSandboxConnection(this, server, mode);
+    drainQueuedAgentWorkIfWorkspaceCacheSettled(this);
 
     if (mode === "resume") {
       this.meta.sandbox_disconnected_at = undefined;

@@ -351,6 +351,7 @@ export function drainQueuedAgentWorkIfWorkspaceCacheSettled(host: OrchestratorHo
     && !host.meta.active_run
     && host.meta.queued_runs.length > 0
     && !workspaceCacheJobBlocksAgentWork(host.sql)
+    && host.ctx.getWebSockets("sandbox").length > 0
   ) {
     finishRunAndDrainQueue(host, "completed");
   }

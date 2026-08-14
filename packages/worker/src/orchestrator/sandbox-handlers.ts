@@ -18,7 +18,9 @@ import {
 } from "../workspace-cache.js";
 import {
   enqueueWorkspaceCacheJob,
+  processWorkspaceCacheJob,
   workspaceCacheJobBlocksAgentWork,
+  type CreateSnapshot,
 } from "./workspace-cache-job.js";
 import type { SandboxConnectionMode } from "../sandbox-connection.js";
 import { createDraftPullRequest, normalizeGitHubRepoName } from "../github.js";
@@ -324,7 +326,10 @@ export function handleSandboxCloneStarted(host: OrchestratorHost): void {
   }
 }
 
-export function handleSandboxCloneComplete(host: OrchestratorHost): void {
+export function handleSandboxCloneComplete(
+  host: OrchestratorHost,
+  createSnapshot?: CreateSnapshot,
+): void {
   if (!host.meta) return;
   if (host.meta.state !== "cloning_repo") return;
 
@@ -333,13 +338,21 @@ export function handleSandboxCloneComplete(host: OrchestratorHost): void {
     host.appendAndBroadcast({ type: "status", message: "Repository cloned. Session is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
     enqueueWorkspaceCacheJob(host);
-    if (
-      !host.meta.active_run
-      && host.meta.queued_runs.length > 0
-      && !workspaceCacheJobBlocksAgentWork(host.sql)
-    ) {
-      finishRunAndDrainQueue(host, "completed");
-    }
+    const cacheAttempt = processWorkspaceCacheJob(host, Date.now(), createSnapshot);
+    host.ctx.waitUntil(cacheAttempt.then(() => {
+      drainQueuedAgentWorkIfWorkspaceCacheSettled(host);
+    }));
+  }
+}
+
+export function drainQueuedAgentWorkIfWorkspaceCacheSettled(host: OrchestratorHost): void {
+  if (
+    host.meta?.state === "ready"
+    && !host.meta.active_run
+    && host.meta.queued_runs.length > 0
+    && !workspaceCacheJobBlocksAgentWork(host.sql)
+  ) {
+    finishRunAndDrainQueue(host, "completed");
   }
 }
 

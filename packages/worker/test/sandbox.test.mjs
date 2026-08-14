@@ -58,7 +58,7 @@ test("sandbox process environment never receives the deployment API key or provi
   assert.doesNotMatch(JSON.stringify(env), /sk-ant-real-provider-key/);
 });
 
-test("provisions the agent as uid 10001 with its environment directly and never uses the sandbox filesystem", async () => {
+test("repairs restored workspace access after beforeStart and provisions the agent as uid 10001", async () => {
   const calls = [];
   const sandbox = {
     setKeepAlive: async (active) => calls.push(["setKeepAlive", active]),
@@ -75,12 +75,14 @@ test("provisions the agent as uid 10001 with its environment directly and never 
     provider: "anthropic",
     proxyBase: "https://codevil.example.com",
     proxyTokens: { "anthropic-messages": "proxy-capability" },
+    beforeStart: async () => calls.push(["beforeStart"]),
   });
 
   assert.deepEqual(calls, [
     ["setKeepAlive", true],
     ["setCodevilKeepAlive", true, "session provisioning"],
-    ["startProcess", "exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js", {
+    ["beforeStart"],
+    ["startProcess", "chown 10001:10001 /workspace && chmod u+rwx /workspace && exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js", {
       cwd: "/workspace",
       env: {
         HOME: "/home/codevil",

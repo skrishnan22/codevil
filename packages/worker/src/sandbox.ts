@@ -225,7 +225,7 @@ export async function provisionSandboxOnInstance(
   await options.beforeStart?.(sandbox);
 
   await retrySandboxOperation(() => sandbox.startProcess(
-    "exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js",
+    "chown 10001:10001 /workspace && chmod u+rwx /workspace && exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js",
     {
       cwd: "/workspace",
       env,

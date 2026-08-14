@@ -110,6 +110,37 @@ test("handleAgentRequest queues while the initial workspace cache job is pending
   assert.ok(!broadcasts.some((e) => e.type === "agent_run_started"));
 });
 
+test("handleAgentRequest drains an older queued run before enqueueing a new request after cache recovery", () => {
+  const olderRun = createAgentRun({
+    actor,
+    text: "older queued task",
+    now: "2026-06-03T00:00:00.000Z",
+    id: "run_older",
+  });
+  const cacheJob = { status: "interrupted", attempts: 1, next_attempt_at: null };
+  const sql = {
+    exec(query) {
+      if (query.includes("SELECT * FROM workspace_cache_jobs")) {
+        return { toArray: () => [cacheJob] };
+      }
+      return [];
+    },
+  };
+  const { host, broadcasts, sandboxMessages } = createFakeHost(
+    { state: "ready", active_run: null, queued_runs: [olderRun] },
+    { sql },
+  );
+
+  handleAgentRequest(host, "newer task", actor, false);
+
+  assert.equal(host.meta.active_run?.id, "run_older");
+  assert.equal(host.meta.active_run?.state, "executing");
+  assert.deepEqual(host.meta.queued_runs.map((run) => run.text), ["newer task"]);
+  assert.equal(sandboxMessages.length, 1);
+  assert.equal(sandboxMessages[0].prompt, "older queued task");
+  assert.equal(broadcasts.find((event) => event.type === "agent_request_queued")?.position, 1);
+});
+
 test("handleAbort cancels an active run and returns session to ready", () => {
   const active = createAgentRun({
     actor,

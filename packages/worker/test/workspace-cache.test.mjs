@@ -10,7 +10,7 @@ import {
 } from "../dist/workspace-cache.js";
 
 test("workspace cache version changes for the supported runtime and ownership boundary", () => {
-  assert.equal(WORKSPACE_CACHE_VERSION, "workspace-cache-v3");
+  assert.equal(WORKSPACE_CACHE_VERSION, "workspace-cache-v4");
 });
 
 test("normalizeRepoCacheKey removes credentials and unstable URL suffixes", () => {

@@ -26,3 +26,30 @@ export function sandboxReconnectExpired(disconnectedAt: string, now: number): bo
 export function sandboxReconnectDeadline(disconnectedAt: string): number {
   return Date.parse(disconnectedAt) + SANDBOX_RECONNECT_GRACE_MS;
 }
+
+/**
+ * A reconnect restores the transport, but it does not prove that cloning has
+ * completed. Repository readiness remains owned by the clone_complete event.
+ */
+export function sandboxReconnectDirectoryState(state: SessionState): "cloning" | "ready" {
+  return state === "cloning_repo" ? "cloning" : "ready";
+}
+
+export interface SandboxReconnectHost {
+  meta: {
+    state: SessionState;
+    sandbox_disconnected_at?: string;
+  } | null;
+  saveMeta(): void;
+  appendAndBroadcast(event: { type: "status"; message: string }): void;
+  updateDirectory(patch: { sandbox_state: "cloning" | "ready" }): void;
+}
+
+/** Apply the durable reconnect side effects without claiming a clone completed. */
+export function completeSandboxReconnect(host: SandboxReconnectHost): void {
+  if (!host.meta) return;
+  host.meta.sandbox_disconnected_at = undefined;
+  host.saveMeta();
+  host.appendAndBroadcast({ type: "status", message: "Sandbox reconnected." });
+  host.updateDirectory({ sandbox_state: sandboxReconnectDirectoryState(host.meta.state) });
+}

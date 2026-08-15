@@ -6,7 +6,7 @@ import {
 } from "./sandbox.js";
 import type { SqlStatement } from "./sql.js";
 
-export const WORKSPACE_CACHE_VERSION = "workspace-cache-v3";
+export const WORKSPACE_CACHE_VERSION = "workspace-cache-v4";
 export const WORKSPACE_CACHE_DIR = "/workspace";
 export const WORKSPACE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 

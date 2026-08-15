@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
+import * as sandboxConnection from "../dist/sandbox-connection.js";
+
+const {
   SANDBOX_RECONNECT_GRACE_MS,
   sandboxConnectionMode,
   sandboxReconnectExpired,
-} from "../dist/sandbox-connection.js";
+} = sandboxConnection;
 
 test("initializes only the first provisioning connection", () => {
   assert.equal(sandboxConnectionMode("provisioning_sandbox", undefined), "initialize");
@@ -35,6 +37,33 @@ test("rejects unsolicited and terminal reconnects", () => {
 test("resumes an orphaned sandbox during repository setup or an active session", () => {
   assert.equal(sandboxConnectionMode("cloning_repo", undefined, 0), "resume");
   assert.equal(sandboxConnectionMode("ready", undefined, 0), "resume");
+});
+
+test("reconnect side effects preserve cloning state until clone_complete", () => {
+  const operations = [];
+  const host = {
+    meta: { state: "cloning_repo", sandbox_disconnected_at: "2026-06-20T13:28:13.000Z" },
+    saveMeta() {
+      operations.push("save");
+    },
+    appendAndBroadcast(event) {
+      operations.push(event);
+    },
+    updateDirectory(patch) {
+      operations.push(patch);
+    },
+  };
+
+  assert.equal(typeof sandboxConnection.completeSandboxReconnect, "function");
+  if (typeof sandboxConnection.completeSandboxReconnect !== "function") return;
+  sandboxConnection.completeSandboxReconnect(host);
+
+  assert.equal(host.meta.sandbox_disconnected_at, undefined);
+  assert.deepEqual(operations, [
+    "save",
+    { type: "status", message: "Sandbox reconnected." },
+    { sandbox_state: "cloning" },
+  ]);
 });
 
 test("resumes an active session when the sandbox socket was lost without a close marker", () => {

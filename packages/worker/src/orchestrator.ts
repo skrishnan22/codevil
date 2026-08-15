@@ -31,7 +31,7 @@ import {
 import {
   SANDBOX_RECONNECT_GRACE_MS,
   sandboxConnectionMode,
-  sandboxReconnectDeadline,
+  completeSandboxReconnect,
   sandboxReconnectExpired,
 } from "./sandbox-connection.js";
 import { redactEvent } from "./redaction.js";
@@ -124,6 +124,7 @@ import {
   nextWorkspaceCacheJobAt,
   recoverWorkspaceCacheJobAfterRestart,
 } from "./orchestrator/workspace-cache-job.js";
+import { armNextAlarm as armNextAlarmAt } from "./orchestrator/alarm.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
 
@@ -297,7 +298,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
         message: `Session timed out after ${this.meta.max_time}.`,
       });
       await this.terminateSandbox("timed out");
-      this.armNextAlarmSafe(Date.now() - 1);
+      await this.armNextAlarm(Date.now() - 1);
       return;
     }
 
@@ -334,12 +335,12 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
           : "Sandbox failed to connect within 60 seconds. No process output captured.",
       });
       await this.terminateSandbox("timed out");
-      this.armNextAlarmSafe(Date.now() - 1);
+      await this.armNextAlarm(Date.now() - 1);
       return;
     }
 
     drainQueuedAgentWorkIfWorkspaceCacheSettled(this);
-    this.armNextAlarmSafe(now);
+    await this.armNextAlarm(now);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -444,10 +445,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     drainQueuedAgentWorkIfWorkspaceCacheSettled(this);
 
     if (mode === "resume") {
-      this.meta.sandbox_disconnected_at = undefined;
-      this.saveMeta();
-      this.appendAndBroadcast({ type: "status", message: "Sandbox reconnected." });
-      this.updateDirectory({ sandbox_state: "ready" });
+      completeSandboxReconnect(this);
       this.armNextAlarmSafe();
     }
 
@@ -1005,26 +1003,15 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
 
   async armNextAlarm(now = Date.now()): Promise<void> {
     if (!this.meta) return;
-
-    const deadlines: number[] = [];
-    if (!isTerminalState(this.meta.state)) {
-      const createdAt = Date.parse(this.meta.created_at);
-      deadlines.push(createdAt + 60_000);
-      const maxTimeMs = parseMaxTimeMs(this.meta.max_time);
-      if (maxTimeMs !== null) deadlines.push(createdAt + maxTimeMs);
-      if (this.meta.sandbox_disconnected_at) {
-        deadlines.push(sandboxReconnectDeadline(this.meta.sandbox_disconnected_at));
-      }
-    }
-    const presentationRetryAt = this.liveRunCards.nextRetryAt();
-    if (presentationRetryAt !== null) deadlines.push(presentationRetryAt);
-    const workspaceCacheRetryAt = nextWorkspaceCacheJobAt(this.sql);
-    if (workspaceCacheRetryAt !== null) deadlines.push(workspaceCacheRetryAt);
-
-    const nextDeadline = Math.min(...deadlines.filter((deadline) => deadline > now));
-    if (Number.isFinite(nextDeadline)) {
-      await this.ctx.storage.setAlarm(nextDeadline);
-    }
+    await armNextAlarmAt({
+      now,
+      state: this.meta.state,
+      createdAt: Date.parse(this.meta.created_at),
+      maxTimeMs: parseMaxTimeMs(this.meta.max_time),
+      sandboxDisconnectedAt: this.meta.sandbox_disconnected_at,
+      presentationRetryAt: this.liveRunCards.nextRetryAt(),
+      workspaceCacheRetryAt: nextWorkspaceCacheJobAt(this.sql),
+    }, (deadline) => this.ctx.storage.setAlarm(deadline));
   }
 
   private armNextAlarmSafe(now?: number): Promise<void> {
@@ -1100,7 +1087,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       active_run_state: activeRunId ? "failed" : null,
     });
     await this.terminateSandbox("sandbox reconnect timed out");
-    this.armNextAlarmSafe(Date.now() - 1);
+    await this.armNextAlarm(Date.now() - 1);
   }
 
   async fetchPreview(request: Request, token: string): Promise<Response> {

@@ -11,7 +11,7 @@ const runtime = dockerfile.slice(dockerfile.lastIndexOf("FROM --platform=$CODEVI
 test("sandbox runtime preserves Cloudflare backup support and Node development tools", () => {
   assert.match(
     runtime,
-    /^FROM --platform=\$CODEVIL_SANDBOX_PLATFORM docker\.io\/cloudflare\/sandbox:0\.12\.1/m,
+    /^FROM --platform=\$CODEVIL_SANDBOX_PLATFORM docker\.io\/cloudflare\/sandbox:0\.12\.7/m,
   );
   assert.doesNotMatch(runtime, /COPY --from=sandbox-runtime \/container-server\/sandbox \/sandbox/);
   assert.doesNotMatch(runtime, /FROM --platform=\$CODEVIL_SANDBOX_PLATFORM node:22-slim/);

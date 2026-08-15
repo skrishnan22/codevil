@@ -45,6 +45,7 @@ export interface WorkspaceCacheCreateResult {
   phase?: "backup" | "persist";
   snapshotId?: string;
   reason?: string;
+  retryable?: boolean;
 }
 
 export interface WorkspaceCacheSandbox {
@@ -193,7 +194,12 @@ export async function createWorkspaceCacheSnapshot(input: {
     await input.db.prepare(insert.sql).bind(...insert.bindings).run();
     return { created: true, snapshotId: id };
   } catch (error) {
-    return { created: false, phase, reason: errorMessage(error) };
+    return {
+      created: false,
+      phase,
+      reason: errorMessage(error),
+      ...(isRetryableWorkspaceCacheError(error) ? { retryable: true } : {}),
+    };
   }
 }
 
@@ -215,4 +221,21 @@ export async function createWorkspaceCacheSnapshotForSandbox(input: {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function isRetryableWorkspaceCacheError(error: unknown): boolean {
+  if (typeof error === "object" && error !== null) {
+    const candidate = error as {
+      retryable?: unknown;
+      context?: { retryable?: unknown };
+    };
+    if (candidate.retryable === true || candidate.context?.retryable === true) return true;
+  }
+
+  const message = errorMessage(error).toLowerCase();
+  return message.includes("durable object reset")
+    || message.includes("runtime connection")
+    || message.includes("operation was interrupted")
+    || message.includes("temporarily unavailable")
+    || message.includes("container suddenly disconnected");
 }

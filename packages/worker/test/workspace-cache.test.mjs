@@ -5,6 +5,7 @@ import {
   WORKSPACE_CACHE_VERSION,
   buildWorkspaceSnapshotInsert,
   createWorkspaceCacheSnapshot,
+  isRetryableWorkspaceCacheError,
   latestWorkspaceSnapshotSelect,
   normalizeRepoCacheKey,
 } from "../dist/workspace-cache.js";
@@ -85,6 +86,13 @@ test("createWorkspaceCacheSnapshot reports backup failures by phase", async () =
     phase: "backup",
     reason: "backup expired",
   });
+});
+
+test("workspace cache recognizes a Durable Object reset as retryable", () => {
+  assert.equal(
+    isRetryableWorkspaceCacheError(new Error("Durable Object reset because its code was updated")),
+    true,
+  );
 });
 
 test("createWorkspaceCacheSnapshot reports D1 persistence failures by phase", async () => {

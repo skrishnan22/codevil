@@ -4,6 +4,7 @@ import type { Sandbox } from "@cloudflare/sandbox";
 import { redactEvent } from "../redaction.js";
 import {
   createWorkspaceCacheSnapshotForSandbox,
+  isRetryableWorkspaceCacheError,
   WORKSPACE_CACHE_TTL_SECONDS,
   WORKSPACE_CACHE_VERSION,
   type WorkspaceCacheCreateResult,
@@ -11,6 +12,8 @@ import {
 import type { OrchestratorHost } from "./host.js";
 
 export const WORKSPACE_CACHE_JOB_ID = "workspace";
+const MAX_WORKSPACE_CACHE_ATTEMPTS = 3;
+const WORKSPACE_CACHE_RETRY_BASE_MS = 30_000;
 
 export type WorkspaceCacheJobStatus =
   | "pending"
@@ -103,8 +106,8 @@ export function recoverWorkspaceCacheJobAfterRestart(host: OrchestratorHost, now
   const job = getWorkspaceCacheJob(host.sql);
   if (!job) return false;
 
-  if (job.status === "pending" || job.status === "running") {
-    interruptWorkspaceCacheJob(
+  if (job.status === "running") {
+    requeueWorkspaceCacheJob(
       host.sql,
       now,
       "cache snapshot interrupted by Durable Object restart",
@@ -131,6 +134,7 @@ export async function processWorkspaceCacheJob(
   if (job.status === "exhausted") return "exhausted";
   if (job.status === "interrupted") return "interrupted";
   if (job.status === "running") return "deferred";
+  if (job.next_attempt_at !== null && job.next_attempt_at > now) return "deferred";
 
   if (!isWorkspaceQuiescent(host)) {
     interruptWorkspaceCacheJob(
@@ -164,6 +168,7 @@ export async function processWorkspaceCacheJob(
       created: false,
       phase: "backup",
       reason: failureReason(error, host.redactionSecrets),
+      retryable: isRetryableWorkspaceCacheError(error),
     };
   }
 
@@ -188,11 +193,42 @@ export async function processWorkspaceCacheJob(
   }
 
   const reason = failureReason(result.reason ?? "cache snapshot was not created", host.redactionSecrets);
+  if (result.retryable && attempt < MAX_WORKSPACE_CACHE_ATTEMPTS) {
+    const nextAttemptAt = now + retryDelayMs(attempt);
+    host.sql.exec(
+      `UPDATE workspace_cache_jobs
+       SET status = 'pending', next_attempt_at = ?, started_at = NULL,
+           last_error = ?, updated_at = ?
+       WHERE job_id = ?`,
+      nextAttemptAt,
+      reason,
+      new Date().toISOString(),
+      WORKSPACE_CACHE_JOB_ID,
+    );
+    void host.armNextAlarm(nextAttemptAt - 1).catch((error) => {
+      host.getTracer()?.log("ERROR", "alarm.arm.failed", {
+        ...redactEvent(safeExceptionAttributes(error), host.redactionSecrets),
+        reason: "workspace_cache_job_retry",
+      });
+    });
+    host.getTracer()?.log("WARN", "workspace_cache.create.retrying", {
+      phase: result.phase ?? "unknown",
+      reason,
+      repo: job.repo,
+      duration_ms: durationMs,
+      attempt,
+      next_attempt_at: nextAttemptAt,
+    });
+    return "deferred";
+  }
+
+  const terminalStatus = result.retryable ? "exhausted" : "failed";
   host.sql.exec(
     `UPDATE workspace_cache_jobs
-     SET status = 'failed', next_attempt_at = NULL, started_at = NULL,
+     SET status = ?, next_attempt_at = NULL, started_at = NULL,
          last_error = ?, updated_at = ?
      WHERE job_id = ?`,
+    terminalStatus,
     reason,
     new Date().toISOString(),
     WORKSPACE_CACHE_JOB_ID,
@@ -203,8 +239,9 @@ export async function processWorkspaceCacheJob(
     repo: job.repo,
     duration_ms: durationMs,
     attempt,
+    status: terminalStatus,
   });
-  return "failed";
+  return terminalStatus;
 }
 
 function isWorkspaceQuiescent(host: OrchestratorHost): boolean {
@@ -243,6 +280,23 @@ function interruptWorkspaceCacheJob(sql: SqlStorage, now: number, reason: string
     new Date(now).toISOString(),
     WORKSPACE_CACHE_JOB_ID,
   );
+}
+
+function requeueWorkspaceCacheJob(sql: SqlStorage, now: number, reason: string): void {
+  sql.exec(
+    `UPDATE workspace_cache_jobs
+     SET status = 'pending', next_attempt_at = ?, started_at = NULL,
+         last_error = ?, updated_at = ?
+     WHERE job_id = ? AND status = 'running'`,
+    now,
+    reason,
+    new Date(now).toISOString(),
+    WORKSPACE_CACHE_JOB_ID,
+  );
+}
+
+function retryDelayMs(attempt: number): number {
+  return WORKSPACE_CACHE_RETRY_BASE_MS * 2 ** Math.max(0, attempt - 1);
 }
 
 function failureReason(error: unknown, secrets: readonly string[]): string {

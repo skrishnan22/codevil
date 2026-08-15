@@ -18,9 +18,7 @@ import {
 } from "../workspace-cache.js";
 import {
   enqueueWorkspaceCacheJob,
-  processWorkspaceCacheJob,
   workspaceCacheJobBlocksAgentWork,
-  type CreateSnapshot,
 } from "./workspace-cache-job.js";
 import type { SandboxConnectionMode } from "../sandbox-connection.js";
 import { createDraftPullRequest, normalizeGitHubRepoName } from "../github.js";
@@ -328,7 +326,6 @@ export function handleSandboxCloneStarted(host: OrchestratorHost): void {
 
 export function handleSandboxCloneComplete(
   host: OrchestratorHost,
-  createSnapshot?: CreateSnapshot,
 ): void {
   if (!host.meta) return;
   if (host.meta.state !== "cloning_repo") return;
@@ -337,11 +334,9 @@ export function handleSandboxCloneComplete(
     host.updateDirectory({ room_state: "ready", sandbox_state: "ready" });
     host.appendAndBroadcast({ type: "status", message: "Repository cloned. Session is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
+    // Backups can outlive the socket message invocation. Leave the work in
+    // durable job state and let the alarm run it so a DO restart can resume it.
     enqueueWorkspaceCacheJob(host);
-    const cacheAttempt = processWorkspaceCacheJob(host, Date.now(), createSnapshot);
-    host.ctx.waitUntil(cacheAttempt.then(() => {
-      drainQueuedAgentWorkIfWorkspaceCacheSettled(host);
-    }));
   }
 }
 

@@ -11,6 +11,7 @@ import {
   issueProxyCapabilities,
   provisionSessionSandbox,
 } from "../dist/orchestrator/sandbox-handlers.js";
+import { processWorkspaceCacheJob } from "../dist/orchestrator/workspace-cache-job.js";
 import { handleSandboxProxy } from "../dist/sandbox-proxy.js";
 import { actor, createFakeHost, createFakeTracer } from "./helpers/fake-host.mjs";
 
@@ -62,6 +63,15 @@ function createCacheJobSql() {
       if (query.includes("SET status = 'failed'")) {
         const [lastError, updatedAt] = params;
         row.status = "failed";
+        row.last_error = lastError;
+        row.started_at = null;
+        row.next_attempt_at = null;
+        row.updated_at = updatedAt;
+        return [];
+      }
+      if (query.includes("SET status = ?")) {
+        const [status, lastError, updatedAt] = params;
+        row.status = status;
         row.last_error = lastError;
         row.started_at = null;
         row.next_attempt_at = null;
@@ -218,7 +228,7 @@ test("handleSandboxCloneComplete transitions to ready and broadcasts room_ready"
   assert.ok(fixture.broadcasts.some((e) => e.type === "status" && /ready/i.test(e.message)));
 });
 
-test("handleSandboxCloneComplete starts one cache attempt before queued Agent Runs can write", async () => {
+test("handleSandboxCloneComplete queues durable cache work before queued Agent Runs can write", async () => {
   const queuedRun = createAgentRun({
     actor,
     text: "use the prepared workspace",
@@ -230,29 +240,24 @@ test("handleSandboxCloneComplete starts one cache attempt before queued Agent Ru
     { state: "cloning_repo", queued_runs: [queuedRun] },
     { sql },
   );
-  let backupCalls = 0;
-  let releaseBackup;
-  const backupPending = new Promise((resolve) => { releaseBackup = resolve; });
+  handleSandboxCloneComplete(fixture.host);
 
-  handleSandboxCloneComplete(fixture.host, async () => {
-    backupCalls += 1;
-    return backupPending;
-  });
-
-  assert.equal(backupCalls, 1);
-  assert.equal(sql.row.status, "running");
+  assert.equal(sql.row.status, "pending");
   assert.equal(fixture.host.meta.active_run ?? null, null);
   assert.deepEqual(fixture.host.meta.queued_runs.map((run) => run.id), ["run_waiting_for_cache"]);
 
-  releaseBackup({ created: true, snapshotId: "wsc_clone_context" });
-  await fixture.drainBackgroundWork();
+  await processWorkspaceCacheJob(fixture.host, Date.now(), async () => ({
+    created: true,
+    snapshotId: "wsc_clone_context",
+  }));
+  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
 
   assert.equal(sql.row.status, "ready");
   assert.equal(fixture.host.meta.active_run.id, "run_waiting_for_cache");
   assert.deepEqual(fixture.host.meta.queued_runs, []);
 });
 
-test("handleSandboxCloneComplete drains queued Agent Runs after cache failure", async () => {
+test("a cache failure still drains queued Agent Runs", async () => {
   const queuedRun = createAgentRun({
     actor,
     text: "continue without a warm cache",
@@ -265,12 +270,13 @@ test("handleSandboxCloneComplete drains queued Agent Runs after cache failure", 
     { sql },
   );
 
-  handleSandboxCloneComplete(fixture.host, async () => ({
+  handleSandboxCloneComplete(fixture.host);
+  await processWorkspaceCacheJob(fixture.host, Date.now(), async () => ({
     created: false,
     phase: "backup",
     reason: "backup reset the Durable Object",
   }));
-  await fixture.drainBackgroundWork();
+  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
 
   assert.equal(sql.row.status, "failed");
   assert.equal(fixture.host.meta.active_run.id, "run_after_cache_failure");

@@ -108,6 +108,16 @@ function createSql() {
         row.updated_at = now;
         return [];
       }
+      if (query.includes("SET status = ?")) {
+        const [status, lastError, updatedAt] = params;
+        const row = rows.get("workspace");
+        row.status = status;
+        row.last_error = lastError;
+        row.started_at = null;
+        row.next_attempt_at = null;
+        row.updated_at = updatedAt;
+        return [];
+      }
       if (query.includes("SET status = 'exhausted'")) {
         const [error, now] = params;
         const row = rows.get("workspace");
@@ -256,7 +266,32 @@ test("failed processing is terminal and never retries after agent work can start
   assert.equal(calls, 1);
 });
 
-test("a persisted running job is interrupted immediately after a DO restart", () => {
+test("retryable Durable Object resets are requeued with backoff", async () => {
+  const sql = createSql();
+  const host = createHost(sql);
+  enqueueWorkspaceCacheJob(host, 1_000);
+
+  const first = await processWorkspaceCacheJob(host, 1_000, async () => ({
+    created: false,
+    phase: "backup",
+    reason: "Durable Object reset because its code was updated",
+    retryable: true,
+  }));
+
+  assert.equal(first, "deferred");
+  assert.equal(getWorkspaceCacheJob(sql).status, "pending");
+  assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, 31_000);
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
+
+  const second = await processWorkspaceCacheJob(host, 31_000, async () => ({
+    created: true,
+    snapshotId: "wsc_after_reset",
+  }));
+  assert.equal(second, "ready");
+  assert.equal(getWorkspaceCacheJob(sql).status, "ready");
+});
+
+test("a persisted running job is requeued after a DO restart", () => {
   const sql = createSql();
   const host = createHost(sql);
   enqueueWorkspaceCacheJob(host, 1_000);
@@ -264,23 +299,23 @@ test("a persisted running job is interrupted immediately after a DO restart", ()
   sql.rows.get("workspace").started_at = 1_000;
 
   assert.equal(recoverWorkspaceCacheJobAfterRestart(host, 1_001), true);
-  assert.equal(getWorkspaceCacheJob(sql).status, "interrupted");
-  assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, null);
-  assert.equal(nextWorkspaceCacheJobAt(sql), null);
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
+  assert.equal(getWorkspaceCacheJob(sql).status, "pending");
+  assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, 1_001);
+  assert.equal(nextWorkspaceCacheJobAt(sql), 1_001);
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
   assert.deepEqual(host.alarms, [1_001]);
 });
 
-test("a persisted pending job is interrupted instead of starting from an alarm after restart", () => {
+test("a persisted pending job remains retryable after a DO restart", () => {
   const sql = createSql();
   const host = createHost(sql);
   enqueueWorkspaceCacheJob(host, 1_000);
 
   assert.equal(recoverWorkspaceCacheJobAfterRestart(host, 1_001), true);
-  assert.equal(getWorkspaceCacheJob(sql).status, "interrupted");
-  assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, null);
-  assert.equal(nextWorkspaceCacheJobAt(sql), null);
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
+  assert.equal(getWorkspaceCacheJob(sql).status, "pending");
+  assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, 1_000);
+  assert.equal(nextWorkspaceCacheJobAt(sql), 1_000);
+  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
   assert.deepEqual(host.alarms, [1_001]);
 });
 

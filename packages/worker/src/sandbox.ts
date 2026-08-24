@@ -23,6 +23,8 @@ export interface SandboxRetryOptions {
   attempts?: number;
   baseDelayMs?: number;
   sleep?: (delayMs: number) => Promise<void>;
+  /** Overrides the default transient-error classification when provided. */
+  retryOn?: (error: unknown) => boolean;
 }
 
 export const CODEVIL_SANDBOX_OPTIONS = {
@@ -249,7 +251,8 @@ export async function retrySandboxOperation<T>(
       return await operation();
     } catch (error) {
       lastError = error;
-      if (attempt === attempts || !isTransientSandboxError(error)) {
+      const retryable = options.retryOn ? options.retryOn(error) : isTransientSandboxError(error);
+      if (attempt === attempts || !retryable) {
         throw error;
       }
 

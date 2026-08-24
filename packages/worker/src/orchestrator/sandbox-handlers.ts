@@ -336,6 +336,10 @@ export function handleSandboxCloneComplete(
     // Backups can outlive the socket message invocation. Leave the work in
     // durable job state and let the alarm run it so a DO restart can resume it.
     enqueueWorkspaceCacheJob(host);
+    // Requests queued while cloning (e.g. Slack messages) must start now —
+    // without this they would wait for the alarm, which claims the backup
+    // first and only drains queued work after the upload finishes.
+    drainQueuedAgentWorkIfReady(host);
   }
 }
 

@@ -146,7 +146,12 @@ function createHost(sql, overrides = {}) {
     },
     workerEnv: { DB: {}, Sandbox: {} },
     redactionSecrets: [],
-    ctx: { storage: { setAlarm: async (when) => alarms.push(when) } },
+    ctx: {
+      storage: {
+        setAlarm: async (when) => alarms.push(when),
+        getAlarm: async () => (alarms.length ? Math.min(...alarms) : null),
+      },
+    },
     getTracer: () => ({ log: (...args) => logs.push(args) }),
     armNextAlarm: async () => {},
     logs,
@@ -181,8 +186,8 @@ test("an active Agent Run no longer blocks the snapshot claim", async () => {
   assert.equal(getWorkspaceCacheJob(sql).status, "ready");
 });
 
-test("non-ready session states still refuse the snapshot claim", async () => {
-  for (const state of ["planning", "executing", "awaiting_approval"]) {
+test("pre-clone session states defer the claim instead of abandoning it", async () => {
+  for (const state of ["initializing", "provisioning_sandbox", "cloning_repo"]) {
     const sql = createSql();
     const host = createHost(sql, { meta: { state } });
     enqueueWorkspaceCacheJob(host, 1_000);
@@ -193,9 +198,30 @@ test("non-ready session states still refuse the snapshot claim", async () => {
       return { created: true, snapshotId: "must-not-run" };
     });
 
-    assert.equal(result, "interrupted", state);
+    assert.equal(result, "deferred", state);
     assert.equal(calls, 0, state);
-    assert.equal(getWorkspaceCacheJob(sql).status, "interrupted", state);
+    const job = getWorkspaceCacheJob(sql);
+    assert.equal(job.status, "pending", state);
+    assert.equal(job.next_attempt_at, 31_000, state);
+    assert.deepEqual(host.alarms, [31_000], state);
+  }
+});
+
+test("run states no longer refuse the snapshot claim", async () => {
+  for (const state of ["planning", "executing", "awaiting_approval", "verifying"]) {
+    const sql = createSql();
+    const host = createHost(sql, { meta: { state } });
+    enqueueWorkspaceCacheJob(host, 1_000);
+
+    let calls = 0;
+    const result = await processWorkspaceCacheJob(host, 1_000, async () => {
+      calls += 1;
+      return { created: true, snapshotId: "wsc_during_run" };
+    });
+
+    assert.equal(result, "ready", state);
+    assert.equal(calls, 1, state);
+    assert.equal(getWorkspaceCacheJob(sql).status, "ready", state);
   }
 });
 

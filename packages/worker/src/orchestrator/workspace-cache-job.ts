@@ -1,4 +1,4 @@
-import { isTerminalState, safeExceptionAttributes } from "@codevil/shared";
+import { safeExceptionAttributes, type SessionState } from "@codevil/shared";
 import type { Sandbox } from "@cloudflare/sandbox";
 
 import { redactEvent } from "../redaction.js";
@@ -131,13 +131,12 @@ export async function processWorkspaceCacheJob(
   if (job.status === "running") return "deferred";
   if (job.next_attempt_at !== null && job.next_attempt_at > now) return "deferred";
 
-  if (!isWorkspaceQuiescent(host)) {
-    interruptWorkspaceCacheJob(
-      host.sql,
-      now,
-      "cache snapshot skipped because session state does not allow claiming",
-    );
-    return "interrupted";
+  if (!isWorkspaceClaimable(host)) {
+    // Pre-ready states (initializing/provisioning/cloning) may have an empty
+    // or incomplete workspace — never snapshot those. Stay pending and try
+    // again shortly instead of abandoning the job.
+    deferWorkspaceCacheJob(host, now, "session state does not allow claiming yet");
+    return "deferred";
   }
   const attempt = claimWorkspaceCacheJob(host.sql, now);
   if (!attempt) return "deferred";
@@ -243,12 +242,51 @@ export async function processWorkspaceCacheJob(
  *  data and restored state is validated (dependency fingerprint + artifact
  *  presence), so a torn snapshot degrades to a reinstall, never a broken
  *  session. Only sessions that can still use the workspace may claim. */
-function isWorkspaceQuiescent(host: OrchestratorHost): boolean {
+/** A snapshot must never capture a pre-clone workspace (that is how empty
+ *  "ready" snapshots poisoned the cache historically). Any state from
+ *  clone-complete onward is claimable; runs and backups may overlap because
+ *  restored state is validated by the dependency fingerprint check. */
+const UNCLAIMABLE_SESSION_STATES: ReadonlySet<SessionState> = new Set([
+  "initializing",
+  "provisioning_sandbox",
+  "cloning_repo",
+]);
+
+export function isWorkspaceClaimableState(state: SessionState): boolean {
+  return !UNCLAIMABLE_SESSION_STATES.has(state);
+}
+
+function isWorkspaceClaimable(host: OrchestratorHost): boolean {
   const meta = host.meta;
-  return Boolean(
-    meta
-    && (meta.state === "ready" || isTerminalState(meta.state)),
+  return Boolean(meta && isWorkspaceClaimableState(meta.state));
+}
+
+function deferWorkspaceCacheJob(host: OrchestratorHost, now: number, reason: string): void {
+  const nextAttemptAt = now + WORKSPACE_CACHE_RETRY_BASE_MS;
+  host.sql.exec(
+    `UPDATE workspace_cache_jobs
+     SET status = 'pending', next_attempt_at = ?, started_at = NULL,
+         last_error = ?, updated_at = ?
+     WHERE job_id = ? AND status IN ('pending', 'running')`,
+    nextAttemptAt,
+    reason,
+    new Date(now).toISOString(),
+    WORKSPACE_CACHE_JOB_ID,
   );
+  void (async () => {
+    try {
+      // Never delay an already-armed (earlier) alarm when re-arming.
+      const current = await host.ctx.storage.getAlarm();
+      if (current === null || current > nextAttemptAt) {
+        await host.ctx.storage.setAlarm(nextAttemptAt);
+      }
+    } catch (error) {
+      host.getTracer()?.log("ERROR", "alarm.arm.failed", {
+        ...redactEvent(safeExceptionAttributes(error), host.redactionSecrets),
+        reason: "workspace_cache_job_defer",
+      });
+    }
+  })();
 }
 
 function claimWorkspaceCacheJob(sql: SqlStorage, now: number): number | null {

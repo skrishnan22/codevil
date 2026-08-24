@@ -105,7 +105,7 @@ import {
   cancelOpenQuestions as cancelOpenQuestionsFn,
 } from "./orchestrator/cli-handlers.js";
 import {
-  drainQueuedAgentWorkIfWorkspaceCacheSettled,
+  drainQueuedAgentWorkIfReady,
   dispatchSandboxSocketMessage,
   initializeSandboxConnection,
   provisionSessionSandbox,
@@ -345,7 +345,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       return;
     }
 
-    drainQueuedAgentWorkIfWorkspaceCacheSettled(this);
+    drainQueuedAgentWorkIfReady(this);
     await this.armNextAlarm(now);
   }
 
@@ -448,7 +448,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.ctx.acceptWebSocket(server, ["sandbox"]);
     server.serializeAttachment({ sandbox: { aud: capability.aud, role: capability.role, sessionId: capability.sid } });
     initializeSandboxConnection(this, server, mode);
-    drainQueuedAgentWorkIfWorkspaceCacheSettled(this);
+    drainQueuedAgentWorkIfReady(this);
 
     if (mode === "resume") {
       completeSandboxReconnect(this);

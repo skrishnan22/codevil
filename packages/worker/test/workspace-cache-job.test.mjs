@@ -7,7 +7,6 @@ import {
   nextWorkspaceCacheJobAt,
   processWorkspaceCacheJob,
   recoverWorkspaceCacheJobAfterRestart,
-  workspaceCacheJobBlocksAgentWork,
   workspaceCacheJobIsRunning,
 } from "../dist/orchestrator/workspace-cache-job.js";
 
@@ -166,32 +165,7 @@ test("enqueue creates one durable cache job and exposes its alarm deadline", () 
   assert.equal(sql.rows.size, 1);
 });
 
-test("only pending and running jobs block agent work", () => {
-  const sql = createSql();
-  const host = createHost(sql);
-  enqueueWorkspaceCacheJob(host, 1_000);
-
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
-
-  sql.rows.get("workspace").status = "running";
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
-
-  sql.rows.get("workspace").status = "failed";
-  sql.rows.get("workspace").next_attempt_at = null;
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
-
-  sql.rows.get("workspace").status = "exhausted";
-  sql.rows.get("workspace").next_attempt_at = null;
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
-
-  sql.rows.get("workspace").status = "interrupted";
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
-
-  sql.rows.get("workspace").status = "ready";
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
-});
-
-test("unexpected active work interrupts the cache job without retrying", async () => {
+test("an active Agent Run no longer blocks the snapshot claim", async () => {
   const sql = createSql();
   const host = createHost(sql, { meta: { active_run: { id: "run_1" } } });
   enqueueWorkspaceCacheJob(host, 1_000);
@@ -199,14 +173,30 @@ test("unexpected active work interrupts the cache job without retrying", async (
 
   const result = await processWorkspaceCacheJob(host, 1_000, async () => {
     calls += 1;
-    return { created: true, snapshotId: "unexpected" };
+    return { created: true, snapshotId: "wsc_during_run" };
   });
 
-  assert.equal(result, "interrupted");
-  assert.equal(calls, 0);
-  assert.equal(getWorkspaceCacheJob(sql).status, "interrupted");
-  assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, null);
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
+  assert.equal(result, "ready");
+  assert.equal(calls, 1);
+  assert.equal(getWorkspaceCacheJob(sql).status, "ready");
+});
+
+test("non-ready session states still refuse the snapshot claim", async () => {
+  for (const state of ["planning", "executing", "awaiting_approval"]) {
+    const sql = createSql();
+    const host = createHost(sql, { meta: { state } });
+    enqueueWorkspaceCacheJob(host, 1_000);
+
+    let calls = 0;
+    const result = await processWorkspaceCacheJob(host, 1_000, async () => {
+      calls += 1;
+      return { created: true, snapshotId: "must-not-run" };
+    });
+
+    assert.equal(result, "interrupted", state);
+    assert.equal(calls, 0, state);
+    assert.equal(getWorkspaceCacheJob(sql).status, "interrupted", state);
+  }
 });
 
 test("successful clone-event processing persists the snapshot id", async () => {
@@ -256,7 +246,6 @@ test("failed processing is terminal and never retries after agent work can start
   assert.equal(result, "failed");
   assert.equal(getWorkspaceCacheJob(sql).status, "failed");
   assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, null);
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), false);
 
   const later = await processWorkspaceCacheJob(host, 60_000, async () => {
     calls += 1;
@@ -281,7 +270,6 @@ test("retryable Durable Object resets are requeued with backoff", async () => {
   assert.equal(first, "deferred");
   assert.equal(getWorkspaceCacheJob(sql).status, "pending");
   assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, 31_000);
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
 
   const second = await processWorkspaceCacheJob(host, 31_000, async () => ({
     created: true,
@@ -302,7 +290,6 @@ test("a persisted running job is requeued after a DO restart", () => {
   assert.equal(getWorkspaceCacheJob(sql).status, "pending");
   assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, 1_001);
   assert.equal(nextWorkspaceCacheJobAt(sql), 1_001);
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
   assert.deepEqual(host.alarms, [1_001]);
 });
 
@@ -315,7 +302,6 @@ test("a persisted pending job remains retryable after a DO restart", () => {
   assert.equal(getWorkspaceCacheJob(sql).status, "pending");
   assert.equal(getWorkspaceCacheJob(sql).next_attempt_at, 1_000);
   assert.equal(nextWorkspaceCacheJobAt(sql), 1_000);
-  assert.equal(workspaceCacheJobBlocksAgentWork(sql), true);
   assert.deepEqual(host.alarms, [1_001]);
 });
 

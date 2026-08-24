@@ -8,7 +8,9 @@ import type { SqlStatement } from "./sql.js";
 
 export const WORKSPACE_CACHE_VERSION = "workspace-cache-v4";
 export const WORKSPACE_CACHE_DIR = "/workspace";
-export const WORKSPACE_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
+export const WORKSPACE_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
+/** mksquashfs caps processors at the container's online CPU count. */
+export const WORKSPACE_CACHE_COMPRESSION_THREADS = 4;
 
 export interface WorkspaceSnapshotRow {
   id: string;
@@ -177,7 +179,7 @@ export async function createWorkspaceCacheSnapshot(input: {
         dir: WORKSPACE_CACHE_DIR,
         name: `codevil-${normalizeRepoCacheKey(input.repo).replace(/[^a-z0-9_.-]+/g, "-")}`,
         ttl: input.ttlSeconds ?? WORKSPACE_CACHE_TTL_SECONDS,
-        compression: { format: "zstd" },
+        compression: { format: "zstd", threads: WORKSPACE_CACHE_COMPRESSION_THREADS },
         multipart: true,
       }),
     );

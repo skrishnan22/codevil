@@ -6,8 +6,10 @@ import {
   buildWorkspaceSnapshotInsert,
   createWorkspaceCacheSnapshot,
   isRetryableWorkspaceCacheError,
+  isRetryableRestoreError,
   latestWorkspaceSnapshotSelect,
   normalizeRepoCacheKey,
+  restoreLatestWorkspaceCache,
 } from "../dist/workspace-cache.js";
 
 test("workspace cache version changes for the supported runtime and ownership boundary", () => {
@@ -118,4 +120,79 @@ test("createWorkspaceCacheSnapshot reports D1 persistence failures by phase", as
     phase: "persist",
     reason: "D1 unavailable",
   });
+});
+
+function createRestoreDb(row) {
+  return {
+    prepare: () => ({
+      bind: () => ({
+        first: async () => row,
+        run: async () => {},
+      }),
+    }),
+  };
+}
+
+const SNAPSHOT_ROW = {
+  id: "wsc_123",
+  repo_key: "github.com/example/app",
+  repo: "https://github.com/example/app.git",
+  cache_version: WORKSPACE_CACHE_VERSION,
+  source_session_id: "ses_old",
+  backup_id: "backup_123",
+  backup_dir: "/workspace",
+  backup_local_bucket: 0,
+  status: "ready",
+  created_at: "2026-06-23T00:00:00.000Z",
+  last_used_at: "2026-06-23T00:00:00.000Z",
+};
+
+test("restore retries transient container flakes before giving up", async () => {
+  let attempts = 0;
+  const result = await restoreLatestWorkspaceCache({
+    db: createRestoreDb(SNAPSHOT_ROW),
+    sandbox: {
+      restoreBackup: async () => {
+        attempts += 1;
+        if (attempts < 3) {
+          throw new Error("Session '__sandbox_backup_x' shell exited (exit code: 1)");
+        }
+        return { id: "backup_123" };
+      },
+    },
+    repo: "https://github.com/example/app.git",
+    sleep: (ms) => Promise.resolve(ms),
+  });
+
+  assert.equal(attempts, 3);
+  assert.deepEqual(result, { restored: true, snapshotId: "wsc_123" });
+});
+
+test("restore does not retry permanent backup errors", async () => {
+  let attempts = 0;
+  const expired = Object.assign(new Error("backup_expired: TTL elapsed"), { name: "BackupExpiredError" });
+  const result = await restoreLatestWorkspaceCache({
+    db: createRestoreDb(SNAPSHOT_ROW),
+    sandbox: {
+      restoreBackup: async () => {
+        attempts += 1;
+        throw expired;
+      },
+    },
+    repo: "https://github.com/example/app.git",
+    sleep: (ms) => Promise.resolve(ms),
+  });
+
+  assert.equal(attempts, 1);
+  assert.equal(result.restored, false);
+  assert.equal(result.phase, "restore");
+});
+
+test("isRetryableRestoreError classifies permanent vs transient failures", () => {
+  const expired = Object.assign(new Error("TTL elapsed"), { name: "BackupExpiredError" });
+  const notFound = Object.assign(new Error("missing"), { name: "BackupNotFoundError" });
+  assert.equal(isRetryableRestoreError(expired), false);
+  assert.equal(isRetryableRestoreError(notFound), false);
+  assert.equal(isRetryableRestoreError(new Error("Session '__sandbox_backup_1' shell exited (exit code: 1)")), true);
+  assert.equal(isRetryableRestoreError(new Error("SandboxError: HTTP error! status: 500")), true);
 });

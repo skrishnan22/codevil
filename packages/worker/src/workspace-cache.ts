@@ -134,6 +134,7 @@ export async function restoreLatestWorkspaceCache(input: {
   repo: string;
   cacheVersion?: string;
   now?: string;
+  sleep?: (delayMs: number) => Promise<void>;
 }): Promise<WorkspaceCacheRestoreResult> {
   const select = latestWorkspaceSnapshotSelect({
     repo: input.repo,
@@ -149,7 +150,17 @@ export async function restoreLatestWorkspaceCache(input: {
   if (!row) return { restored: false, phase: "lookup", reason: "cache miss" };
 
   try {
-    await retrySandboxOperation(() => input.sandbox.restoreBackup(backupFromWorkspaceSnapshot(row)));
+    // Container-side restore helpers can fail transiently (e.g. the backup
+    // helper session exiting while the container is settling). Without a
+    // broad retry a single flake silently costs the session its warm cache.
+    await retrySandboxOperation(
+      () => input.sandbox.restoreBackup(backupFromWorkspaceSnapshot(row)),
+      {
+        attempts: RESTORE_RETRY_ATTEMPTS,
+        retryOn: isRetryableRestoreError,
+        ...(input.sleep ? { sleep: input.sleep } : {}),
+      },
+    );
   } catch (error) {
     return { restored: false, phase: "restore", snapshotId: row.id, reason: errorMessage(error) };
   }
@@ -223,6 +234,25 @@ export async function createWorkspaceCacheSnapshotForSandbox(input: {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const RESTORE_RETRY_ATTEMPTS = 4;
+
+/** Permanent lookup problems are not worth retrying; anything else
+ *  (container flakes, shell exits, HTTP 5xx) is. */
+export function isRetryableRestoreError(error: unknown): boolean {
+  const name = error instanceof Error ? error.name : "";
+  if (
+    name === "InvalidBackupConfigError"
+    || name === "BackupNotFoundError"
+    || name === "BackupExpiredError"
+  ) {
+    return false;
+  }
+  const message = errorMessage(error).toLowerCase();
+  return !message.includes("invalid_backup_config")
+    && !message.includes("backup_not_found")
+    && !message.includes("backup_expired");
 }
 
 export function isRetryableWorkspaceCacheError(error: unknown): boolean {

@@ -228,12 +228,12 @@ test("handleSandboxCloneComplete transitions to ready and broadcasts room_ready"
   assert.ok(fixture.broadcasts.some((e) => e.type === "status" && /ready/i.test(e.message)));
 });
 
-test("handleSandboxCloneComplete queues durable cache work before queued Agent Runs can write", async () => {
+test("handleSandboxCloneComplete enqueues durable cache work and immediately drains requests queued during cloning", () => {
   const queuedRun = createAgentRun({
     actor,
     text: "use the prepared workspace",
     now: "2026-06-03T00:00:00.000Z",
-    id: "run_waiting_for_cache",
+    id: "run_queued_during_cloning",
   });
   const sql = createCacheJobSql();
   const fixture = createFakeHost(
@@ -242,19 +242,22 @@ test("handleSandboxCloneComplete queues durable cache work before queued Agent R
   );
   handleSandboxCloneComplete(fixture.host);
 
+  // Cache job is recorded durably...
   assert.equal(sql.row.status, "pending");
-  assert.equal(fixture.host.meta.active_run ?? null, null);
-  assert.deepEqual(fixture.host.meta.queued_runs.map((run) => run.id), ["run_waiting_for_cache"]);
+  // ...but the queued request starts right away instead of waiting for the
+  // alarm, which would otherwise claim the multi-minute backup upload first.
+  assert.equal(fixture.host.meta.active_run?.id, "run_queued_during_cloning");
+  assert.equal(fixture.host.meta.active_run?.state, "executing");
+  assert.deepEqual(fixture.host.meta.queued_runs, []);
 
-  await processWorkspaceCacheJob(fixture.host, Date.now(), async () => ({
+  const result = processWorkspaceCacheJob(fixture.host, Date.now(), async () => ({
     created: true,
     snapshotId: "wsc_clone_context",
   }));
-  drainQueuedAgentWorkIfReady(fixture.host);
-
-  assert.equal(sql.row.status, "ready");
-  assert.equal(fixture.host.meta.active_run.id, "run_waiting_for_cache");
-  assert.deepEqual(fixture.host.meta.queued_runs, []);
+  return result.then((settled) => {
+    assert.equal(settled, "ready");
+    assert.equal(sql.row.status, "ready");
+  });
 });
 
 test("a cache failure still drains queued Agent Runs", async () => {

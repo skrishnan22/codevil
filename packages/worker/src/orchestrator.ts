@@ -121,6 +121,7 @@ import {
 import { workerLogForSession, workerLogSessionExceptionForEnv } from "./logging.js";
 import { LiveRunCardCoordinator } from "./integrations/slack/live-run-card.js";
 import {
+  isWorkspaceClaimableState,
   nextWorkspaceCacheJobAt,
   processWorkspaceCacheJob,
   recoverWorkspaceCacheJobAfterRestart,
@@ -281,9 +282,11 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     await this.liveRunCards.drainDue(Date.now());
 
     const now = Date.now();
-    if (this.meta.state === "ready") {
+    if (isWorkspaceClaimableState(this.meta.state)) {
       // Workspace backups can take minutes; alarms provide a durable retry
       // boundary if either DO is reset while the Sandbox RPC is in flight.
+      // Claimable from clone-complete onward (including active runs) so a
+      // queued backup is never stranded until the session's max-time alarm.
       await processWorkspaceCacheJob(this, now);
     }
     if (isTerminalState(this.meta.state)) {

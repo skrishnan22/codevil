@@ -24,7 +24,10 @@ export function nextAlarmDeadline(input: AlarmScheduleInput): number | undefined
     deadlines.push(input.presentationRetryAt);
   }
   if (input.workspaceCacheRetryAt !== null && input.workspaceCacheRetryAt !== undefined) {
-    deadlines.push(input.workspaceCacheRetryAt);
+    // A due-now job has a retry timestamp at or before `now`; without the
+    // clamp it would be filtered out and strand the job until some other
+    // deadline (potentially the session's max-time) happens to fire.
+    deadlines.push(Math.max(input.workspaceCacheRetryAt, input.now + 1));
   }
 
   const nextDeadline = Math.min(...deadlines.filter((deadline) => deadline > input.now));

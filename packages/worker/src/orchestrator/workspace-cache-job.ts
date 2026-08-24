@@ -85,11 +85,6 @@ export function workspaceCacheJobIsRunning(sql: SqlStorage): boolean {
   return getWorkspaceCacheJob(sql)?.status === "running";
 }
 
-export function workspaceCacheJobBlocksAgentWork(sql: SqlStorage): boolean {
-  const status = getWorkspaceCacheJob(sql)?.status;
-  return status === "pending" || status === "running";
-}
-
 export function nextWorkspaceCacheJobAt(sql: SqlStorage): number | null {
   const rows = sql.exec(
     "SELECT status, next_attempt_at, started_at FROM workspace_cache_jobs WHERE status = 'pending'",
@@ -140,7 +135,7 @@ export async function processWorkspaceCacheJob(
     interruptWorkspaceCacheJob(
       host.sql,
       now,
-      "cache snapshot skipped because workspace was not quiescent",
+      "cache snapshot skipped because session state does not allow claiming",
     );
     return "interrupted";
   }
@@ -244,11 +239,14 @@ export async function processWorkspaceCacheJob(
   return terminalStatus;
 }
 
+/** A snapshot may be taken while an agent run is active: the cache is derived
+ *  data and restored state is validated (dependency fingerprint + artifact
+ *  presence), so a torn snapshot degrades to a reinstall, never a broken
+ *  session. Only sessions that can still use the workspace may claim. */
 function isWorkspaceQuiescent(host: OrchestratorHost): boolean {
   const meta = host.meta;
   return Boolean(
     meta
-    && !meta.active_run
     && (meta.state === "ready" || isTerminalState(meta.state)),
   );
 }

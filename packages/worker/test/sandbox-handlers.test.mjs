@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { createAgentRun } from "../dist/agent-runs.js";
 import {
-  drainQueuedAgentWorkIfWorkspaceCacheSettled,
+  drainQueuedAgentWorkIfReady,
   dispatchSandboxSocketMessage,
   handleSandboxCloneComplete,
   handleSandboxCloneStarted,
@@ -250,7 +250,7 @@ test("handleSandboxCloneComplete queues durable cache work before queued Agent R
     created: true,
     snapshotId: "wsc_clone_context",
   }));
-  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
+  drainQueuedAgentWorkIfReady(fixture.host);
 
   assert.equal(sql.row.status, "ready");
   assert.equal(fixture.host.meta.active_run.id, "run_waiting_for_cache");
@@ -276,7 +276,7 @@ test("a cache failure still drains queued Agent Runs", async () => {
     phase: "backup",
     reason: "backup reset the Durable Object",
   }));
-  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
+  drainQueuedAgentWorkIfReady(fixture.host);
 
   assert.equal(sql.row.status, "failed");
   assert.equal(fixture.host.meta.active_run.id, "run_after_cache_failure");
@@ -308,7 +308,7 @@ test("interrupted cache work is nonblocking when recovery alarms drain queued Ag
     { sql },
   );
 
-  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
+  drainQueuedAgentWorkIfReady(fixture.host);
 
   assert.equal(fixture.host.meta.active_run.id, "run_after_cache_interruption");
   assert.deepEqual(fixture.host.meta.queued_runs, []);
@@ -339,7 +339,7 @@ test("recovery alarms leave queued Agent Runs untouched while the sandbox is dis
     { sql, sandboxConnected: false },
   );
 
-  drainQueuedAgentWorkIfWorkspaceCacheSettled(fixture.host);
+  drainQueuedAgentWorkIfReady(fixture.host);
 
   assert.equal(fixture.host.meta.active_run ?? null, null);
   assert.deepEqual(fixture.host.meta.queued_runs.map((run) => run.id), [

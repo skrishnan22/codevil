@@ -18,7 +18,6 @@ import {
 } from "../workspace-cache.js";
 import {
   enqueueWorkspaceCacheJob,
-  workspaceCacheJobBlocksAgentWork,
 } from "./workspace-cache-job.js";
 import type { SandboxConnectionMode } from "../sandbox-connection.js";
 import { createDraftPullRequest, normalizeGitHubRepoName } from "../github.js";
@@ -340,12 +339,14 @@ export function handleSandboxCloneComplete(
   }
 }
 
-export function drainQueuedAgentWorkIfWorkspaceCacheSettled(host: OrchestratorHost): void {
+/** Drains queued agent work once the session is usable; the cache job no
+ *  longer gates agent work — snapshots are best-effort and validated on
+ *  restore, so runs and backups may overlap. */
+export function drainQueuedAgentWorkIfReady(host: OrchestratorHost): void {
   if (
     host.meta?.state === "ready"
     && !host.meta.active_run
     && host.meta.queued_runs.length > 0
-    && !workspaceCacheJobBlocksAgentWork(host.sql)
     && host.ctx.getWebSockets("sandbox").length > 0
   ) {
     finishRunAndDrainQueue(host, "completed");

@@ -90,8 +90,8 @@ test("handleAgentRequest queues when idle but session is not ready", () => {
   assert.ok(!broadcasts.some((e) => e.type === "agent_run_started"));
 });
 
-test("handleAgentRequest queues while the initial workspace cache job is pending", () => {
-  const cacheJob = { status: "pending", attempts: 0, next_attempt_at: 1_000 };
+test("handleAgentRequest starts immediately while the initial workspace cache job is pending", () => {
+  const cacheJob = { status: "running", attempts: 1, next_attempt_at: null };
   const sql = {
     exec(query) {
       if (query.includes("SELECT * FROM workspace_cache_jobs")) {
@@ -102,15 +102,14 @@ test("handleAgentRequest queues while the initial workspace cache job is pending
   };
   const { host, broadcasts } = createFakeHost({ state: "ready" }, { sql });
 
-  handleAgentRequest(host, "wait for the prepared workspace", actor, false);
+  handleAgentRequest(host, "start without waiting for the snapshot", actor, false);
 
-  assert.equal(host.meta.active_run, null);
-  assert.equal(host.meta.queued_runs.length, 1);
-  assert.ok(broadcasts.some((e) => e.type === "agent_request_queued"));
-  assert.ok(!broadcasts.some((e) => e.type === "agent_run_started"));
+  assert.equal(host.meta.active_run?.state, "executing");
+  assert.equal(host.meta.queued_runs.length, 0);
+  assert.ok(broadcasts.some((e) => e.type === "agent_run_started"));
 });
 
-test("handleAgentRequest drains an older queued run before enqueueing a new request after cache recovery", () => {
+test("handleAgentRequest drains an older queued run before enqueueing a new request once ready", () => {
   const olderRun = createAgentRun({
     actor,
     text: "older queued task",

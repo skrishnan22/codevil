@@ -269,5 +269,10 @@ export function isRetryableWorkspaceCacheError(error: unknown): boolean {
     || message.includes("runtime connection")
     || message.includes("operation was interrupted")
     || message.includes("temporarily unavailable")
-    || message.includes("container suddenly disconnected");
+    || message.includes("container suddenly disconnected")
+    || message.includes("failed to become ready")
+    || message.includes("network connection lost")
+    || message.includes("shell exited")
+    // Container-side backup helper failures surface as generic HTTP 5xx.
+    || /http error! status: 5\d\d/.test(message);
 }

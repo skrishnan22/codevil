@@ -163,6 +163,17 @@ export function updateSlackMessage(
   }) as Promise<SlackApiResult<unknown>>;
 }
 
+export function deleteSlackMessage(
+  api: SlackApi,
+  botToken: string,
+  input: { channel: string; ts: string },
+): Promise<SlackApiResult<unknown>> {
+  return api(botToken, "chat.delete", {
+    channel: input.channel,
+    ts: input.ts,
+  }) as Promise<SlackApiResult<unknown>>;
+}
+
 export function postSlackEphemeral(
   api: SlackApi,
   botToken: string,

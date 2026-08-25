@@ -1,4 +1,4 @@
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 function getSchemaVersion(sql: SqlStorage): number {
   const rows = sql.exec(
@@ -72,12 +72,19 @@ function migrateToV4(sql: SqlStorage): void {
   sql.exec("CREATE INDEX IF NOT EXISTS idx_workspace_cache_jobs_next_attempt ON workspace_cache_jobs(next_attempt_at)");
 }
 
+function migrateToV5(sql: SqlStorage): void {
+  if (!hasColumn(sql, "live_run_presentations", "card_delete_pending_at")) {
+    sql.exec("ALTER TABLE live_run_presentations ADD COLUMN card_delete_pending_at INTEGER");
+  }
+}
+
 export function runOrchestratorSchemaMigrations(sql: SqlStorage): void {
   const version = getSchemaVersion(sql);
   if (version < 1) migrateToV1(sql);
   if (version < 2) migrateToV2(sql);
   if (version < 3) migrateToV3(sql);
   if (version < 4) migrateToV4(sql);
+  if (version < 5) migrateToV5(sql);
   if (version < CURRENT_SCHEMA_VERSION) {
     setSchemaVersion(sql, CURRENT_SCHEMA_VERSION);
   }

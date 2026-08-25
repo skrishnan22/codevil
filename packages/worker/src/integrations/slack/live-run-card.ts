@@ -249,7 +249,18 @@ export class LiveRunCardCoordinator {
     if (delivered) {
       const latest = this.row(row.run_id);
       if (latest) {
-        this.upsert({ ...latest, pending_final_response_cursor: null, updated_at: new Date().toISOString() });
+        const now = Date.now();
+        // Mark teardown atomically with delivery: the row always carries a
+        // due next_retry_at, so a restart mid-delete re-arms via
+        // nextRetryAt()/drainDue() instead of stranding the card.
+        this.upsert({
+          ...latest,
+          pending_final_response_cursor: null,
+          card_delete_pending_at: now,
+          next_retry_at: now,
+          updated_at: new Date().toISOString(),
+        });
+        this.scheduleAlarm(now + 1);
         await this.closeCard(this.row(row.run_id) ?? latest);
       }
     } else {
@@ -335,12 +346,14 @@ export class LiveRunCardCoordinator {
     // start much later after queued requests from other turns. Global progress
     // events (status/phase/agent_event) carry no run id, so attribute them to
     // the run whose execution window covers the cursor: from that run's
-    // agent_run_started until its own terminal event. Its pre-start window
-    // (while queued) belongs to whatever run was executing then.
+    // agent_run_started until its own terminal event. A queued run has no
+    // execution window yet — its own request/queue events only, never another
+    // turn's progress.
     const runEntries = parsed.filter((entry) => runIdForEvent(entry.event) === runId);
     if (runEntries.length === 0) return [];
-    const startCursor = runEntries.find((entry) => entry.event.type === "agent_run_started")?.cursor
-      ?? runEntries[0].cursor;
+    const startIndex = runEntries.findIndex((entry) => entry.event.type === "agent_run_started");
+    if (startIndex < 0) return runEntries;
+    const startCursor = runEntries[startIndex].cursor;
     let terminalCursor: number | null = null;
     for (let index = runEntries.length - 1; index >= 0; index -= 1) {
       const type = runEntries[index].event.type;

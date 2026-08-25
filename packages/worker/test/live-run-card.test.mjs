@@ -439,6 +439,74 @@ test("queued turns surface live progress after they start, each card resolves in
   assert.equal(sql.getRow("run_3").card_delete_pending_at, null);
 });
 
+test("never folds another run's live progress into a queued card", async () => {
+  const sql = createPresentationSql();
+  const calls = [];
+  const coordinator = createCoordinator(sql, calls, async () => {});
+
+  const req = (n, text) => ({ type: "agent_request", run_id: `run_${n}`, actor: { id: "U1", name: "Ada" }, text, created_at: "2026-08-25T00:00:00.000Z" });
+  const queued = (n, position) => ({ type: "agent_request_queued", run_id: `run_${n}`, position });
+  const startedR = (n, text) => ({ type: "agent_run_started", run_id: `run_${n}`, actor: { id: "U1", name: "Ada" }, text });
+
+  let cursor = 0;
+  const append = async (event, activeRunId) => {
+    cursor += 1;
+    appendEvent(sql, cursor, event);
+    await coordinator.onEvent(cursor, event, activeRunId);
+  };
+
+  await append(req(1, "First task"), "run_1");
+  await append(startedR(1, "First task"), "run_1");
+  // run_2 queued while run_1 executes...
+  await append(req(2, "Second task"), "run_1");
+  await append(queued(2, 1), "run_1");
+  // ...and run_1 keeps producing global progress after run_2 was queued.
+  await append({ type: "status", message: "Running tests" }, "run_1");
+  await append({ type: "agent_event", event: { type: "tool_execution_start", tool: "read", toolCallId: "c1", args: { file_path: "src/lib.ts" } } }, "run_1");
+  await coordinator.drainDue(Date.now() + 3_000);
+
+  const run2Updates = calls.filter((call) => call.method === "chat.update" && JSON.stringify(call.body).includes("Second task"));
+  const run2Card = run2Updates.at(-1);
+  assert.ok(run2Card, "run 2 should have a queued card update");
+  assert.match(JSON.stringify(run2Card.body), /In queue — position 1/);
+  assert.doesNotMatch(JSON.stringify(run2Card.body), /Verifying|Investigating|Reading files|lib\.ts/);
+});
+
+test("teardown stays scheduled across a restart mid-delete", async () => {
+  const sql = createPresentationSql();
+  const calls = [];
+  const alarms = [];
+  let deleteAttempts = 0;
+  const api = async (_token, method, body) => {
+    calls.push({ method, body });
+    if (method === "chat.delete" && deleteAttempts++ < 3) return { ok: false, error: "http_503", status: 503 };
+    if (method === "chat.postMessage") return { ok: true, data: { ts: "card_1" } };
+    return { ok: true, data: { ok: true } };
+  };
+  const firstCoordinator = createCoordinator(sql, calls, async () => {}, api, alarms);
+  appendEvent(sql, 1, started);
+  await firstCoordinator.onEvent(1, started);
+  appendEvent(sql, 2, { type: "agent_response", run_id: "run_1", text: "Done" });
+  await firstCoordinator.onEvent(2, { type: "agent_response", run_id: "run_1", text: "Done" });
+  appendEvent(sql, 3, { type: "agent_run_completed", run_id: "run_1" });
+  await firstCoordinator.onEvent(3, { type: "agent_run_completed", run_id: "run_1" });
+
+  // Response delivered; delete failing but the row stays scheduled (due
+  // immediately at teardown, re-armed on exhaustion), so even a hard restart
+  // cannot strand the card.
+  const row = sql.getRow("run_1");
+  assert.equal(row.pending_final_response_cursor, null);
+  assert.notEqual(row.card_delete_pending_at, null);
+  assert.ok(row.next_retry_at !== null);
+  assert.ok(alarms.length > 0);
+
+  const restartedCoordinator = createCoordinator(sql, calls, async () => {}, api, alarms);
+  const retryAt = restartedCoordinator.nextRetryAt();
+  assert.ok(retryAt !== null);
+  await restartedCoordinator.drainDue(Date.now() + 10_000);
+  assert.equal(sql.getRow("run_1"), undefined);
+});
+
 function createCoordinator(sql, calls, sleep, api = async (_token, method, body) => {
   calls.push({ method, body });
   return method === "chat.postMessage"

@@ -1,8 +1,8 @@
 import type { ExternalNotificationIntent } from "../notification-intents.js";
 import type { SlackMessageContent } from "./client.js";
 import type { QuestionOption } from "@codevil/shared";
-import type { ExternalRunPresentation } from "../external-run-presentation.js";
-import { validPullRequestUrl } from "../external-run-presentation.js";
+import type { ExternalRunPresentation, ExternalRunStep } from "../external-run-presentation.js";
+import { MAX_VISIBLE_STEPS, validPullRequestUrl } from "../external-run-presentation.js";
 
 const MAX_EXTERNAL_TEXT_LENGTH = 500;
 const MAX_SLACK_MARKDOWN_CHARS = 11_500;
@@ -14,12 +14,7 @@ export function renderSlackRunCard(
   sessionUrl: string,
   revision: number,
 ): SlackMessageContent {
-  const details = [
-    `Phase: ${presentation.phase}`,
-    presentation.waitingFor ? `Waiting for ${presentation.waitingFor}.` : undefined,
-    presentation.summary,
-    ...presentation.actions.map((action) => `${action.status === "complete" ? "✓" : action.status === "error" ? "!" : "•"} ${action.label}`),
-  ].filter((line): line is string => Boolean(line));
+  const details = renderDetails(presentation);
   const sources: Array<Record<string, unknown>> = [
     { type: "url", url: sessionUrl, text: "Open session" },
   ];
@@ -39,9 +34,40 @@ export function renderSlackRunCard(
     sources,
   };
   return {
-    text: `Codevil: ${presentation.title} — ${presentation.status === "in_progress" ? presentation.phase : presentation.summary ?? presentation.status}. Open session: ${sessionUrl}`.slice(0, MAX_EXTERNAL_TEXT_LENGTH),
+    text: `Codevil: ${presentation.title} — ${briefStatus(presentation)}. Open session: ${sessionUrl}`.slice(0, MAX_EXTERNAL_TEXT_LENGTH),
     blocks: [block],
   };
+}
+
+function renderDetails(presentation: ExternalRunPresentation): string[] {
+  const lines: string[] = [];
+  if (presentation.queuedPosition !== undefined) {
+    lines.push(`In queue — position ${presentation.queuedPosition}`);
+  } else {
+    lines.push(`Phase: ${presentation.phase}`);
+  }
+  if (presentation.waitingFor) {
+    lines.push(presentation.waitingFor === "question"
+      ? "Waiting for your answer…"
+      : "Waiting for plan approval…");
+  }
+  if (presentation.summary) lines.push(presentation.summary);
+  lines.push(...presentation.steps.slice(-MAX_VISIBLE_STEPS).map(renderStep));
+  const hidden = presentation.droppedSteps + Math.max(0, presentation.steps.length - MAX_VISIBLE_STEPS);
+  if (hidden > 0) lines.push(`· ${hidden} earlier step${hidden === 1 ? "" : "s"}…`);
+  return lines;
+}
+
+function renderStep(step: ExternalRunStep): string {
+  const marker = step.status === "done" ? "✓" : step.status === "error" ? "✗" : "●";
+  const detail = step.detail ? ` — ${step.detail}` : "";
+  return `${marker} ${step.label}${detail}`;
+}
+
+function briefStatus(presentation: ExternalRunPresentation): string {
+  if (presentation.queuedPosition !== undefined) return `In queue (position ${presentation.queuedPosition})`;
+  if (presentation.status === "in_progress") return presentation.phase;
+  return presentation.summary ?? presentation.status;
 }
 
 function richText(lines: string[]): Record<string, unknown> {

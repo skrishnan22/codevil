@@ -15,23 +15,19 @@ export function renderSlackRunCard(
   revision: number,
 ): SlackMessageContent {
   const details = renderDetails(presentation);
-  const sources: Array<Record<string, unknown>> = [
-    { type: "url", url: sessionUrl, text: "Open Codevil" },
-  ];
   const prUrl = presentation.prUrl ? validPullRequestUrl(presentation.prUrl) : undefined;
-  if (prUrl) sources.push({ type: "url", url: prUrl, text: "View pull request" });
+  const childBlocks: Array<Record<string, unknown>> = [];
+  if (details.length > 0) childBlocks.push(richText(details));
+  childBlocks.push(renderSourceLinks(sessionUrl, prUrl));
 
   const block = {
-    type: "task_card",
-    task_id: `codevil_${presentation.runId}`.slice(0, 255),
-    title: presentation.title.slice(0, 120),
-    status: presentation.status,
+    type: "container",
     block_id: `codevil_run_${presentation.runId}_${revision}`.slice(0, 255),
-    details: richText(details),
-    ...(presentation.status === "complete" || presentation.status === "error"
-      ? { output: richText([presentation.summary ?? (presentation.status === "complete" ? "Completed successfully." : "The Agent Run failed.")]) }
-      : {}),
-    sources,
+    title: plainText(presentation.title.slice(0, 120)),
+    subtitle: plainText(truncate(briefStatus(presentation), 150)),
+    is_collapsible: true,
+    default_collapsed: false,
+    child_blocks: childBlocks,
   };
   return {
     text: `Codevil: ${presentation.title} — ${briefStatus(presentation)}. Open session: ${sessionUrl}`.slice(0, MAX_EXTERNAL_TEXT_LENGTH),
@@ -39,26 +35,20 @@ export function renderSlackRunCard(
   };
 }
 
-function renderDetails(presentation: ExternalRunPresentation): string[] {
-  const lines: string[] = [];
-  if (presentation.queuedPosition !== undefined) {
-    lines.push(`In queue — position ${presentation.queuedPosition}`);
-  } else if (presentation.waitingFor) {
-    lines.push(presentation.waitingFor === "question"
-      ? "Waiting for your answer"
-      : "Waiting for plan approval");
-  } else {
-    lines.push(presentation.phase);
-    if (presentation.status === "in_progress" && presentation.summary) lines.push(presentation.summary);
-  }
-
+function renderDetails(presentation: ExternalRunPresentation): Array<Record<string, unknown>> {
   const collapsed = collapseConsecutiveSteps(presentation.steps);
-  lines.push(...collapsed.steps.slice(-MAX_VISIBLE_STEPS).reverse().map(renderStep));
   const hidden = presentation.droppedSteps
     + collapsed.collapsedCount
     + Math.max(0, collapsed.steps.length - MAX_VISIBLE_STEPS);
-  if (hidden > 0) lines.push(`${hidden} earlier step${hidden === 1 ? "" : "s"}`);
-  return lines;
+  const sections: Array<Record<string, unknown>> = [];
+  if (hidden > 0) {
+    sections.push({
+      type: "rich_text_section",
+      elements: [{ type: "text", text: `… ${hidden} earlier step${hidden === 1 ? "" : "s"}` }],
+    });
+  }
+  sections.push(...collapsed.steps.slice(-MAX_VISIBLE_STEPS).map(renderStep));
+  return sections;
 }
 
 function collapseConsecutiveSteps(steps: ExternalRunStep[]): {
@@ -79,10 +69,21 @@ function collapseConsecutiveSteps(steps: ExternalRunStep[]): {
   return { steps: collapsed, collapsedCount };
 }
 
-function renderStep(step: ExternalRunStep): string {
-  const marker = step.status === "done" ? "✓" : step.status === "error" ? "✗" : "●";
+function renderStep(step: ExternalRunStep): Record<string, unknown> {
+  const state = step.status === "done"
+    ? { glyph: "✓", label: "Completed" }
+    : step.status === "error"
+      ? { glyph: "×", label: "Failed" }
+      : { glyph: "●", label: "Running" };
   const detail = step.detail ? ` — ${step.detail}` : "";
-  return `${marker} ${step.label}${detail}`;
+  return {
+    type: "rich_text_section",
+    elements: [
+      { type: "text", text: `${state.glyph} ` },
+      { type: "text", text: state.label, style: { bold: true } },
+      { type: "text", text: ` — ${step.label}${detail}` },
+    ],
+  };
 }
 
 function briefStatus(presentation: ExternalRunPresentation): string {
@@ -91,14 +92,24 @@ function briefStatus(presentation: ExternalRunPresentation): string {
   return presentation.summary ?? presentation.status;
 }
 
-function richText(lines: string[]): Record<string, unknown> {
+function richText(elements: Array<Record<string, unknown>>): Record<string, unknown> {
   return {
     type: "rich_text",
-    elements: lines.map((text) => ({
-      type: "rich_text_section",
-      elements: [{ type: "text", text }],
-    })),
+    elements,
   };
+}
+
+function renderSourceLinks(sessionUrl: string, prUrl: string | undefined): Record<string, unknown> {
+  const elements: Array<Record<string, unknown>> = [
+    { type: "link", url: sessionUrl, text: "Open Codevil" },
+  ];
+  if (prUrl) {
+    elements.push(
+      { type: "text", text: " · " },
+      { type: "link", url: prUrl, text: "View pull request" },
+    );
+  }
+  return richText([{ type: "rich_text_section", elements }]);
 }
 
 export function renderSlackNotification(

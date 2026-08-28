@@ -18,9 +18,18 @@ const started = {
 
 function detailsLines(presentation, sessionUrl = "https://app.codevil.example/sessions/ses_1") {
   const rendered = renderSlackRunCard(presentation, sessionUrl, 1);
-  return (rendered.blocks[0].details?.elements ?? [])
-    .flatMap((section) => section?.elements ?? [])
-    .map((element) => element.text);
+  return activityRows(rendered.blocks[0]).map(textFromRichTextSection);
+}
+
+function activityRows(card) {
+  const activity = card.child_blocks?.find((block) =>
+    block.type === "rich_text" && block.elements?.some((section) =>
+      /^[…✓×●]/u.test(textFromRichTextSection(section))));
+  return activity?.elements ?? [];
+}
+
+function textFromRichTextSection(section) {
+  return (section.elements ?? []).map((element) => element.text ?? "").join("");
 }
 
 test("keeps the clean request title when the run starts with an enriched prompt", () => {
@@ -55,7 +64,7 @@ test("preserves a bounded clean started-only title", () => {
   assert.equal(presentation.title, "Fix authentication and add tests");
 });
 
-test("renders quiet activity rows with collapsed duplicates and bounded visibility", () => {
+test("renders a default-expanded card with chronological, explicit activity rows", () => {
   const presentation = projectExternalRunEvents([
     { cursor: 1, event: { type: "agent_request", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: "Improve the landing page", created_at: "2026-08-28T00:00:00.000Z" } },
     ...[2, 3, 4].map((cursor) => ({
@@ -65,22 +74,47 @@ test("renders quiet activity rows with collapsed duplicates and bounded visibili
     { cursor: 5, event: { type: "agent_event", event: { type: "tool_execution_start", tool: "edit", toolCallId: "edit_1", args: { file_path: "src/Hero.astro" } } } },
   ]);
 
-  const rendered = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 1);
-  const expectedLines = [
-    "Changing code",
-    "● Editing code — Hero.astro",
-    "✓ Reading files",
-    "2 earlier steps",
-  ];
-  assert.deepEqual(detailsLines(presentation).slice(0, 4), expectedLines);
-  assert.deepEqual(
-    rendered.blocks[0].details.elements,
-    detailsLines(presentation).map((text) => ({
-      type: "rich_text_section",
-      elements: [{ type: "text", text }],
-    })),
-  );
+  const card = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 7).blocks[0];
+  assert.equal(card.type, "container");
+  assert.equal(card.is_collapsible, true);
+  assert.equal(card.default_collapsed, false);
+  assert.equal(card.title.text, presentation.title);
+  assert.doesNotMatch(card.title.text, /✅|🔄|❌|💬/u);
+
+  const activity = activityRows(card);
+  assert.deepEqual(activity.map(textFromRichTextSection), [
+    "… 2 earlier steps",
+    "✓ Completed — Reading files",
+    "● Running — Editing code — Hero.astro",
+  ]);
+  assert.deepEqual(activity.at(-1).elements[1], {
+    type: "text",
+    text: "Running",
+    style: { bold: true },
+  });
   assert.equal(detailsLines(presentation).filter((line) => /^(?:●|✓|✗) /.test(line)).length, 2);
+});
+
+test("renders failed rows and counts dropped, collapsed, and windowed steps", () => {
+  const presentation = {
+    ...createExternalRunPresentation("run_1", "Ship the fix"),
+    steps: [
+      { id: "old-1", label: "Reading files", status: "done", rank: 1 },
+      { id: "old-2", label: "Reading files", status: "done", rank: 2 },
+      { id: "middle", label: "Searching code", status: "error", rank: 3 },
+      { id: "visible-1", label: "Editing code", status: "done", rank: 4 },
+      { id: "visible-2", label: "Running checks", status: "error", rank: 5 },
+      { id: "visible-3", label: "Publishing changes", status: "active", rank: 6 },
+    ],
+    droppedSteps: 2,
+  };
+
+  assert.deepEqual(detailsLines(presentation), [
+    "… 5 earlier steps",
+    "✓ Completed — Editing code",
+    "× Failed — Running checks",
+    "● Running — Publishing changes",
+  ]);
 });
 
 test("projects supported lifecycle events into a redacted, granular step list", () => {
@@ -158,10 +192,10 @@ test("windows steps to the current step plus a few older ones on the card", () =
   const lines = detailsLines(presentation);
   const stepLines = lines.filter((line) => line.startsWith("✓"));
   assert.equal(stepLines.length, 1);
-  assert.deepEqual(stepLines.map((line) => line.split(" ")[1]), [
-    "Reading",
+  assert.deepEqual(stepLines.map((line) => line.split(" — ")[1]), [
+    "Reading files",
   ]);
-  assert.ok(lines.some((line) => /11 earlier steps/.test(line)));
+  assert.ok(lines.some((line) => /… 11 earlier steps/.test(line)));
 });
 
 test("shows a queued run with its queue position until it starts", () => {
@@ -171,8 +205,7 @@ test("shows a queued run with its queue position until it starts", () => {
   ]);
   assert.equal(queued.queuedPosition, 2);
   assert.equal(queued.phase, "Queued");
-  const queuedLines = detailsLines(queued);
-  assert.ok(queuedLines.some((line) => /In queue — position 2/.test(line)));
+  assert.equal(renderSlackRunCard(queued, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "In queue (position 2)");
 
   const running = projectExternalRunEvents([
     queued && { cursor: 3, event: started },
@@ -188,13 +221,13 @@ test("projects waiting, terminal, and deterministic completion states", () => {
   ]);
   assert.equal(waiting.waitingFor, "question");
   assert.equal(waiting.phase, "Waiting for input");
-  assert.deepEqual(detailsLines(waiting), ["Waiting for your answer"]);
+  assert.equal(renderSlackRunCard(waiting, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "Waiting for input");
 
   const approval = projectExternalRunEvents([
     { cursor: 1, event: started },
     { cursor: 2, event: { type: "approval_requested", run_id: "run_1", plan: "Update the header." } },
   ]);
-  assert.deepEqual(detailsLines(approval), ["Waiting for plan approval"]);
+  assert.equal(renderSlackRunCard(approval, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "Waiting for approval");
 
   const complete = projectExternalRunEvents([
     { cursor: 1, event: started },
@@ -205,21 +238,25 @@ test("projects waiting, terminal, and deterministic completion states", () => {
   assert.equal(complete.summary, "Completed successfully.");
 });
 
-test("renders a native task card with accessible fallback and fresh block ids", () => {
+test("renders a container with accessible fallback and fresh block ids", () => {
   const presentation = createExternalRunPresentation("run_1", "Investigate auth");
   const first = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 7);
   const second = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 8);
   const block = first.blocks[0];
 
-  assert.equal(block.type, "task_card");
-  assert.equal(block.task_id, "codevil_run_1");
-  assert.equal(block.status, "in_progress");
+  assert.equal(block.type, "container");
+  assert.equal(block.title.text, "Investigate auth");
+  assert.equal(block.subtitle.text, "Starting");
+  assert.equal(block.is_collapsible, true);
+  assert.equal(block.default_collapsed, false);
   assert.notEqual(first.blocks[0].block_id, second.blocks[0].block_id);
-  assert.deepEqual(block.sources, [{ type: "url", url: "https://app.codevil.example/sessions/ses_1", text: "Open Codevil" }]);
+  assert.deepEqual(block.child_blocks.at(-1).elements[0].elements, [
+    { type: "link", url: "https://app.codevil.example/sessions/ses_1", text: "Open Codevil" },
+  ]);
   assert.match(first.text, /Investigate auth/);
 });
 
-test("keeps the terminal summary in output instead of repeating it in details", () => {
+test("keeps the terminal summary in the subtitle instead of repeating it in activity", () => {
   const presentation = {
     ...createExternalRunPresentation("run_1", "Ship"),
     status: "complete",
@@ -228,16 +265,17 @@ test("keeps the terminal summary in output instead of repeating it in details", 
   };
   const rendered = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 1);
 
-  assert.doesNotMatch(JSON.stringify(rendered.blocks[0].details), /Completed successfully\./);
-  assert.match(JSON.stringify(rendered.blocks[0].output), /Completed successfully\./);
+  assert.doesNotMatch(JSON.stringify(rendered.blocks[0].child_blocks), /Completed successfully\./);
+  assert.equal(rendered.blocks[0].subtitle.text, "Completed successfully.");
 });
 
 test("renders only a validated pull-request source", () => {
   const presentation = { ...createExternalRunPresentation("run_1", "Ship"), status: "complete", summary: "Completed successfully.", steps: [], droppedSteps: 0, prUrl: "https://github.com/acme/repo/pull/12" };
   const rendered = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 1);
-  assert.deepEqual(rendered.blocks[0].sources, [
-    { type: "url", url: "https://app.codevil.example/sessions/ses_1", text: "Open Codevil" },
-    { type: "url", url: "https://github.com/acme/repo/pull/12", text: "View pull request" },
+  assert.deepEqual(rendered.blocks[0].child_blocks.at(-1).elements[0].elements, [
+    { type: "link", url: "https://app.codevil.example/sessions/ses_1", text: "Open Codevil" },
+    { type: "text", text: " · " },
+    { type: "link", url: "https://github.com/acme/repo/pull/12", text: "View pull request" },
   ]);
 });
 
@@ -253,7 +291,7 @@ test("posts a card immediately for a new request, even before the run starts", a
   appendEvent(sql, 2, { type: "agent_request_queued", run_id: "run_1", position: 2 });
   await coordinator.onEvent(2, { type: "agent_request_queued", run_id: "run_1", position: 2 });
   assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage", "chat.update"]);
-  assert.match(JSON.stringify(calls[1].body), /In queue — position 2/);
+  assert.match(JSON.stringify(calls[1].body), /In queue \(position 2\)/);
 });
 
 test("coalesces live updates, then delivers the final response and deletes the card", async () => {
@@ -277,7 +315,7 @@ test("coalesces live updates, then delivers the final response and deletes the c
   const methods = calls.map((call) => call.method);
   assert.deepEqual(methods, ["chat.postMessage", "chat.update", "chat.update", "chat.postMessage", "chat.delete"]);
   const terminalUpdate = calls[2];
-  assert.equal(terminalUpdate.body.blocks[0].status, "complete");
+  assert.equal(terminalUpdate.body.blocks[0].subtitle.text, "Completed successfully.");
   assert.equal(calls[3].body.text, "Done");
   assert.equal(calls[4].method, "chat.delete");
   assert.equal(sql.getRow("run_1"), undefined);
@@ -293,7 +331,7 @@ test("deletes the card on failure after sending the failure notice", async () =>
   await coordinator.onEvent(2, { type: "agent_run_failed", run_id: "run_1", message: "Tests failed" });
 
   assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage", "chat.update", "chat.postMessage", "chat.delete"]);
-  assert.equal(calls[1].body.blocks[0].status, "error");
+  assert.equal(calls[1].body.blocks[0].subtitle.text, "Verification failed.");
   assert.match(calls[2].body.text, /could not complete the Agent Run/);
   assert.equal(sql.getRow("run_1"), undefined);
 });
@@ -546,7 +584,7 @@ test("never folds another run's live progress into a queued card", async () => {
   const run2Updates = calls.filter((call) => call.method === "chat.update" && JSON.stringify(call.body).includes("Second task"));
   const run2Card = run2Updates.at(-1);
   assert.ok(run2Card, "run 2 should have a queued card update");
-  assert.match(JSON.stringify(run2Card.body), /In queue — position 1/);
+  assert.match(JSON.stringify(run2Card.body), /In queue \(position 1\)/);
   assert.doesNotMatch(JSON.stringify(run2Card.body), /Verifying|Investigating|Reading files|lib\.ts/);
 });
 

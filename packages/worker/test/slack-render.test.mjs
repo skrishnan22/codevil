@@ -3,7 +3,11 @@ import test from "node:test";
 
 import * as slackRender from "../dist/integrations/slack/render.js";
 
-const { renderSlackNotification, renderSlackRunCard } = slackRender;
+const {
+  renderSlackFreeformAnswerModal,
+  renderSlackNotification,
+  renderSlackRunCard,
+} = slackRender;
 
 const sessionUrl = "https://codevil.example/sessions/ses_123";
 
@@ -121,10 +125,10 @@ test("multiple-choice questions use a multi-select above ten options", () => {
   assert.deepEqual(actions.elements.map((element) => element.type), ["multi_static_select", "button", "button"]);
 });
 
-test("unrepresentable and free-form-only questions fall back to Open session", () => {
+test("unrepresentable questions fall back to Open session", () => {
   for (const intent of [
     questionIntent({ options: Array.from({ length: 101 }, (_, index) => ({ id: `o${index}`, label: `Option ${index}` })) }),
-    questionIntent({ options: undefined, allowFreeform: true }),
+    questionIntent({ options: undefined }),
   ]) {
     const [message] = renderSlackNotification(intent, sessionUrl);
     const actions = message.blocks.find((block) => block.type === "actions");
@@ -135,6 +139,44 @@ test("unrepresentable and free-form-only questions fall back to Open session", (
     options: Array.from({ length: 101 }, (_, index) => ({ id: `o${index}`, label: `Option ${index}` })),
   }), sessionUrl);
   assert.match(unrepresentable.blocks[0].text, /Option 0/);
+});
+
+test("free-form questions show a primary Write answer action while option-only questions do not", () => {
+  const [freeformQuestion] = renderSlackNotification(questionIntent({ allowFreeform: true }), sessionUrl);
+  const freeformActions = freeformQuestion.blocks.find((block) => block.type === "actions");
+  const write = freeformActions.elements.find((element) => element.action_id === "codevil_question_open_freeform");
+  assert.equal(write.text.text, "Write answer");
+  assert.equal(write.style, "primary");
+  assert.deepEqual(JSON.parse(write.value), { v: 1, q: "question_1" });
+
+  const [optionOnlyQuestion] = renderSlackNotification(questionIntent(), sessionUrl);
+  const optionOnlyActions = optionOnlyQuestion.blocks.find((block) => block.type === "actions");
+  assert.equal(optionOnlyActions.elements.some((element) => element.action_id === "codevil_question_open_freeform"), false);
+});
+
+test("renderSlackFreeformAnswerModal bounds display text and renders one required multiline input", () => {
+  const privateMetadata = JSON.stringify({ v: 1, q: "question_1", t: "T123", c: "C123", th: "171951.0001", m: "171951.0002" });
+  const modal = renderSlackFreeformAnswerModal({
+    question: "Q".repeat(1_050),
+    context: "C".repeat(1_050),
+    privateMetadata,
+  });
+
+  assert.equal(modal.type, "modal");
+  assert.equal(modal.callback_id, "codevil_question_freeform");
+  assert.equal(modal.private_metadata, privateMetadata);
+  assert.equal(modal.blocks[0].text.text, `*Question*\n${"Q".repeat(999)}…`);
+  assert.equal(modal.blocks[1].text.text, `*Context*\n${"C".repeat(999)}…`);
+  assert.deepEqual(modal.blocks[2], {
+    type: "input",
+    block_id: "codevil_question_freeform_input",
+    label: { type: "plain_text", text: "Answer", emoji: true },
+    element: {
+      type: "plain_text_input",
+      action_id: "codevil_question_freeform_value",
+      multiline: true,
+    },
+  });
 });
 
 test("answered questions remove controls and mention the Slack answerer", () => {

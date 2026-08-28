@@ -8,6 +8,7 @@ const MAX_EXTERNAL_TEXT_LENGTH = 500;
 const MAX_SLACK_MARKDOWN_CHARS = 11_500;
 const MAX_SLACK_ACTION_VALUE_LENGTH = 2_000;
 const MAX_SLACK_OPTION_TEXT_LENGTH = 75;
+const MAX_SLACK_MODAL_TEXT_LENGTH = 1_000;
 
 export function renderSlackRunCard(
   presentation: ExternalRunPresentation,
@@ -136,6 +137,44 @@ export function renderSlackNotification(
   }
 }
 
+export function renderSlackFreeformAnswerModal(input: {
+  question: string;
+  context?: string;
+  privateMetadata: string;
+}): Record<string, unknown> {
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: markdownText(`*Question*\n${truncate(input.question, MAX_SLACK_MODAL_TEXT_LENGTH)}`),
+    },
+  ];
+  if (input.context) {
+    blocks.push({
+      type: "section",
+      text: markdownText(`*Context*\n${truncate(input.context, MAX_SLACK_MODAL_TEXT_LENGTH)}`),
+    });
+  }
+  blocks.push({
+    type: "input",
+    block_id: "codevil_question_freeform_input",
+    label: plainText("Answer"),
+    element: {
+      type: "plain_text_input",
+      action_id: "codevil_question_freeform_value",
+      multiline: true,
+    },
+  });
+  return {
+    type: "modal",
+    callback_id: "codevil_question_freeform",
+    private_metadata: input.privateMetadata,
+    title: plainText("Answer question"),
+    submit: plainText("Send"),
+    close: plainText("Cancel"),
+    blocks,
+  };
+}
+
 export function encodeSlackQuestionAction(input: {
   requestId: string;
   optionIndex?: number;
@@ -238,6 +277,15 @@ function questionActions(
   }
 
   const optionsShownInControls = elements.length > 0;
+  if (intent.allowFreeform && submitValue) {
+    elements.push({
+      type: "button",
+      action_id: "codevil_question_open_freeform",
+      text: plainText("Write answer"),
+      style: "primary",
+      value: submitValue,
+    });
+  }
   elements.push(openSessionButton(sessionUrl));
   return {
     block: {
@@ -284,6 +332,10 @@ function openSessionButton(sessionUrl: string): Record<string, unknown> {
 
 function plainText(text: string): { type: "plain_text"; text: string; emoji: true } {
   return { type: "plain_text", text, emoji: true };
+}
+
+function markdownText(text: string): { type: "mrkdwn"; text: string } {
+  return { type: "mrkdwn", text };
 }
 
 function truncate(value: string, maxLength: number): string {

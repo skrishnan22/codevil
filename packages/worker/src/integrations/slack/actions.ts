@@ -38,11 +38,44 @@ const SlackBlockActionSchema = z.object({
   state: z.unknown().optional(),
 });
 
+const SlackFreeformOpenActionSchema = SlackBlockActionSchema.extend({
+  trigger_id: z.string().min(1),
+});
+
+const SlackFreeformSubmissionSchema = z.object({
+  type: z.literal("view_submission"),
+  trigger_id: z.string().min(1),
+  team: z.object({ id: z.string().min(1) }),
+  user: z.object({ id: z.string().min(1) }),
+  view: z.object({
+    callback_id: z.string().min(1),
+    private_metadata: z.string().min(1),
+    state: z.object({
+      values: z.record(z.string(), z.record(z.string(), z.object({
+        value: z.string().nullable().optional(),
+      }).passthrough())),
+    }),
+  }),
+});
+
 const QuestionActionValueSchema = z.object({
   v: z.literal(1),
   q: z.string().min(1),
   i: z.number().int().nonnegative().optional(),
 });
+
+const SlackFreeformPrivateMetadataSchema = z.object({
+  v: z.literal(1),
+  q: z.string().min(1),
+  t: z.string().min(1),
+  c: z.string().min(1),
+  th: z.string().min(1),
+  m: z.string().min(1),
+}).strict();
+
+const MAX_SLACK_PRIVATE_METADATA_LENGTH = 3_000;
+
+type SlackFreeformPrivateMetadata = z.infer<typeof SlackFreeformPrivateMetadataSchema>;
 
 export interface SlackQuestionAction {
   teamId: string;
@@ -55,9 +88,102 @@ export interface SlackQuestionAction {
   actionTs: string;
 }
 
+export interface SlackFreeformOpenAction {
+  teamId: string;
+  userId: string;
+  channelId: string;
+  messageTs: string;
+  threadTs: string;
+  requestId: string;
+  triggerId: string;
+}
+
+export interface SlackFreeformSubmission {
+  teamId: string;
+  userId: string;
+  channelId: string;
+  messageTs: string;
+  threadTs: string;
+  requestId: string;
+  freeform: string;
+}
+
+export interface SlackFreeformPrivateMetadataInput {
+  requestId: string;
+  teamId: string;
+  channelId: string;
+  threadTs: string;
+  messageTs: string;
+}
+
 export interface SlackActionProcessDeps {
   slackApi?: SlackApi;
   workerOrigin?: string;
+}
+
+export function encodeSlackFreeformPrivateMetadata(
+  input: SlackFreeformPrivateMetadataInput,
+): string | null {
+  const value = JSON.stringify({
+    v: 1,
+    q: input.requestId,
+    t: input.teamId,
+    c: input.channelId,
+    th: input.threadTs,
+    m: input.messageTs,
+  });
+  return value.length < MAX_SLACK_PRIVATE_METADATA_LENGTH ? value : null;
+}
+
+export function parseSlackFreeformPrivateMetadata(value: unknown): SlackFreeformPrivateMetadata | null {
+  if (typeof value !== "string" || value.length >= MAX_SLACK_PRIVATE_METADATA_LENGTH) return null;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  const parsed = SlackFreeformPrivateMetadataSchema.safeParse(decoded);
+  return parsed.success ? parsed.data : null;
+}
+
+export function parseSlackFreeformOpenAction(payload: unknown): SlackFreeformOpenAction | null {
+  const parsed = SlackFreeformOpenActionSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  const action = parsed.data.actions[0];
+  if (action.action_id !== "codevil_question_open_freeform") return null;
+  const value = parseQuestionActionValue(action.value);
+  if (!value || value.i !== undefined) return null;
+  return {
+    teamId: parsed.data.team.id,
+    userId: parsed.data.user.id,
+    channelId: parsed.data.channel.id,
+    messageTs: parsed.data.message.ts,
+    threadTs: parsed.data.message.thread_ts ?? parsed.data.message.ts,
+    requestId: value.q,
+    triggerId: parsed.data.trigger_id,
+  };
+}
+
+export function parseSlackFreeformSubmission(payload: unknown): SlackFreeformSubmission | null {
+  const parsed = SlackFreeformSubmissionSchema.safeParse(payload);
+  if (!parsed.success || parsed.data.view.callback_id !== "codevil_question_freeform") return null;
+  const metadata = parseSlackFreeformPrivateMetadata(parsed.data.view.private_metadata);
+  if (!metadata || parsed.data.team.id !== metadata.t) return null;
+
+  const input = parsed.data.view.state.values.codevil_question_freeform_input
+    ?.codevil_question_freeform_value?.value;
+  if (typeof input !== "string" || input.trim().length === 0) return null;
+
+  return {
+    teamId: parsed.data.team.id,
+    userId: parsed.data.user.id,
+    channelId: metadata.c,
+    messageTs: metadata.m,
+    threadTs: metadata.th,
+    requestId: metadata.q,
+    freeform: input,
+  };
 }
 
 export function parseSlackQuestionAction(payload: unknown): SlackQuestionAction | null {

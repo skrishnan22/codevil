@@ -109,6 +109,142 @@ test("isSlackNonSubmittingAction recognizes controls that need acknowledgement o
   assert.equal(module.isSlackNonSubmittingAction(basePayload()), false);
 });
 
+const modalMetadata = JSON.stringify({
+  v: 1,
+  q: "question_1",
+  t: "T123",
+  c: "C123",
+  th: "171951.0001",
+  m: "171951.0002",
+});
+
+function freeformOpenPayload(overrides = {}) {
+  return {
+    type: "block_actions",
+    trigger_id: "1337.abc",
+    team: { id: "T123" },
+    user: { id: "U123" },
+    channel: { id: "C123" },
+    container: { type: "message", message_ts: "171951.0002", channel_id: "C123" },
+    message: { ts: "171951.0002", thread_ts: "171951.0001" },
+    actions: [{
+      action_id: "codevil_question_open_freeform",
+      action_ts: "171951.1111",
+      value: JSON.stringify({ v: 1, q: "question_1" }),
+    }],
+    ...overrides,
+  };
+}
+
+function freeformSubmissionPayload(overrides = {}) {
+  return {
+    type: "view_submission",
+    trigger_id: "1337.def",
+    team: { id: "T123" },
+    user: { id: "U123" },
+    view: {
+      callback_id: "codevil_question_freeform",
+      private_metadata: modalMetadata,
+      state: {
+        values: {
+          codevil_question_freeform_input: {
+            codevil_question_freeform_value: {
+              type: "plain_text_input",
+              value: "Use PostgreSQL",
+            },
+          },
+        },
+      },
+    },
+    ...overrides,
+  };
+}
+
+test("parseSlackFreeformOpenAction parses the typed modal opener", async () => {
+  const module = await actionsModule;
+  assert.equal(typeof module.parseSlackFreeformOpenAction, "function");
+  assert.deepEqual(module.parseSlackFreeformOpenAction(freeformOpenPayload()), {
+    teamId: "T123",
+    userId: "U123",
+    channelId: "C123",
+    messageTs: "171951.0002",
+    threadTs: "171951.0001",
+    requestId: "question_1",
+    triggerId: "1337.abc",
+  });
+});
+
+test("parseSlackFreeformSubmission parses metadata and the required answer", async () => {
+  const module = await actionsModule;
+  assert.equal(typeof module.parseSlackFreeformSubmission, "function");
+  assert.deepEqual(module.parseSlackFreeformSubmission(freeformSubmissionPayload()), {
+    teamId: "T123",
+    userId: "U123",
+    channelId: "C123",
+    messageTs: "171951.0002",
+    threadTs: "171951.0001",
+    requestId: "question_1",
+    freeform: "Use PostgreSQL",
+  });
+});
+
+test("free-form interaction parsers reject malformed metadata, empty input, wrong callbacks, and missing trigger IDs", async () => {
+  const module = await actionsModule;
+  const malformedMetadata = freeformSubmissionPayload({
+    view: { ...freeformSubmissionPayload().view, private_metadata: "not-json" },
+  });
+  const emptyInput = freeformSubmissionPayload({
+    view: {
+      ...freeformSubmissionPayload().view,
+      state: { values: { codevil_question_freeform_input: {
+        codevil_question_freeform_value: { value: "   " },
+      } } },
+    },
+  });
+
+  for (const payload of [
+    malformedMetadata,
+    emptyInput,
+    freeformSubmissionPayload({ view: { ...freeformSubmissionPayload().view, callback_id: "wrong_callback" } }),
+    freeformSubmissionPayload({ team: { id: "T999" } }),
+  ]) {
+    assert.equal(module.parseSlackFreeformSubmission(payload), null);
+  }
+
+  assert.equal(module.parseSlackFreeformOpenAction(freeformOpenPayload({ trigger_id: "" })), null);
+  assert.equal(module.parseSlackFreeformOpenAction(freeformOpenPayload({
+    actions: [{ action_id: "wrong_action", action_ts: "171951.1111", value: JSON.stringify({ v: 1, q: "question_1" }) }],
+  })), null);
+});
+
+test("free-form metadata encoding is versioned and stays below Slack's limit", async () => {
+  const module = await actionsModule;
+  assert.equal(typeof module.encodeSlackFreeformPrivateMetadata, "function");
+  const encoded = module.encodeSlackFreeformPrivateMetadata({
+    requestId: "question_1",
+    teamId: "T123",
+    channelId: "C123",
+    threadTs: "171951.0001",
+    messageTs: "171951.0002",
+  });
+  assert.deepEqual(JSON.parse(encoded), {
+    v: 1,
+    q: "question_1",
+    t: "T123",
+    c: "C123",
+    th: "171951.0001",
+    m: "171951.0002",
+  });
+  assert.equal(encoded.length < 3_000, true);
+  assert.equal(module.encodeSlackFreeformPrivateMetadata({
+    requestId: "q",
+    teamId: "T",
+    channelId: "C",
+    threadTs: "th",
+    messageTs: "m".repeat(3_000),
+  }), null);
+});
+
 function parsedAction(overrides = {}) {
   return {
     teamId: "T123",

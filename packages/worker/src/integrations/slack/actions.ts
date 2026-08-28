@@ -19,7 +19,6 @@ import {
   type SlackApi,
 } from "./client.js";
 import { renderAnsweredSlackQuestion } from "./render.js";
-import { externalSessionUrl } from "../session-url.js";
 
 const SlackBlockActionSchema = z.object({
   type: z.literal("block_actions"),
@@ -156,11 +155,6 @@ export async function processSlackQuestionAction(
     return;
   }
 
-  const sessionUrl = externalSessionUrl(
-    env,
-    deps.workerOrigin ?? env.BETTER_AUTH_URL ?? "",
-    link.session_id,
-  );
   const answeredByText = slackAnswererText(result.answeredBy);
   const update = await updateSlackMessage(api, env.SLACK_BOT_TOKEN, {
     channel: action.channelId,
@@ -169,7 +163,6 @@ export async function processSlackQuestionAction(
       question: result.question,
       selectedLabels: result.selectedLabels,
       answeredByText,
-      sessionUrl,
     }),
   });
   if (!update.ok) {

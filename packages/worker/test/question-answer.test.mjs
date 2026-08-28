@@ -9,11 +9,18 @@ async function answer(host, args) {
   return module.answerQuestionFromIntegration(host, args);
 }
 
+async function freeformQuestion(host, requestId) {
+  const module = await questionAnswerModule;
+  assert.equal(typeof module.freeformQuestionForIntegration, "function");
+  return module.freeformQuestionForIntegration(host, requestId);
+}
+
 function question(overrides = {}) {
   return {
     request_id: "question_1",
     run_id: "run_1",
     question: "Which database?",
+    context: null,
     status: "open",
     options_json: JSON.stringify([
       { id: "pg", label: "PostgreSQL" },
@@ -94,6 +101,74 @@ test("Slack option ordinals map to stored option IDs", async () => {
     option_ids: ["pg"],
     answered_by: slackActor,
   }]);
+});
+
+test("integration answers a free-form question with trimmed text", async () => {
+  const state = fixture(question({
+    question: "What should change?",
+    allow_freeform: 1,
+    context: "The headline needs another pass.",
+  }));
+  const result = await answer(state.host, {
+    requestId: "question_1",
+    freeform: "  Use a stronger, shorter headline.  ",
+    actor: slackActor,
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    status: "answered",
+    question: "What should change?",
+    selectedLabels: ["Use a stronger, shorter headline."],
+    answeredBy: slackActor,
+  });
+  assert.equal(state.sandboxMessages[0].freeform, "Use a stronger, shorter headline.");
+  assert.deepEqual(state.sandboxMessages[0].option_ids, []);
+});
+
+test("integration rejects free-form text when the question disallows it", async () => {
+  const state = fixture();
+  const result = await answer(state.host, {
+    requestId: "question_1",
+    freeform: "  Use a stronger, shorter headline.  ",
+    actor: slackActor,
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    status: "invalid_selection",
+    error: "Question does not accept free-form input",
+  });
+  assert.equal(state.row.status, "open");
+  assert.equal(state.broadcasts.length, 0);
+  assert.equal(state.sandboxMessages.length, 0);
+});
+
+test("free-form question lookup returns only open, free-form-capable question copy", async () => {
+  const openState = fixture(question({
+    question: "What should change?",
+    context: "The headline needs another pass.",
+    allow_freeform: 1,
+  }));
+  assert.deepEqual(await freeformQuestion(openState.host, "question_1"), {
+    ok: true,
+    question: "What should change?",
+    context: "The headline needs another pass.",
+  });
+
+  const noContextState = fixture(question({ allow_freeform: 1 }));
+  assert.deepEqual(await freeformQuestion(noContextState.host, "question_1"), {
+    ok: true,
+    question: "Which database?",
+  });
+
+  for (const [row, expected] of [
+    [null, { ok: false, status: "not_found", error: "Question not found" }],
+    [question({ allow_freeform: 1, status: "cancelled" }), { ok: false, status: "not_open", error: "Question is no longer open" }],
+    [question({ allow_freeform: 0 }), { ok: false, status: "freeform_not_allowed", error: "Question does not accept free-form input" }],
+  ]) {
+    assert.deepEqual(await freeformQuestion(fixture(row).host, "question_1"), expected);
+  }
 });
 
 test("Slack answer validation rejects invalid ordinals and cardinality", async () => {

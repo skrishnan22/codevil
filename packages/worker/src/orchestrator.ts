@@ -116,6 +116,9 @@ import {
 } from "./session-directory.js";
 import {
   answerQuestionFromIntegration as answerQuestionFromIntegrationFn,
+  freeformQuestionForIntegration as freeformQuestionForIntegrationFn,
+  type IntegrationFreeformQuestionResult,
+  type IntegrationQuestionAnswerInput,
   type IntegrationQuestionAnswerResult,
 } from "./orchestrator/question-answer.js";
 import { workerLogForSession, workerLogSessionExceptionForEnv } from "./logging.js";
@@ -1128,16 +1131,20 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     return { ok: true };
   }
 
-  answerQuestionFromIntegration(args: {
-    requestId: string;
-    optionIndexes: number[];
-    actor: ParticipantIdentity;
-  }): IntegrationQuestionAnswerResult {
+  answerQuestionFromIntegration(args: IntegrationQuestionAnswerInput): IntegrationQuestionAnswerResult {
     this.loadMeta();
     if (!this.meta) {
       return { ok: false, status: "not_open", error: "Session not initialized" };
     }
     return answerQuestionFromIntegrationFn(this, args);
+  }
+
+  freeformQuestionForIntegration(args: { requestId: string }): IntegrationFreeformQuestionResult {
+    this.loadMeta();
+    if (!this.meta) {
+      return { ok: false, status: "not_open", error: "Session not initialized" };
+    }
+    return freeformQuestionForIntegrationFn(this, args.requestId);
   }
 }
 

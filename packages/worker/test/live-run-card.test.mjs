@@ -18,9 +18,70 @@ const started = {
 
 function detailsLines(presentation, sessionUrl = "https://app.codevil.example/sessions/ses_1") {
   const rendered = renderSlackRunCard(presentation, sessionUrl, 1);
-  const section = rendered.blocks[0].details?.elements?.[0];
-  return (section?.elements ?? []).map((element) => element.text);
+  return (rendered.blocks[0].details?.elements ?? [])
+    .flatMap((section) => section?.elements ?? [])
+    .map((element) => element.text);
 }
+
+test("keeps the clean request title when the run starts with an enriched prompt", () => {
+  const presentation = projectExternalRunEvents([
+    { cursor: 1, event: { type: "agent_request", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: "Improve landing page header and colors", created_at: "2026-08-28T00:00:00.000Z" } },
+    { cursor: 2, event: { type: "agent_run_started", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: "Source: Slack thread\n\nThread context:\nSlack U2: old context\n\nExplicit request:\nSlack U1: Improve landing page header and colors" } },
+  ]);
+  assert.equal(presentation.title, "Improve landing page header and colors");
+  assert.doesNotMatch(presentation.title, /Source:|Slack U1/);
+});
+
+test("keeps started-only enriched prompts out of the public title", () => {
+  const enrichedText = "Source: Slack thread\n\nThread context:\nSlack U2: old context\n\nExplicit request:\nSlack U1: Improve landing page header and colors";
+  const presentation = projectExternalRunEvents([
+    { cursor: 1, event: { type: "agent_run_started", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: enrichedText } },
+  ]);
+
+  assert.equal(presentation.title, "Improve landing page header and colors");
+  assert.doesNotMatch(presentation.title, /Source:|Slack U1|Slack U2|Thread context/);
+
+  const withoutExplicitRequest = projectExternalRunEvents([
+    { cursor: 1, event: { type: "agent_run_started", run_id: "run_2", actor: { id: "U1", name: "Ada" }, text: "Source: Slack thread\n\nThread context:\nSlack U2: old context" } },
+  ]);
+  assert.equal(withoutExplicitRequest.title, "Agent Run");
+});
+
+test("preserves a bounded clean started-only title", () => {
+  const presentation = projectExternalRunEvents([
+    { cursor: 1, event: started },
+  ]);
+
+  assert.equal(presentation.title, "Fix authentication and add tests");
+});
+
+test("renders quiet activity rows with collapsed duplicates and bounded visibility", () => {
+  const presentation = projectExternalRunEvents([
+    { cursor: 1, event: { type: "agent_request", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: "Improve the landing page", created_at: "2026-08-28T00:00:00.000Z" } },
+    ...[2, 3, 4].map((cursor) => ({
+      cursor,
+      event: { type: "agent_event", event: { type: "tool_execution_end", tool: "read", toolCallId: `read_${cursor}`, success: true } },
+    })),
+    { cursor: 5, event: { type: "agent_event", event: { type: "tool_execution_start", tool: "edit", toolCallId: "edit_1", args: { file_path: "src/Hero.astro" } } } },
+  ]);
+
+  const rendered = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 1);
+  const expectedLines = [
+    "Changing code",
+    "● Editing code — Hero.astro",
+    "✓ Reading files",
+    "2 earlier steps",
+  ];
+  assert.deepEqual(detailsLines(presentation).slice(0, 4), expectedLines);
+  assert.deepEqual(
+    rendered.blocks[0].details.elements,
+    detailsLines(presentation).map((text) => ({
+      type: "rich_text_section",
+      elements: [{ type: "text", text }],
+    })),
+  );
+  assert.equal(detailsLines(presentation).filter((line) => /^(?:●|✓|✗) /.test(line)).length, 2);
+});
 
 test("projects supported lifecycle events into a redacted, granular step list", () => {
   const presentation = projectExternalRunEvents([
@@ -92,18 +153,15 @@ test("windows steps to the current step plus a few older ones on the card", () =
   // Internal cap keeps the fingerprint bounded; the card renders only the tail.
   assert.equal(presentation.steps.length, 10);
   assert.equal(presentation.droppedSteps, 2);
-  assert.equal(MAX_VISIBLE_STEPS, 4);
+  assert.equal(MAX_VISIBLE_STEPS, 3);
 
   const lines = detailsLines(presentation);
   const stepLines = lines.filter((line) => line.startsWith("✓"));
-  assert.equal(stepLines.length, 4);
+  assert.equal(stepLines.length, 1);
   assert.deepEqual(stepLines.map((line) => line.split(" ")[1]), [
     "Reading",
-    "Reading",
-    "Reading",
-    "Reading",
   ]);
-  assert.ok(lines.some((line) => /8 earlier steps/.test(line)));
+  assert.ok(lines.some((line) => /11 earlier steps/.test(line)));
 });
 
 test("shows a queued run with its queue position until it starts", () => {
@@ -130,6 +188,13 @@ test("projects waiting, terminal, and deterministic completion states", () => {
   ]);
   assert.equal(waiting.waitingFor, "question");
   assert.equal(waiting.phase, "Waiting for input");
+  assert.deepEqual(detailsLines(waiting), ["Waiting for your answer"]);
+
+  const approval = projectExternalRunEvents([
+    { cursor: 1, event: started },
+    { cursor: 2, event: { type: "approval_requested", run_id: "run_1", plan: "Update the header." } },
+  ]);
+  assert.deepEqual(detailsLines(approval), ["Waiting for plan approval"]);
 
   const complete = projectExternalRunEvents([
     { cursor: 1, event: started },
@@ -150,15 +215,28 @@ test("renders a native task card with accessible fallback and fresh block ids", 
   assert.equal(block.task_id, "codevil_run_1");
   assert.equal(block.status, "in_progress");
   assert.notEqual(first.blocks[0].block_id, second.blocks[0].block_id);
-  assert.deepEqual(block.sources, [{ type: "url", url: "https://app.codevil.example/sessions/ses_1", text: "Open session" }]);
+  assert.deepEqual(block.sources, [{ type: "url", url: "https://app.codevil.example/sessions/ses_1", text: "Open Codevil" }]);
   assert.match(first.text, /Investigate auth/);
+});
+
+test("keeps the terminal summary in output instead of repeating it in details", () => {
+  const presentation = {
+    ...createExternalRunPresentation("run_1", "Ship"),
+    status: "complete",
+    phase: "Complete",
+    summary: "Completed successfully.",
+  };
+  const rendered = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 1);
+
+  assert.doesNotMatch(JSON.stringify(rendered.blocks[0].details), /Completed successfully\./);
+  assert.match(JSON.stringify(rendered.blocks[0].output), /Completed successfully\./);
 });
 
 test("renders only a validated pull-request source", () => {
   const presentation = { ...createExternalRunPresentation("run_1", "Ship"), status: "complete", summary: "Completed successfully.", steps: [], droppedSteps: 0, prUrl: "https://github.com/acme/repo/pull/12" };
   const rendered = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 1);
   assert.deepEqual(rendered.blocks[0].sources, [
-    { type: "url", url: "https://app.codevil.example/sessions/ses_1", text: "Open session" },
+    { type: "url", url: "https://app.codevil.example/sessions/ses_1", text: "Open Codevil" },
     { type: "url", url: "https://github.com/acme/repo/pull/12", text: "View pull request" },
   ]);
 });

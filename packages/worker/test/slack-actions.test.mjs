@@ -228,10 +228,8 @@ test("processSlackQuestionAction attributes and reflects an accepted answer", as
   const update = fixture.slackCalls.find((call) => call.method === "chat.update");
   assert.ok(update);
   assert.match(JSON.stringify(update.body.blocks), /Answered by <@U123>/);
-  assert.equal(
-    update.body.blocks.find((block) => block.type === "actions").elements[0].url,
-    "https://app.codevil.example/sessions/ses_123",
-  );
+  assert.equal(update.body.blocks.some((block) => block.type === "actions"), false);
+  assert.doesNotMatch(JSON.stringify(update.body.blocks), /codevil_open_session/);
 });
 
 test("processSlackQuestionAction falls back to the Slack ID when profile lookup fails", async () => {

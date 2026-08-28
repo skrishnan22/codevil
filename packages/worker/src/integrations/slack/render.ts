@@ -16,7 +16,7 @@ export function renderSlackRunCard(
 ): SlackMessageContent {
   const details = renderDetails(presentation);
   const sources: Array<Record<string, unknown>> = [
-    { type: "url", url: sessionUrl, text: "Open session" },
+    { type: "url", url: sessionUrl, text: "Open Codevil" },
   ];
   const prUrl = presentation.prUrl ? validPullRequestUrl(presentation.prUrl) : undefined;
   if (prUrl) sources.push({ type: "url", url: prUrl, text: "View pull request" });
@@ -43,19 +43,40 @@ function renderDetails(presentation: ExternalRunPresentation): string[] {
   const lines: string[] = [];
   if (presentation.queuedPosition !== undefined) {
     lines.push(`In queue — position ${presentation.queuedPosition}`);
-  } else {
-    lines.push(`Phase: ${presentation.phase}`);
-  }
-  if (presentation.waitingFor) {
+  } else if (presentation.waitingFor) {
     lines.push(presentation.waitingFor === "question"
-      ? "Waiting for your answer…"
-      : "Waiting for plan approval…");
+      ? "Waiting for your answer"
+      : "Waiting for plan approval");
+  } else {
+    lines.push(presentation.phase);
+    if (presentation.status === "in_progress" && presentation.summary) lines.push(presentation.summary);
   }
-  if (presentation.summary) lines.push(presentation.summary);
-  lines.push(...presentation.steps.slice(-MAX_VISIBLE_STEPS).map(renderStep));
-  const hidden = presentation.droppedSteps + Math.max(0, presentation.steps.length - MAX_VISIBLE_STEPS);
-  if (hidden > 0) lines.push(`· ${hidden} earlier step${hidden === 1 ? "" : "s"}…`);
+
+  const collapsed = collapseConsecutiveSteps(presentation.steps);
+  lines.push(...collapsed.steps.slice(-MAX_VISIBLE_STEPS).reverse().map(renderStep));
+  const hidden = presentation.droppedSteps
+    + collapsed.collapsedCount
+    + Math.max(0, collapsed.steps.length - MAX_VISIBLE_STEPS);
+  if (hidden > 0) lines.push(`${hidden} earlier step${hidden === 1 ? "" : "s"}`);
   return lines;
+}
+
+function collapseConsecutiveSteps(steps: ExternalRunStep[]): {
+  steps: ExternalRunStep[];
+  collapsedCount: number;
+} {
+  const collapsed: ExternalRunStep[] = [];
+  let collapsedCount = 0;
+  for (const step of steps) {
+    const previous = collapsed.at(-1);
+    if (previous && previous.label === step.label && previous.detail === step.detail) {
+      collapsed[collapsed.length - 1] = step;
+      collapsedCount += 1;
+    } else {
+      collapsed.push(step);
+    }
+  }
+  return { steps: collapsed, collapsedCount };
 }
 
 function renderStep(step: ExternalRunStep): string {
@@ -73,10 +94,10 @@ function briefStatus(presentation: ExternalRunPresentation): string {
 function richText(lines: string[]): Record<string, unknown> {
   return {
     type: "rich_text",
-    elements: [{
+    elements: lines.map((text) => ({
       type: "rich_text_section",
-      elements: lines.map((text) => ({ type: "text", text })),
-    }],
+      elements: [{ type: "text", text }],
+    })),
   };
 }
 
@@ -118,7 +139,6 @@ export function renderAnsweredSlackQuestion(input: {
   question: string;
   selectedLabels: string[];
   answeredByText: string;
-  sessionUrl: string;
 }): SlackMessageContent {
   const answer = input.selectedLabels.join(", ");
   return {
@@ -126,9 +146,12 @@ export function renderAnsweredSlackQuestion(input: {
     blocks: [
       {
         type: "markdown",
-        text: `## Codevil question answered\n\n${input.question}\n\n**Answer:** ${answer}\n\nAnswered by ${input.answeredByText}`,
+        text: `**${input.question}**\n\n✓ ${answer}`,
       },
-      openSessionActions(input.sessionUrl),
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: `Answered by ${input.answeredByText}` }],
+      },
     ],
   };
 }
@@ -234,13 +257,6 @@ function questionSelectionElement(options: QuestionOption[], allowMultiple: bool
     action_id: "codevil_question_select",
     placeholder: plainText(allowMultiple ? "Select answers" : "Select an answer"),
     options: renderedOptions,
-  };
-}
-
-function openSessionActions(sessionUrl: string): Record<string, unknown> & { type: string } {
-  return {
-    type: "actions",
-    elements: [openSessionButton(sessionUrl)],
   };
 }
 

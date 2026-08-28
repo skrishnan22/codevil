@@ -124,9 +124,12 @@ test("answered questions remove controls and mention the Slack answerer", () => 
     question: "Which database?",
     selectedLabels: ["PostgreSQL"],
     answeredByText: "<@U123>",
-    sessionUrl,
   });
-  assert.match(message.blocks[0].text, /Answered by <@U123>/);
+  assert.doesNotMatch(JSON.stringify(message.blocks), /Codevil question answered/);
+  assert.match(JSON.stringify(message.blocks), /✓ PostgreSQL/);
+  assert.match(JSON.stringify(message.blocks), /Answered by <@U123>/);
+  assert.equal(message.blocks.some((block) => block.type === "actions"), false);
+  assert.doesNotMatch(JSON.stringify(message.blocks), /codevil_open_session/);
   assert.doesNotMatch(JSON.stringify(message.blocks), /codevil_question_answer/);
 });
 

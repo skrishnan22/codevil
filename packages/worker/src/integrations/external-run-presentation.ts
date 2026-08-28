@@ -33,7 +33,7 @@ const MAX_SUMMARY_LENGTH = 180;
 const MAX_DETAIL_LENGTH = 60;
 /** Internal cap so the render fingerprint stays bounded; rendering windows further. */
 const MAX_KEPT_STEPS = 10;
-export const MAX_VISIBLE_STEPS = 4; // current step + up to 3 older
+export const MAX_VISIBLE_STEPS = 3;
 
 export function createExternalRunPresentation(runId: string, requestText: string): ExternalRunPresentation {
   return {
@@ -53,12 +53,32 @@ export function projectExternalRunEvents(events: readonly ExternalRunEvent[]): E
     throw new Error("Cannot project an Agent Run without agent_request or agent_run_started");
   }
 
-  const presentation = createExternalRunPresentation(start.event.run_id, start.event.text);
+  const presentation = createExternalRunPresentation(
+    start.event.run_id,
+    start.event.type === "agent_request" ? start.event.text : startedRunTitle(start.event.text),
+  );
   let next = presentation;
   for (const entry of events) {
     next = applyExternalRunEvent(next, entry.event, entry.cursor);
   }
   return next;
+}
+
+function startedRunTitle(value: string): string {
+  const isSlackThreadEnvelope = /^Source:\s*Slack thread\b/i.test(value.trimStart())
+    && /\n\s*Thread context:/i.test(value);
+  if (!isSlackThreadEnvelope) return boundedPublicText(value, MAX_TITLE_LENGTH) || "Agent Run";
+
+  const marker = "Explicit request:";
+  const markerIndex = value.lastIndexOf(marker);
+  if (markerIndex < 0) return "Agent Run";
+
+  const request = value
+    .slice(markerIndex + marker.length)
+    .trim()
+    .replace(/^Slack\s+[^:\s]+:\s*/, "")
+    .trim();
+  return boundedPublicText(request, MAX_TITLE_LENGTH) || "Agent Run";
 }
 
 export function applyExternalRunEvent(
@@ -70,7 +90,9 @@ export function applyExternalRunEvent(
     if (event.run_id !== current.runId) return current;
     return {
       ...current,
-      title: boundedPublicText(event.text, MAX_TITLE_LENGTH) || current.title,
+      ...(event.type === "agent_request"
+        ? { title: boundedPublicText(event.text, MAX_TITLE_LENGTH) || current.title }
+        : {}),
       phase: "Starting",
       queuedPosition: undefined,
     };

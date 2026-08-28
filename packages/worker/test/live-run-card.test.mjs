@@ -214,21 +214,26 @@ test("shows a queued run with its queue position until it starts", () => {
   assert.equal(running.status, "in_progress");
 });
 
-test("projects waiting, terminal, and deterministic completion states", () => {
+test("renders an explicit question waiting subtitle", () => {
   const waiting = projectExternalRunEvents([
     { cursor: 1, event: started },
     { cursor: 2, event: { type: "question_raised", request_id: "q1", run_id: "run_1", question: "Which region?", allow_freeform: false, allow_multiple: false, answerable_by: "anyone", status: "open", raised_at: "2026-08-13T00:00:00.000Z" } },
   ]);
   assert.equal(waiting.waitingFor, "question");
   assert.equal(waiting.phase, "Waiting for input");
-  assert.equal(renderSlackRunCard(waiting, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "Waiting for input");
+  assert.equal(renderSlackRunCard(waiting, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "Waiting for your answer");
+});
 
+test("renders an explicit plan approval waiting subtitle", () => {
   const approval = projectExternalRunEvents([
     { cursor: 1, event: started },
     { cursor: 2, event: { type: "approval_requested", run_id: "run_1", plan: "Update the header." } },
   ]);
-  assert.equal(renderSlackRunCard(approval, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "Waiting for approval");
+  assert.equal(approval.waitingFor, "approval");
+  assert.equal(renderSlackRunCard(approval, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "Waiting for plan approval");
+});
 
+test("projects terminal and deterministic completion states", () => {
   const complete = projectExternalRunEvents([
     { cursor: 1, event: started },
     { cursor: 2, event: { type: "agent_run_completed", run_id: "run_1", pr_url: "https://github.com/acme/repo/pull/12" } },

@@ -88,6 +88,8 @@ function renderStep(step: ExternalRunStep): Record<string, unknown> {
 
 function briefStatus(presentation: ExternalRunPresentation): string {
   if (presentation.queuedPosition !== undefined) return `In queue (position ${presentation.queuedPosition})`;
+  if (presentation.waitingFor === "question") return "Waiting for your answer";
+  if (presentation.waitingFor === "approval") return "Waiting for plan approval";
   if (presentation.status === "in_progress") return presentation.phase;
   return presentation.summary ?? presentation.status;
 }

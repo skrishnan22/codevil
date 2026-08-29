@@ -107,6 +107,17 @@ test("larger single-choice questions use a select and submit button", () => {
   assert.deepEqual(actions.elements.map((element) => element.type), ["static_select", "button", "button"]);
   assert.deepEqual(actions.elements[0].options.map((option) => option.value), ["0", "1", "2", "3", "4", "5"]);
   assert.equal(actions.elements[1].action_id, "codevil_question_submit");
+  assert.equal(actions.elements[1].style, "primary");
+});
+
+test("selectable free-form questions use Write answer as the single primary action", () => {
+  const options = Array.from({ length: 6 }, (_, index) => ({ id: `o${index}`, label: `Option ${index}` }));
+  const [message] = renderSlackNotification(questionIntent({ options, allowFreeform: true }), sessionUrl);
+  const actions = message.blocks.find((block) => block.type === "actions");
+  const primaryButtons = actions.elements.filter((element) => element.type === "button" && element.style === "primary");
+
+  assert.deepEqual(primaryButtons.map((button) => button.action_id), ["codevil_question_open_freeform"]);
+  assert.equal(actions.elements.find((element) => element.action_id === "codevil_question_submit").style, undefined);
 });
 
 test("multiple-choice questions use checkboxes through ten options", () => {
@@ -114,6 +125,7 @@ test("multiple-choice questions use checkboxes through ten options", () => {
   const actions = message.blocks.find((block) => block.type === "actions");
   assert.deepEqual(actions.elements.map((element) => element.type), ["checkboxes", "button", "button"]);
   assert.equal(actions.elements[1].action_id, "codevil_question_submit");
+  assert.equal(actions.elements[1].style, "primary");
   assert.equal(JSON.stringify(message.blocks).match(/PostgreSQL/g)?.length, 1);
   assert.equal(JSON.stringify(message.blocks).match(/Managed production database/g)?.length, 1);
 });
@@ -123,6 +135,7 @@ test("multiple-choice questions use a multi-select above ten options", () => {
   const [message] = renderSlackNotification(questionIntent({ options, allowMultiple: true }), sessionUrl);
   const actions = message.blocks.find((block) => block.type === "actions");
   assert.deepEqual(actions.elements.map((element) => element.type), ["multi_static_select", "button", "button"]);
+  assert.equal(actions.elements[1].style, "primary");
 });
 
 test("unrepresentable questions fall back to Open session", () => {

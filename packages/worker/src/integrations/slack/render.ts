@@ -270,7 +270,7 @@ function questionActions(
         type: "button",
         action_id: "codevil_question_submit",
         text: plainText("Submit answer"),
-        style: "primary",
+        ...(!intent.allowFreeform ? { style: "primary" } : {}),
         value: submitValue,
       });
     }

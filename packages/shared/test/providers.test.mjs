@@ -37,29 +37,26 @@ const INCLUDED_PROVIDER_IDS = [
   "cloudflare-ai-gateway",
 ];
 
-const DEFERRED_PROVIDER_IDS = [
-  "azure-openai-responses",
-  "google-vertex",
-  "amazon-bedrock",
-  "openai-codex",
-  "github-copilot",
-  "anthropic-oauth",
-  "custom",
-];
-
 test("capability registry contains exactly the supported API-key Pi providers", () => {
   assert.deepEqual(
     shared.LLM_PROVIDER_CAPABILITIES.map((provider) => provider.id),
     INCLUDED_PROVIDER_IDS,
   );
-  assert.deepEqual(shared.DEFERRED_PROVIDER_IDS, DEFERRED_PROVIDER_IDS);
 });
 
 test("KnownProviderSchema accepts included providers but rejects deferred provider ids", () => {
   assert.equal(shared.KnownProviderSchema.parse("opencode"), "opencode");
   assert.equal(shared.KnownProviderSchema.parse("opencode-go"), "opencode-go");
 
-  for (const providerId of DEFERRED_PROVIDER_IDS) {
+  for (const providerId of [
+    "azure-openai-responses",
+    "google-vertex",
+    "amazon-bedrock",
+    "openai-codex",
+    "github-copilot",
+    "anthropic-oauth",
+    "custom",
+  ]) {
     assert.equal(shared.KnownProviderSchema.safeParse(providerId).success, false, providerId);
   }
 });

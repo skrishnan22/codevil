@@ -165,6 +165,9 @@ test("renderSlackFreeformAnswerModal bounds display text and renders one require
   assert.equal(modal.type, "modal");
   assert.equal(modal.callback_id, "codevil_question_freeform");
   assert.equal(modal.private_metadata, privateMetadata);
+  assert.equal(modal.title.text, "Answer Codevil");
+  assert.equal(modal.submit.text, "Send answer");
+  assert.equal(modal.close.text, "Cancel");
   assert.equal(modal.blocks[0].text.text, `*Question*\n${"Q".repeat(999)}…`);
   assert.equal(modal.blocks[1].text.text, `*Context*\n${"C".repeat(999)}…`);
   assert.deepEqual(modal.blocks[2], {

@@ -173,7 +173,9 @@ export function parseSlackFreeformSubmission(payload: unknown): SlackFreeformSub
 
   const input = parsed.data.view.state.values.codevil_question_freeform_input
     ?.codevil_question_freeform_value?.value;
-  if (typeof input !== "string" || input.trim().length === 0) return null;
+  if (typeof input !== "string") return null;
+  const freeform = input.trim();
+  if (freeform.length === 0) return null;
 
   return {
     teamId: parsed.data.team.id,
@@ -182,7 +184,7 @@ export function parseSlackFreeformSubmission(payload: unknown): SlackFreeformSub
     messageTs: metadata.m,
     threadTs: metadata.th,
     requestId: metadata.q,
-    freeform: input,
+    freeform,
   };
 }
 

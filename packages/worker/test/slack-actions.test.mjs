@@ -188,6 +188,14 @@ test("parseSlackFreeformSubmission parses metadata and the required answer", asy
   });
 });
 
+test("parseSlackFreeformSubmission trims surrounding answer whitespace", async () => {
+  const module = await actionsModule;
+  const payload = freeformSubmissionPayload();
+  payload.view.state.values.codevil_question_freeform_input.codevil_question_freeform_value.value = "  Use PostgreSQL \n";
+
+  assert.equal(module.parseSlackFreeformSubmission(payload).freeform, "Use PostgreSQL");
+});
+
 test("free-form interaction parsers reject malformed metadata, empty input, wrong callbacks, and missing trigger IDs", async () => {
   const module = await actionsModule;
   const malformedMetadata = freeformSubmissionPayload({

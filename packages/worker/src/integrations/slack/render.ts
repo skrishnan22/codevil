@@ -168,8 +168,8 @@ export function renderSlackFreeformAnswerModal(input: {
     type: "modal",
     callback_id: "codevil_question_freeform",
     private_metadata: input.privateMetadata,
-    title: plainText("Answer question"),
-    submit: plainText("Send"),
+    title: plainText("Answer Codevil"),
+    submit: plainText("Send answer"),
     close: plainText("Cancel"),
     blocks,
   };

@@ -18,7 +18,7 @@ import {
   updateSlackMessage,
   type SlackApi,
 } from "./client.js";
-import { renderAnsweredSlackQuestion } from "./render.js";
+import { renderAnsweredSlackQuestion, renderSlackFreeformAnswerModal } from "./render.js";
 
 const SlackBlockActionSchema = z.object({
   type: z.literal("block_actions"),
@@ -244,26 +244,8 @@ export async function processSlackQuestionAction(
     return;
   }
 
-  const profile = await fetchSlackUser(api, env.SLACK_BOT_TOKEN, action.userId);
-  if (profile.ok && profile.data.user && (profile.data.user.is_bot || profile.data.user.is_app_user)) return;
-  const displayName = profile.ok && profile.data.user
-    ? slackUserDisplayName(profile.data.user, action.userId)
-    : action.userId;
-  const now = new Date().toISOString();
-  const actorStatement = upsertExternalActor({
-    id: externalActorRowId(integrationIdValue, action.userId),
-    integration_id: integrationIdValue,
-    external_actor_id: action.userId,
-    display_name: displayName,
-    email: null,
-    linked_auth_user_id: null,
-    metadata_json: "{}",
-    created_at: now,
-    updated_at: now,
-  });
-  await env.DB.prepare(actorStatement.sql).bind(...actorStatement.bindings).run();
-
-  const actor = { id: externalParticipantId("slack", action.userId), name: displayName };
+  const actor = await resolveSlackHumanActor(action, env, api);
+  if (!actor) return;
   let result;
   try {
     result = await env.ORCHESTRATOR
@@ -305,6 +287,172 @@ export async function processSlackQuestionAction(
   }
 }
 
+export async function processSlackFreeformOpenAction(
+  action: SlackFreeformOpenAction,
+  env: Env,
+  deps: SlackActionProcessDeps = {},
+): Promise<void> {
+  if (!env.SLACK_BOT_TOKEN || action.userId === env.CODEVIL_SLACK_BOT_USER_ID) return;
+  const api = deps.slackApi ?? createSlackWebApi();
+  const integrationIdValue = integrationId("slack", action.teamId);
+  const linkStatement = externalSessionLinkSelect(integrationIdValue, action.channelId, action.threadTs);
+  const link = await env.DB
+    .prepare(linkStatement.sql)
+    .bind(...linkStatement.bindings)
+    .first<ExternalSessionLinkRow>();
+  if (!link) {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "This Slack thread is not linked to a Codevil session.");
+    return;
+  }
+
+  let question;
+  try {
+    question = await env.ORCHESTRATOR
+      .get(env.ORCHESTRATOR.idFromName(link.session_id))
+      .freeformQuestionForIntegration({ requestId: action.requestId });
+  } catch {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "I couldn't open that question. Please try again.");
+    return;
+  }
+  if (!question.ok) {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, question.error);
+    return;
+  }
+
+  const privateMetadata = encodeSlackFreeformPrivateMetadata({
+    requestId: action.requestId,
+    teamId: action.teamId,
+    channelId: action.channelId,
+    threadTs: action.threadTs,
+    messageTs: action.messageTs,
+  });
+  if (!privateMetadata) {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "I couldn't open that question. Please try again.");
+    return;
+  }
+
+  try {
+    const opened = await api(env.SLACK_BOT_TOKEN, "views.open", {
+      trigger_id: action.triggerId,
+      view: renderSlackFreeformAnswerModal({
+        question: question.question,
+        ...(question.context !== undefined ? { context: question.context } : {}),
+        privateMetadata,
+      }),
+    });
+    if (opened.ok) return;
+    workerLogForSession(link.session_id, "WARN", "slack.question.modal_open.failed", {
+      error: opened.error,
+      channel_id: action.channelId,
+      message_ts: action.messageTs,
+    }, collectWorkerSecretValues(env));
+  } catch (error) {
+    workerLogForSession(link.session_id, "WARN", "slack.question.modal_open.failed", {
+      error: error instanceof Error ? error.message : String(error),
+      channel_id: action.channelId,
+      message_ts: action.messageTs,
+    }, collectWorkerSecretValues(env));
+  }
+  await notifyActionFailure(api, env.SLACK_BOT_TOKEN, action, "I couldn't open that question. Please try again.");
+}
+
+export async function processSlackFreeformSubmission(
+  submission: SlackFreeformSubmission,
+  env: Env,
+  deps: SlackActionProcessDeps = {},
+): Promise<void> {
+  if (!env.SLACK_BOT_TOKEN || submission.userId === env.CODEVIL_SLACK_BOT_USER_ID) return;
+  const api = deps.slackApi ?? createSlackWebApi();
+  const integrationIdValue = integrationId("slack", submission.teamId);
+  const linkStatement = externalSessionLinkSelect(integrationIdValue, submission.channelId, submission.threadTs);
+  const link = await env.DB
+    .prepare(linkStatement.sql)
+    .bind(...linkStatement.bindings)
+    .first<ExternalSessionLinkRow>();
+  if (!link) {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, submission, "This Slack thread is not linked to a Codevil session.");
+    return;
+  }
+
+  const actor = await resolveSlackHumanActor(submission, env, api);
+  if (!actor) return;
+
+  let result;
+  try {
+    result = await env.ORCHESTRATOR
+      .get(env.ORCHESTRATOR.idFromName(link.session_id))
+      .answerQuestionFromIntegration({
+        requestId: submission.requestId,
+        freeform: submission.freeform,
+        actor,
+      });
+  } catch {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, submission, "I couldn't submit that answer. Please try again.");
+    return;
+  }
+  if (!result.ok) {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, submission, result.error);
+    return;
+  }
+
+  try {
+    const update = await updateSlackMessage(api, env.SLACK_BOT_TOKEN, {
+      channel: submission.channelId,
+      ts: submission.messageTs,
+      ...renderAnsweredSlackQuestion({
+        question: result.question,
+        selectedLabels: result.selectedLabels,
+        answeredByText: slackAnswererText(result.answeredBy),
+      }),
+    });
+    if (!update.ok) {
+      workerLogForSession(link.session_id, "WARN", "slack.question.update.failed", {
+        error: update.error,
+        channel_id: submission.channelId,
+        message_ts: submission.messageTs,
+      }, collectWorkerSecretValues(env));
+    }
+  } catch (error) {
+    workerLogForSession(link.session_id, "WARN", "slack.question.update.failed", {
+      error: error instanceof Error ? error.message : String(error),
+      channel_id: submission.channelId,
+      message_ts: submission.messageTs,
+    }, collectWorkerSecretValues(env));
+  }
+  if (result.status === "already_answered") {
+    await notifyActionFailure(api, env.SLACK_BOT_TOKEN, submission, "This question was already answered.");
+  }
+}
+
+async function resolveSlackHumanActor(
+  action: Pick<SlackQuestionAction, "teamId" | "userId">,
+  env: Env,
+  api: SlackApi,
+): Promise<{ id: string; name: string } | null> {
+  const botToken = env.SLACK_BOT_TOKEN;
+  if (!botToken) return null;
+  const profile = await fetchSlackUser(api, botToken, action.userId);
+  if (profile.ok && profile.data.user && (profile.data.user.is_bot || profile.data.user.is_app_user)) return null;
+  const displayName = profile.ok && profile.data.user
+    ? slackUserDisplayName(profile.data.user, action.userId)
+    : action.userId;
+  const integrationIdValue = integrationId("slack", action.teamId);
+  const now = new Date().toISOString();
+  const actorStatement = upsertExternalActor({
+    id: externalActorRowId(integrationIdValue, action.userId),
+    integration_id: integrationIdValue,
+    external_actor_id: action.userId,
+    display_name: displayName,
+    email: null,
+    linked_auth_user_id: null,
+    metadata_json: "{}",
+    created_at: now,
+    updated_at: now,
+  });
+  await env.DB.prepare(actorStatement.sql).bind(...actorStatement.bindings).run();
+  return { id: externalParticipantId("slack", action.userId), name: displayName };
+}
+
 function slackAnswererText(actor: { id: string; name: string }): string {
   const slackId = actor.id.match(/^external:slack:([A-Z0-9]+)$/)?.[1];
   return slackId ? `<@${slackId}>` : escapeSlackText(actor.name);
@@ -317,7 +465,7 @@ function escapeSlackText(value: string): string {
 async function notifyActionFailure(
   api: SlackApi,
   botToken: string,
-  action: SlackQuestionAction,
+  action: Pick<SlackQuestionAction, "channelId" | "userId">,
   text: string,
 ): Promise<void> {
   await postSlackEphemeral(api, botToken, {

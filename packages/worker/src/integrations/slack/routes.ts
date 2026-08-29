@@ -42,8 +42,14 @@ import { formatSlackAgentRequest } from "./context.js";
 import { buildSlackManifest } from "./manifest.js";
 import {
   isSlackNonSubmittingAction,
+  parseSlackFreeformOpenAction,
+  parseSlackFreeformSubmission,
   parseSlackQuestionAction,
+  processSlackFreeformOpenAction,
+  processSlackFreeformSubmission,
   processSlackQuestionAction,
+  type SlackFreeformOpenAction,
+  type SlackFreeformSubmission,
   type SlackQuestionAction,
 } from "./actions.js";
 
@@ -64,6 +70,16 @@ export interface SlackEventDeps {
 export interface SlackActionDeps {
   slackApi?: SlackApi;
   waitUntil?: (promise: Promise<unknown>) => void;
+  processFreeformOpenAction?: (
+    action: SlackFreeformOpenAction,
+    env: Env,
+    deps: { slackApi?: SlackApi; workerOrigin?: string },
+  ) => Promise<void>;
+  processFreeformSubmission?: (
+    submission: SlackFreeformSubmission,
+    env: Env,
+    deps: { slackApi?: SlackApi; workerOrigin?: string },
+  ) => Promise<void>;
   processAction?: (
     action: SlackQuestionAction,
     env: Env,
@@ -352,6 +368,31 @@ export async function handleSlackAction(
   }
 
   if (isSlackNonSubmittingAction(payload)) return json({ ok: true }, 200);
+
+  const freeformOpenAction = parseSlackFreeformOpenAction(payload);
+  if (freeformOpenAction) {
+    const process = deps.processFreeformOpenAction ?? processSlackFreeformOpenAction;
+    const processing = process(freeformOpenAction, env, {
+      slackApi: deps.slackApi,
+      workerOrigin: new URL(request.url).origin,
+    });
+    if (deps.waitUntil) deps.waitUntil(processing);
+    else await processing;
+    return json({ ok: true }, 200);
+  }
+
+  const freeformSubmission = parseSlackFreeformSubmission(payload);
+  if (freeformSubmission) {
+    const process = deps.processFreeformSubmission ?? processSlackFreeformSubmission;
+    const processing = process(freeformSubmission, env, {
+      slackApi: deps.slackApi,
+      workerOrigin: new URL(request.url).origin,
+    });
+    if (deps.waitUntil) deps.waitUntil(processing);
+    else await processing;
+    return new Response(null, { status: 200 });
+  }
+
   const action = parseSlackQuestionAction(payload);
   if (!action) return json({ error: "Unsupported Slack action" }, 400);
 

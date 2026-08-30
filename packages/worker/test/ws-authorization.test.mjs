@@ -9,7 +9,7 @@ import {
 import {
   createSocketAuthToken,
   sessionIdFromWebSocketPath,
-  SOCKET_AUTH_TOKEN_TTL_MS,
+  SOCKET_AUTH_TOKEN_TTL_SECONDS,
   verifySocketAuthToken,
 } from "../dist/ws-token.js";
 
@@ -50,7 +50,7 @@ test("verifySocketAuthToken rejects forged, expired, and session-mismatched toke
   assert.equal(await verifySocketAuthToken(token, "ses_2", SECRET, now), null);
   assert.equal(await verifySocketAuthToken(token, "ses_1", "wrong-secret", now), null);
   assert.equal(
-    await verifySocketAuthToken(token, "ses_1", SECRET, now + SOCKET_AUTH_TOKEN_TTL_MS + 1),
+    await verifySocketAuthToken(token, "ses_1", SECRET, now + SOCKET_AUTH_TOKEN_TTL_SECONDS * 1000 + 1),
     null,
   );
   assert.equal(await verifySocketAuthToken("not-a-token", "ses_1", SECRET, now), null);

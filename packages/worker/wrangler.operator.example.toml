@@ -37,7 +37,7 @@ run_worker_first = true
 [[containers]]
 class_name = "Sandbox"
 image = "../../Dockerfile.sandbox"
-instance_type = "standard-1"
+instance_type = "standard-3"
 max_instances = 5
 
 [[durable_objects.bindings]]

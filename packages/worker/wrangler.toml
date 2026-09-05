@@ -29,7 +29,7 @@ head_sampling_rate = 1
 [[containers]]
 class_name = "Sandbox"
 image = "../../Dockerfile.sandbox"
-instance_type = "standard-1"
+instance_type = "standard-3"
 max_instances = 5
 
   [containers.ssh]

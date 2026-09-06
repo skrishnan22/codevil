@@ -266,6 +266,70 @@ test("Open session URL actions are acknowledged without background processing", 
   assert.equal(processed, false);
 });
 
+test("signed modal submission returns an empty 200, schedules processing, and never submits a new Agent Run", async () => {
+  const payload = {
+    type: "view_submission",
+    trigger_id: "1337.def",
+    team: { id: "T123" },
+    user: { id: "U123" },
+    view: {
+      callback_id: "codevil_question_freeform",
+      private_metadata: JSON.stringify({
+        v: 1,
+        q: "question_1",
+        t: "T123",
+        c: "C123",
+        th: "171951.0001",
+        m: "171951.0002",
+      }),
+      state: {
+        values: {
+          codevil_question_freeform_input: {
+            codevil_question_freeform_value: {
+              type: "plain_text_input",
+              value: "Use a stronger, shorter headline.",
+            },
+          },
+        },
+      },
+    },
+  };
+  const body = new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
+  const scheduled = [];
+  const processed = [];
+  let submitAgentRequestCalled = false;
+  const response = await slackRoutes.handleSlackAction(
+    await signedSlackActionRequest(body),
+    {
+      SLACK_SIGNING_SECRET: "secret",
+      ORCHESTRATOR: fakeOrchestrator(() => ({
+        submitAgentRequest: async () => {
+          submitAgentRequestCalled = true;
+        },
+      })),
+    },
+    {
+      processFreeformSubmission: async (submission) => { processed.push(submission); },
+      waitUntil: (promise) => { scheduled.push(promise); },
+    },
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "");
+  assert.equal(scheduled.length, 1);
+  await Promise.all(scheduled);
+  assert.deepEqual(processed, [{
+    teamId: "T123",
+    userId: "U123",
+    channelId: "C123",
+    messageTs: "171951.0002",
+    threadTs: "171951.0001",
+    requestId: "question_1",
+    freeform: "Use a stronger, shorter headline.",
+  }]);
+  assert.equal(submitAgentRequestCalled, false);
+});
+
 test("event ignores app mentions when bot user id is missing", async () => {
   const db = fakeD1();
   const body = JSON.stringify({

@@ -1,105 +1,12 @@
 import type { ExternalNotificationIntent } from "../notification-intents.js";
 import type { SlackMessageContent } from "./client.js";
 import type { QuestionOption } from "@codevil/shared";
-import type { ExternalRunPresentation, ExternalRunStep } from "../external-run-presentation.js";
-import { MAX_VISIBLE_STEPS, validPullRequestUrl } from "../external-run-presentation.js";
 
 const MAX_EXTERNAL_TEXT_LENGTH = 500;
 const MAX_SLACK_MARKDOWN_CHARS = 11_500;
 const MAX_SLACK_ACTION_VALUE_LENGTH = 2_000;
 const MAX_SLACK_OPTION_TEXT_LENGTH = 75;
-
-export function renderSlackRunCard(
-  presentation: ExternalRunPresentation,
-  sessionUrl: string,
-  revision: number,
-): SlackMessageContent {
-  const details = renderDetails(presentation);
-  const sources: Array<Record<string, unknown>> = [
-    { type: "url", url: sessionUrl, text: "Open Codevil" },
-  ];
-  const prUrl = presentation.prUrl ? validPullRequestUrl(presentation.prUrl) : undefined;
-  if (prUrl) sources.push({ type: "url", url: prUrl, text: "View pull request" });
-
-  const block = {
-    type: "task_card",
-    task_id: `codevil_${presentation.runId}`.slice(0, 255),
-    title: presentation.title.slice(0, 120),
-    status: presentation.status,
-    block_id: `codevil_run_${presentation.runId}_${revision}`.slice(0, 255),
-    details: richText(details),
-    ...(presentation.status === "complete" || presentation.status === "error"
-      ? { output: richText([presentation.summary ?? (presentation.status === "complete" ? "Completed successfully." : "The Agent Run failed.")]) }
-      : {}),
-    sources,
-  };
-  return {
-    text: `Codevil: ${presentation.title} — ${briefStatus(presentation)}. Open session: ${sessionUrl}`.slice(0, MAX_EXTERNAL_TEXT_LENGTH),
-    blocks: [block],
-  };
-}
-
-function renderDetails(presentation: ExternalRunPresentation): string[] {
-  const lines: string[] = [];
-  if (presentation.queuedPosition !== undefined) {
-    lines.push(`In queue — position ${presentation.queuedPosition}`);
-  } else if (presentation.waitingFor) {
-    lines.push(presentation.waitingFor === "question"
-      ? "Waiting for your answer"
-      : "Waiting for plan approval");
-  } else {
-    lines.push(presentation.phase);
-    if (presentation.status === "in_progress" && presentation.summary) lines.push(presentation.summary);
-  }
-
-  const collapsed = collapseConsecutiveSteps(presentation.steps);
-  lines.push(...collapsed.steps.slice(-MAX_VISIBLE_STEPS).reverse().map(renderStep));
-  const hidden = presentation.droppedSteps
-    + collapsed.collapsedCount
-    + Math.max(0, collapsed.steps.length - MAX_VISIBLE_STEPS);
-  if (hidden > 0) lines.push(`${hidden} earlier step${hidden === 1 ? "" : "s"}`);
-  return lines;
-}
-
-function collapseConsecutiveSteps(steps: ExternalRunStep[]): {
-  steps: ExternalRunStep[];
-  collapsedCount: number;
-} {
-  const collapsed: ExternalRunStep[] = [];
-  let collapsedCount = 0;
-  for (const step of steps) {
-    const previous = collapsed.at(-1);
-    if (previous && previous.label === step.label && previous.detail === step.detail) {
-      collapsed[collapsed.length - 1] = step;
-      collapsedCount += 1;
-    } else {
-      collapsed.push(step);
-    }
-  }
-  return { steps: collapsed, collapsedCount };
-}
-
-function renderStep(step: ExternalRunStep): string {
-  const marker = step.status === "done" ? "✓" : step.status === "error" ? "✗" : "●";
-  const detail = step.detail ? ` — ${step.detail}` : "";
-  return `${marker} ${step.label}${detail}`;
-}
-
-function briefStatus(presentation: ExternalRunPresentation): string {
-  if (presentation.queuedPosition !== undefined) return `In queue (position ${presentation.queuedPosition})`;
-  if (presentation.status === "in_progress") return presentation.phase;
-  return presentation.summary ?? presentation.status;
-}
-
-function richText(lines: string[]): Record<string, unknown> {
-  return {
-    type: "rich_text",
-    elements: lines.map((text) => ({
-      type: "rich_text_section",
-      elements: [{ type: "text", text }],
-    })),
-  };
-}
+const MAX_SLACK_MODAL_TEXT_LENGTH = 1_000;
 
 export function renderSlackNotification(
   intent: ExternalNotificationIntent,
@@ -121,6 +28,44 @@ export function renderSlackNotification(
     case "run_failed":
       return [{ text: `Codevil could not complete the Agent Run: ${boundedText(intent.message)} ${openSession}` }];
   }
+}
+
+export function renderSlackFreeformAnswerModal(input: {
+  question: string;
+  context?: string;
+  privateMetadata: string;
+}): Record<string, unknown> {
+  const blocks: Array<Record<string, unknown>> = [
+    {
+      type: "section",
+      text: markdownText(`*Question*\n${truncate(input.question, MAX_SLACK_MODAL_TEXT_LENGTH)}`),
+    },
+  ];
+  if (input.context) {
+    blocks.push({
+      type: "section",
+      text: markdownText(`*Context*\n${truncate(input.context, MAX_SLACK_MODAL_TEXT_LENGTH)}`),
+    });
+  }
+  blocks.push({
+    type: "input",
+    block_id: "codevil_question_freeform_input",
+    label: plainText("Answer"),
+    element: {
+      type: "plain_text_input",
+      action_id: "codevil_question_freeform_value",
+      multiline: true,
+    },
+  });
+  return {
+    type: "modal",
+    callback_id: "codevil_question_freeform",
+    private_metadata: input.privateMetadata,
+    title: plainText("Answer Codevil"),
+    submit: plainText("Send answer"),
+    close: plainText("Cancel"),
+    blocks,
+  };
 }
 
 export function encodeSlackQuestionAction(input: {
@@ -218,13 +163,22 @@ function questionActions(
         type: "button",
         action_id: "codevil_question_submit",
         text: plainText("Submit answer"),
-        style: "primary",
+        ...(!intent.allowFreeform ? { style: "primary" } : {}),
         value: submitValue,
       });
     }
   }
 
   const optionsShownInControls = elements.length > 0;
+  if (intent.allowFreeform && submitValue) {
+    elements.push({
+      type: "button",
+      action_id: "codevil_question_open_freeform",
+      text: plainText("Write answer"),
+      style: "primary",
+      value: submitValue,
+    });
+  }
   elements.push(openSessionButton(sessionUrl));
   return {
     block: {
@@ -271,6 +225,10 @@ function openSessionButton(sessionUrl: string): Record<string, unknown> {
 
 function plainText(text: string): { type: "plain_text"; text: string; emoji: true } {
   return { type: "plain_text", text, emoji: true };
+}
+
+function markdownText(text: string): { type: "mrkdwn"; text: string } {
+  return { type: "mrkdwn", text };
 }
 
 function truncate(value: string, maxLength: number): string {

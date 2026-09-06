@@ -32,7 +32,7 @@ export function loadQuestionRow(sql: SqlStorage, requestId: string): QuestionRow
   )) {
     return parseSqliteRow(
       QuestionRowSchema,
-      row as Record<string, unknown>,
+      row,
       "sqlite_question",
     );
   }
@@ -42,6 +42,7 @@ export function loadQuestionRow(sql: SqlStorage, requestId: string): QuestionRow
 const QuestionAnswerDbRowSchema = z.object({
   request_id: z.string(),
   question: z.string(),
+  context: z.string().nullable(),
   status: z.string(),
   options_json: z.string().nullable(),
   allow_freeform: z.number().int(),
@@ -65,6 +66,7 @@ const StoredAnswerSchema = z.object({
 export interface QuestionAnswerRow {
   requestId: string;
   question: string;
+  context: string | null;
   status: string;
   options: Array<z.infer<typeof StoredQuestionOptionSchema>>;
   allowFreeform: boolean;
@@ -75,13 +77,13 @@ export interface QuestionAnswerRow {
 
 export function loadQuestionAnswerRow(sql: SqlStorage, requestId: string): QuestionAnswerRow | null {
   for (const row of sql.exec(
-    `SELECT request_id, question, status, options_json, allow_freeform, allow_multiple,
+    `SELECT request_id, question, context, status, options_json, allow_freeform, allow_multiple,
        answer_json, answered_by_id, answered_by_name
      FROM questions
      WHERE request_id = ?`,
     requestId,
   )) {
-    const result = QuestionAnswerDbRowSchema.safeParse(row as Record<string, unknown>);
+    const result = QuestionAnswerDbRowSchema.safeParse(row);
     if (!result.success) return null;
     const parsed = result.data;
     const options = parseStoredJson(parsed.options_json, z.array(StoredQuestionOptionSchema), []);
@@ -92,6 +94,7 @@ export function loadQuestionAnswerRow(sql: SqlStorage, requestId: string): Quest
     return {
       requestId: parsed.request_id,
       question: parsed.question,
+      context: parsed.context,
       status: parsed.status,
       options,
       allowFreeform: parsed.allow_freeform === 1,
@@ -121,7 +124,7 @@ export function listOpenQuestionIds(sql: SqlStorage, runId: string): string[] {
   )) {
     const parsed = parseSqliteRow(
       RequestIdRowSchema,
-      row as Record<string, unknown>,
+      row,
       "sqlite_question_id",
     );
     if (parsed) ids.push(parsed.request_id);

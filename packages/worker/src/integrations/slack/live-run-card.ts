@@ -4,26 +4,25 @@ import { redactEvent } from "../../redaction.js";
 import { workerLogForSession } from "../../logging.js";
 import { externalConversationDestinationBySessionSelect } from "../store.js";
 import type { ExternalConversationDestination } from "../types.js";
-import { externalSessionUrl } from "../session-url.js";
 import {
   createSlackWebApi,
-  deleteSlackMessage,
-  postSlackMessage,
-  updateSlackMessage,
+  setSlackThreadStatus,
   type SlackApi,
   type SlackApiResult,
 } from "./client.js";
-import { renderSlackRunCard } from "./render.js";
 import {
   projectExternalRunEvents,
   type ExternalRunPresentation,
+  type ExternalRunStep,
 } from "../external-run-presentation.js";
 import { notifyExternalConversation } from "../notify-external-conversation.js";
 
 const CARD_COALESCE_MS = 2_000;
+const STATUS_HEARTBEAT_MS = 90_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 const BASE_RETRY_DELAY_MS = 500;
 const MAX_RETRY_DELAY_MS = 5_000;
+const MAX_STATUS_LENGTH = 150;
 
 interface LiveRunPresentationRow {
   run_id: string;
@@ -62,8 +61,7 @@ export class LiveRunCardCoordinator {
     const runId = runIdForEvent(event) ?? activeRunId;
     if (!runId || !isLiveRunEvent(event)) return;
 
-    const destination = await this.destination();
-    if (!destination) return;
+    if (!this.env.SLACK_BOT_TOKEN) return;
 
     const now = Date.now();
     const existing = this.row(runId);
@@ -82,7 +80,7 @@ export class LiveRunCardCoordinator {
       last_render_fingerprint: existing?.last_render_fingerprint ?? null,
       pending_final_response_cursor: pendingFinalResponseCursor,
       next_retry_at: nextRetryAt(existing?.next_retry_at ?? null, event, now),
-      card_delete_pending_at: existing?.card_delete_pending_at ?? null,
+      card_delete_pending_at: null,
       created_at: existing?.created_at ?? new Date(now).toISOString(),
       updated_at: new Date(now).toISOString(),
     });
@@ -90,7 +88,7 @@ export class LiveRunCardCoordinator {
     try {
       await this.flush(runId);
     } catch (error) {
-      this.log("ERROR", "live_run_card.flush.failed", runId, { error: redactEvent(error, this.envSecrets()) });
+      this.log("ERROR", "slack_thread_status.flush.failed", runId, { error: redactEvent(error, this.envSecrets()) });
     }
   }
 
@@ -113,118 +111,140 @@ export class LiveRunCardCoordinator {
       for (;;) {
         const row = this.row(runId);
         if (!row) return;
-        // The run resolved and the response was delivered: only the card
-        // teardown remains. Never re-render in this state.
-        if (row.card_delete_pending_at !== null) {
-          await this.closeCard(row);
-          return;
-        }
         const now = Date.now();
         if (!force && row.next_retry_at !== null && row.next_retry_at > now) return;
         force = false;
 
         const presentation = this.project(runId);
-        const fingerprint = JSON.stringify(presentation);
-        if (row.last_delivered_cursor >= row.last_projected_cursor && row.last_render_fingerprint === fingerprint) {
+        if (row.presentation_status === "uncertain") {
+          this.upsert({ ...row, next_retry_at: null });
           if (isTerminal(presentation)) await this.deliverFinalResponse(row, presentation);
           return;
         }
 
-        const destination = await this.destination();
-        if (!destination || !this.env.SLACK_BOT_TOKEN) return;
-        const message = renderSlackRunCard(presentation, externalSessionUrl({ CODEVIL_WEB_ORIGIN: this.env.CODEVIL_WEB_ORIGIN }, this.workerOrigin(), this.sessionId()), row.last_projected_cursor);
-        const delivered = await this.deliverCard(row, destination, message, presentation);
+        const status = slackThreadStatus(presentation);
+        const fingerprint = status ?? "";
+        if (isTerminal(presentation)) {
+          this.upsert({
+            ...row,
+            last_delivered_cursor: Math.max(row.last_delivered_cursor, row.last_projected_cursor),
+            last_render_fingerprint: fingerprint,
+            next_retry_at: null,
+            updated_at: new Date().toISOString(),
+          });
+          await this.deliverFinalResponse(this.row(runId) ?? row, presentation);
+          return;
+        }
+
+        if (status === null) {
+          this.upsert({
+            ...row,
+            last_delivered_cursor: Math.max(row.last_delivered_cursor, row.last_projected_cursor),
+            last_render_fingerprint: fingerprint,
+            next_retry_at: null,
+            updated_at: new Date().toISOString(),
+          });
+          return;
+        }
+
+        if (row.last_delivered_cursor >= row.last_projected_cursor && row.last_render_fingerprint === fingerprint) {
+          const heartbeat = await this.deliverStatus(row, status);
+          if (!heartbeat.ok) {
+            if (heartbeat.uncertain) {
+              this.upsert({ ...row, presentation_status: "uncertain", next_retry_at: null });
+              return;
+            }
+            const retryAt = Date.now() + heartbeat.retryAfterMs;
+            this.upsert({ ...row, next_retry_at: retryAt, updated_at: new Date().toISOString() });
+            this.scheduleAlarm(retryAt);
+            return;
+          }
+          const retryAt = Date.now() + STATUS_HEARTBEAT_MS;
+          this.upsert({ ...row, next_retry_at: retryAt, updated_at: new Date().toISOString() });
+          this.scheduleAlarm(retryAt);
+          return;
+        }
+
+        const delivered = await this.deliverStatus(row, status);
         if (!delivered.ok) {
-          this.upsert({ ...row, next_retry_at: Date.now() + delivered.retryAfterMs, updated_at: new Date().toISOString() });
-          if (isTerminal(presentation)) await this.deliverFinalResponse(row, presentation);
-          this.scheduleAlarm(Date.now() + delivered.retryAfterMs);
+          if (delivered.uncertain) {
+            this.upsert({ ...row, presentation_status: "uncertain", next_retry_at: null });
+            return;
+          }
+          const retryAt = Date.now() + delivered.retryAfterMs;
+          this.upsert({ ...row, next_retry_at: retryAt, updated_at: new Date().toISOString() });
+          this.scheduleAlarm(retryAt);
           return;
         }
 
         const current = this.row(runId) ?? row;
+        const retryAt = Date.now() + STATUS_HEARTBEAT_MS;
         this.upsert({
           ...current,
-          external_message_id: delivered.messageId ?? current.external_message_id,
           presentation_status: presentation.status,
           last_delivered_cursor: Math.max(current.last_delivered_cursor, row.last_projected_cursor),
           last_render_fingerprint: fingerprint,
-          next_retry_at: null,
+          next_retry_at: retryAt,
           updated_at: new Date().toISOString(),
         });
-        if (isTerminal(presentation)) await this.deliverFinalResponse(this.row(runId) ?? current, presentation);
+        this.scheduleAlarm(retryAt);
 
         const latest = this.row(runId);
         if (!latest || latest.last_projected_cursor <= latest.last_delivered_cursor) return;
-        const latestPresentation = this.project(runId);
-        if (!isTerminal(latestPresentation) && latest.next_retry_at !== null && latest.next_retry_at > Date.now()) return;
+        if (latest.next_retry_at !== null && latest.next_retry_at > Date.now()) return;
       }
     } finally {
       this.flushing.delete(runId);
     }
   }
 
-  private async deliverCard(
+  private async deliverStatus(
     row: LiveRunPresentationRow,
-    destination: ExternalConversationDestination,
-    message: ReturnType<typeof renderSlackRunCard>,
-    presentation: ExternalRunPresentation,
-  ): Promise<{ ok: true; messageId?: string } | { ok: false; retryAfterMs: number }> {
-    const retry = async (operation: () => Promise<SlackApiResult<unknown>>): Promise<SlackApiResult<unknown>> => {
-      for (let attempt = 1; attempt <= MAX_DELIVERY_ATTEMPTS; attempt += 1) {
-        const result = await operation();
-        if (result.ok) return result;
-        if (!isRetryable(result) || attempt === MAX_DELIVERY_ATTEMPTS) {
-          this.log("ERROR", "live_run_card.delivery.exhausted", row.run_id, { cursor: row.last_projected_cursor, attempt, error: result.error });
-          return result;
-        }
-        const delay = retryDelay(result, attempt);
-        this.log("WARN", "live_run_card.delivery.retrying", row.run_id, { cursor: row.last_projected_cursor, attempt, delay_ms: delay, error: result.error });
-        await this.sleep(delay);
-      }
-      return { ok: false, error: "retry_exhausted" };
-    };
+    status: string,
+  ): Promise<{ ok: true } | { ok: false; retryAfterMs: number; uncertain?: boolean }> {
+    const destination = await this.destination();
+    if (!destination || !this.env.SLACK_BOT_TOKEN) {
+      return { ok: false, retryAfterMs: BASE_RETRY_DELAY_MS, uncertain: true };
+    }
 
-    if (!row.external_message_id) {
-      const posted = await retry(() => postSlackMessage(this.api, this.env.SLACK_BOT_TOKEN!, {
-        channel: destination.external_channel_id,
-        threadTs: destination.external_conversation_id,
-        ...message,
-      }));
-      if (posted.ok) {
-        const data = posted.data as { ts?: unknown };
-        if (typeof data.ts === "string") return { ok: true, messageId: data.ts };
-        return { ok: false, retryAfterMs: BASE_RETRY_DELAY_MS };
-      }
-      if (isUnsupportedCardFailure(posted)) {
-        const fallback = await retry(() => postSlackMessage(this.api, this.env.SLACK_BOT_TOKEN!, {
-          channel: destination.external_channel_id,
+    for (let attempt = 1; attempt <= MAX_DELIVERY_ATTEMPTS; attempt += 1) {
+      let result: SlackApiResult<unknown>;
+      try {
+        result = await setSlackThreadStatus(this.api, this.env.SLACK_BOT_TOKEN, {
+          channelId: destination.external_channel_id,
           threadTs: destination.external_conversation_id,
-          text: fallbackText(presentation, this.workerOrigin(), this.sessionId(), this.env.CODEVIL_WEB_ORIGIN),
-        }));
-        if (fallback.ok) {
-          const data = fallback.data as { ts?: unknown };
-          if (typeof data.ts === "string") return { ok: true, messageId: data.ts };
-        }
+          status,
+        });
+      } catch {
+        result = { ok: false, error: "network_error" };
       }
-      return { ok: false, retryAfterMs: retryDelay(posted, MAX_DELIVERY_ATTEMPTS) };
+      if (result.ok) return { ok: true };
+      if (isPermanentStatusFailure(result)) {
+        this.log("ERROR", "slack_thread_status.delivery.permanent", row.run_id, {
+          cursor: row.last_projected_cursor,
+          attempt,
+          error: result.error,
+        });
+        return { ok: false, retryAfterMs: BASE_RETRY_DELAY_MS, uncertain: true };
+      }
+      if (result.retryAfterMs !== undefined || !isRetryable(result) || attempt === MAX_DELIVERY_ATTEMPTS) {
+        this.log("ERROR", "slack_thread_status.delivery.exhausted", row.run_id, {
+          cursor: row.last_projected_cursor,
+          attempt,
+          error: result.error,
+        });
+        return { ok: false, retryAfterMs: retryDelay(result, MAX_DELIVERY_ATTEMPTS) };
+      }
+      const delay = retryDelay(result, attempt);
+      this.log("WARN", "slack_thread_status.delivery.retrying", row.run_id, {
+        cursor: row.last_projected_cursor,
+        attempt,
+        delay_ms: delay,
+        error: result.error,
+      });
+      await this.sleep(delay);
     }
-
-    const updated = await retry(() => updateSlackMessage(this.api, this.env.SLACK_BOT_TOKEN!, {
-      channel: destination.external_channel_id,
-      ts: row.external_message_id!,
-      ...message,
-    }));
-    if (updated.ok) return { ok: true, messageId: row.external_message_id };
-    if (isUnsupportedCardFailure(updated)) {
-      const fallback = await retry(() => updateSlackMessage(this.api, this.env.SLACK_BOT_TOKEN!, {
-        channel: destination.external_channel_id,
-        ts: row.external_message_id!,
-        text: fallbackText(presentation, this.workerOrigin(), this.sessionId(), this.env.CODEVIL_WEB_ORIGIN),
-      }));
-      if (fallback.ok) return { ok: true, messageId: row.external_message_id };
-      return { ok: false, retryAfterMs: retryDelay(fallback, MAX_DELIVERY_ATTEMPTS) };
-    }
-    return { ok: false, retryAfterMs: retryDelay(updated, MAX_DELIVERY_ATTEMPTS) };
+    return { ok: false, retryAfterMs: BASE_RETRY_DELAY_MS };
   }
 
   private async deliverFinalResponse(row: LiveRunPresentationRow, presentation: ExternalRunPresentation): Promise<void> {
@@ -247,22 +267,7 @@ export class LiveRunCardCoordinator {
       event,
     }, { slackApi: this.api, sleep: this.sleep, random: () => 0 });
     if (delivered) {
-      const latest = this.row(row.run_id);
-      if (latest) {
-        const now = Date.now();
-        // Mark teardown atomically with delivery: the row always carries a
-        // due next_retry_at, so a restart mid-delete re-arms via
-        // nextRetryAt()/drainDue() instead of stranding the card.
-        this.upsert({
-          ...latest,
-          pending_final_response_cursor: null,
-          card_delete_pending_at: now,
-          next_retry_at: now,
-          updated_at: new Date().toISOString(),
-        });
-        this.scheduleAlarm(now + 1);
-        await this.closeCard(this.row(row.run_id) ?? latest);
-      }
+      this.deleteRow(row.run_id);
     } else {
       const latest = this.row(row.run_id);
       if (latest) {
@@ -270,61 +275,6 @@ export class LiveRunCardCoordinator {
         this.upsert({ ...latest, next_retry_at: nextRetryAt, updated_at: new Date().toISOString() });
         this.scheduleAlarm(nextRetryAt);
       }
-    }
-  }
-
-  /**
-   * Tear down the card for a resolved run: delete the Slack message, then drop
-   * the presentation row. Survives restarts via the DO alarm when the delete
-   * itself fails.
-   */
-  private async closeCard(row: LiveRunPresentationRow): Promise<void> {
-    if (!row.external_message_id) {
-      this.deleteRow(row.run_id);
-      return;
-    }
-    const destination = await this.destination();
-    if (!destination || !this.env.SLACK_BOT_TOKEN) {
-      // Nothing else can ever delete a card we cannot address; drop the row so
-      // the session does not keep retrying forever.
-      this.log("WARN", "live_run_card.close.no_destination", row.run_id, {});
-      this.deleteRow(row.run_id);
-      return;
-    }
-    const deleting = this.row(row.run_id) ?? row;
-    if (deleting.card_delete_pending_at === null) {
-      this.upsert({ ...deleting, card_delete_pending_at: Date.now(), updated_at: new Date().toISOString() });
-    }
-    for (let attempt = 1; attempt <= MAX_DELIVERY_ATTEMPTS; attempt += 1) {
-      const result = await deleteSlackMessage(this.api, this.env.SLACK_BOT_TOKEN, {
-        channel: destination.external_channel_id,
-        ts: row.external_message_id!,
-      });
-      if (result.ok || isMessageAlreadyGone(result)) {
-        this.deleteRow(row.run_id);
-        return;
-      }
-      if (!isRetryable(result)) {
-        this.log("ERROR", "live_run_card.close.exhausted", row.run_id, { attempt, error: result.error, status: result.status });
-        // Permanent failure (auth etc.): leave the card in place and stop
-        // retrying — the response messages are already delivered.
-        this.deleteRow(row.run_id);
-        return;
-      }
-      if (attempt === MAX_DELIVERY_ATTEMPTS) {
-        // Transient failures that outlast the in-flight retries: keep the row
-        // and let the DO alarm retry the delete later.
-        const latest = this.row(row.run_id);
-        if (latest) {
-          const nextRetryAt = Date.now() + BASE_RETRY_DELAY_MS;
-          this.upsert({ ...latest, next_retry_at: nextRetryAt, updated_at: new Date().toISOString() });
-          this.scheduleAlarm(nextRetryAt);
-        }
-        return;
-      }
-      const delay = retryDelay(result, attempt);
-      this.log("WARN", "live_run_card.close.retrying", row.run_id, { attempt, delay_ms: delay, error: result.error });
-      await this.sleep(delay);
     }
   }
 
@@ -342,13 +292,6 @@ export class LiveRunCardCoordinator {
         return [];
       }
     });
-    // Runs interleave in the log: a request is logged immediately, the run may
-    // start much later after queued requests from other turns. Global progress
-    // events (status/phase/agent_event) carry no run id, so attribute them to
-    // the run whose execution window covers the cursor: from that run's
-    // agent_run_started until its own terminal event. A queued run has no
-    // execution window yet — its own request/queue events only, never another
-    // turn's progress.
     const runEntries = parsed.filter((entry) => runIdForEvent(entry.event) === runId);
     if (runEntries.length === 0) return [];
     const startIndex = runEntries.findIndex((entry) => entry.event.type === "agent_run_started");
@@ -419,6 +362,27 @@ export class LiveRunCardCoordinator {
   }
 }
 
+export function slackThreadStatus(presentation: ExternalRunPresentation): string | null {
+  if (presentation.waitingFor !== undefined) return null;
+  if (presentation.status !== "in_progress") return null;
+  if (presentation.queuedPosition !== undefined) {
+    return `is in queue (position ${presentation.queuedPosition})...`;
+  }
+  const active = [...presentation.steps].reverse().find((step) => step.status === "active");
+  if (active) return statusFromStep(active);
+  return boundedStatus(`is ${presentation.phase.toLowerCase()}...`);
+}
+
+function statusFromStep(step: ExternalRunStep): string {
+  const detail = step.detail ? ` — ${step.detail}` : "";
+  return boundedStatus(`is ${step.label.toLowerCase()}${detail}...`);
+}
+
+function boundedStatus(value: string): string {
+  if (value.length <= MAX_STATUS_LENGTH) return value;
+  return `${value.slice(0, MAX_STATUS_LENGTH - 3).trimEnd()}...`;
+}
+
 function runIdForEvent(event: DOToCLIEvent): string | undefined {
   return "run_id" in event && typeof event.run_id === "string" ? event.run_id : undefined;
 }
@@ -441,24 +405,9 @@ function shouldFlushImmediately(event: DOToCLIEvent): boolean {
 
 function nextRetryAt(existing: number | null, event: DOToCLIEvent, now: number): number {
   if (shouldFlushImmediately(event)) return now;
-  if (existing !== null && existing > now) return existing;
-  return now + CARD_COALESCE_MS;
-}
-
-function fallbackText(
-  presentation: ExternalRunPresentation,
-  workerOrigin: string,
-  sessionId: string,
-  webOrigin?: string,
-): string {
-  const state = presentation.status === "complete"
-    ? "Completed successfully."
-    : presentation.status === "error"
-      ? presentation.summary ?? "The Agent Run failed."
-      : presentation.queuedPosition !== undefined
-        ? `Codevil is in queue (position ${presentation.queuedPosition}).`
-        : `Codevil is working on: ${presentation.title}.`;
-  return `${state} Open session: ${externalSessionUrl({ CODEVIL_WEB_ORIGIN: webOrigin }, workerOrigin, sessionId)}`;
+  const coalesceAt = now + CARD_COALESCE_MS;
+  if (existing !== null && existing > now && existing <= coalesceAt) return existing;
+  return coalesceAt;
 }
 
 function isTerminal(presentation: ExternalRunPresentation): boolean {
@@ -469,17 +418,28 @@ function isRetryable(result: Extract<SlackApiResult<unknown>, { ok: false }>): b
   return result.status === 429 || (result.status !== undefined && result.status >= 500) || ["rate_limited", "ratelimited", "request_timeout", "network_error"].includes(result.error) || /^http_5\d\d$/.test(result.error);
 }
 
-/** Deletes are idempotent: a message that is already gone counts as success. */
-function isMessageAlreadyGone(result: Extract<SlackApiResult<unknown>, { ok: false }>): boolean {
-  return result.status === 404 || ["message_not_found", "channel_not_found", "is_archived"].includes(result.error);
-}
-
-function isUnsupportedCardFailure(result: Extract<SlackApiResult<unknown>, { ok: false }>): boolean {
-  return ["invalid_blocks", "invalid_blocks_format", "invalid_arguments", "method_not_supported"].includes(result.error);
+function isPermanentStatusFailure(result: Extract<SlackApiResult<unknown>, { ok: false }>): boolean {
+  return [
+    "channel_not_found",
+    "invalid_thread_ts",
+    "method_not_supported_for_channel_type",
+    "method_deprecated",
+    "missing_scope",
+    "invalid_auth",
+    "no_permission",
+    "not_in_channel",
+    "not_allowed_token_type",
+    "feature_disabled",
+    "invalid_arguments",
+    "not_authed",
+    "account_inactive",
+    "token_revoked",
+    "token_expired",
+  ].includes(result.error);
 }
 
 function retryDelay(result: SlackApiResult<unknown>, attempt: number): number {
-  if (!result.ok && result.retryAfterMs !== undefined) return Math.min(result.retryAfterMs, MAX_RETRY_DELAY_MS);
+  if (!result.ok && result.retryAfterMs !== undefined) return result.retryAfterMs;
   return Math.min(BASE_RETRY_DELAY_MS * 2 ** Math.max(0, attempt - 1), MAX_RETRY_DELAY_MS);
 }
 

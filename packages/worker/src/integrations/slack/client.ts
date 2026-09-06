@@ -49,7 +49,7 @@ export function createSlackWebApi(fetcher: typeof fetch = fetch): SlackApi {
   ): Promise<SlackApiResult<T>> {
     let response: Response;
     try {
-      response = await fetcher(`https://slack.com/api/${method}`, slackRequestInit(botToken, method, body));
+      response = await fetcher(`https://slack.com/api/${method}`, { ...slackRequestInit(botToken, method, body), signal: AbortSignal.timeout(10_000) });
     } catch {
       return { ok: false, error: "network_error" };
     }
@@ -148,6 +148,18 @@ export function postSlackMessage(
     ...(input.blocks ? { blocks: input.blocks } : {}),
     ...(input.threadTs ? { thread_ts: input.threadTs } : {}),
   }) as Promise<SlackApiResult<SlackPostedMessage>>;
+}
+
+export function setSlackThreadStatus(
+  api: SlackApi,
+  botToken: string,
+  input: { channelId: string; threadTs: string; status: string },
+): Promise<SlackApiResult<unknown>> {
+  return api(botToken, "assistant.threads.setStatus", {
+    channel_id: input.channelId,
+    thread_ts: input.threadTs,
+    status: input.status,
+  });
 }
 
 export function updateSlackMessage(

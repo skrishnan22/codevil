@@ -16,6 +16,17 @@ export type IntegrationQuestionAnswerResult =
       error: string;
     };
 
+export interface IntegrationQuestionAnswerInput {
+  requestId: string;
+  actor: ParticipantIdentity;
+  optionIndexes?: number[];
+  freeform?: string;
+}
+
+export type IntegrationFreeformQuestionResult =
+  | { ok: true; question: string; context?: string }
+  | { ok: false; status: "not_found" | "not_open" | "freeform_not_allowed"; error: string };
+
 interface AnswerQuestionInput {
   requestId: string;
   actor: ParticipantIdentity;
@@ -26,19 +37,39 @@ interface AnswerQuestionInput {
 
 export function answerQuestionFromIntegration(
   host: OrchestratorHost,
-  args: {
-    requestId: string;
-    optionIndexes: number[];
-    actor: ParticipantIdentity;
-  },
+  args: IntegrationQuestionAnswerInput,
 ): IntegrationQuestionAnswerResult {
   // Slack conversation membership is the authorization boundary for this path.
   // Web-only answerable_by policies are intentionally enforced by handleQuestionAnswer instead.
   return applyQuestionAnswer(host, {
     requestId: args.requestId,
     optionIndexes: args.optionIndexes,
+    freeform: args.freeform,
     actor: args.actor,
   });
+}
+
+export function freeformQuestionForIntegration(
+  host: OrchestratorHost,
+  requestId: string,
+): IntegrationFreeformQuestionResult {
+  const question = loadQuestionAnswerRow(host.sql, requestId);
+  if (!question) return { ok: false, status: "not_found", error: "Question not found" };
+  if (question.status !== "open") {
+    return { ok: false, status: "not_open", error: "Question is no longer open" };
+  }
+  if (!question.allowFreeform) {
+    return {
+      ok: false,
+      status: "freeform_not_allowed",
+      error: "Question does not accept free-form input",
+    };
+  }
+  return {
+    ok: true,
+    question: question.question,
+    ...(question.context !== null ? { context: question.context } : {}),
+  };
 }
 
 export function applyQuestionAnswer(

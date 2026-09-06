@@ -6,29 +6,9 @@ import * as slackRender from "../dist/integrations/slack/render.js";
 const {
   renderSlackFreeformAnswerModal,
   renderSlackNotification,
-  renderSlackRunCard,
 } = slackRender;
 
 const sessionUrl = "https://codevil.example/sessions/ses_123";
-
-test("renderSlackRunCard keeps validated sources clickable in rich text", () => {
-  const rendered = renderSlackRunCard({
-    runId: "run_1",
-    title: "Ship",
-    status: "complete",
-    phase: "Complete",
-    summary: "Completed successfully.",
-    steps: [],
-    droppedSteps: 0,
-    prUrl: "https://github.com/acme/app/pull/12",
-  }, sessionUrl, 1);
-
-  assert.deepEqual(rendered.blocks[0].child_blocks.at(-1).elements[0].elements, [
-    { type: "link", url: sessionUrl, text: "Open Codevil" },
-    { type: "text", text: " · " },
-    { type: "link", url: "https://github.com/acme/app/pull/12", text: "View pull request" },
-  ]);
-});
 
 test("renderSlackNotification renders conversational messages", () => {
   assert.deepEqual(

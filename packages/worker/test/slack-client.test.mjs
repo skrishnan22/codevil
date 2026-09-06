@@ -185,6 +185,30 @@ test("fetchSlackThreadReplies requests the Slack thread", async () => {
   assert.deepEqual(result, { ok: true, data: { messages: [] } });
 });
 
+test("Slack client helpers set assistant thread status", async () => {
+  const calls = [];
+  const api = async (token, method, body) => {
+    calls.push({ token, method, body });
+    return { ok: true, data: { ok: true } };
+  };
+
+  await slackClient.setSlackThreadStatus(api, "xoxb-test", {
+    channelId: "C123",
+    threadTs: "171951.0001",
+    status: "is reading files...",
+  });
+
+  assert.deepEqual(calls, [{
+    token: "xoxb-test",
+    method: "assistant.threads.setStatus",
+    body: {
+      channel_id: "C123",
+      thread_ts: "171951.0001",
+      status: "is reading files...",
+    },
+  }]);
+});
+
 test("Slack client helpers update, notify, and resolve users", async () => {
   assert.equal(typeof slackClient.updateSlackMessage, "function");
   assert.equal(typeof slackClient.postSlackEphemeral, "function");

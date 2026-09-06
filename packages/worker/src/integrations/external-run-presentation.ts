@@ -31,9 +31,8 @@ export interface ExternalRunEvent {
 const MAX_TITLE_LENGTH = 120;
 const MAX_SUMMARY_LENGTH = 180;
 const MAX_DETAIL_LENGTH = 60;
-/** Internal cap so the render fingerprint stays bounded; rendering windows further. */
+/** Internal cap so the status fingerprint stays bounded. */
 const MAX_KEPT_STEPS = 10;
-export const MAX_VISIBLE_STEPS = 3;
 
 export function createExternalRunPresentation(runId: string, requestText: string): ExternalRunPresentation {
   return {

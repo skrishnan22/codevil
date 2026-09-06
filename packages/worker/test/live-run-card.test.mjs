@@ -2,12 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  createExternalRunPresentation,
   projectExternalRunEvents,
-  MAX_VISIBLE_STEPS,
 } from "../dist/integrations/external-run-presentation.js";
-import { renderSlackRunCard } from "../dist/integrations/slack/render.js";
-import { LiveRunCardCoordinator } from "../dist/integrations/slack/live-run-card.js";
+import { LiveRunCardCoordinator, slackThreadStatus } from "../dist/integrations/slack/live-run-card.js";
 
 const started = {
   type: "agent_run_started",
@@ -15,22 +12,6 @@ const started = {
   actor: { id: "U1", name: "Ada" },
   text: "Fix authentication and add tests",
 };
-
-function detailsLines(presentation, sessionUrl = "https://app.codevil.example/sessions/ses_1") {
-  const rendered = renderSlackRunCard(presentation, sessionUrl, 1);
-  return activityRows(rendered.blocks[0]).map(textFromRichTextSection);
-}
-
-function activityRows(card) {
-  const activity = card.child_blocks?.find((block) =>
-    block.type === "rich_text" && block.elements?.some((section) =>
-      /^[…✓×●]/u.test(textFromRichTextSection(section))));
-  return activity?.elements ?? [];
-}
-
-function textFromRichTextSection(section) {
-  return (section.elements ?? []).map((element) => element.text ?? "").join("");
-}
 
 test("keeps the clean request title when the run starts with an enriched prompt", () => {
   const presentation = projectExternalRunEvents([
@@ -64,59 +45,6 @@ test("preserves a bounded clean started-only title", () => {
   assert.equal(presentation.title, "Fix authentication and add tests");
 });
 
-test("renders a default-expanded card with chronological, explicit activity rows", () => {
-  const presentation = projectExternalRunEvents([
-    { cursor: 1, event: { type: "agent_request", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: "Improve the landing page", created_at: "2026-08-28T00:00:00.000Z" } },
-    ...[2, 3, 4].map((cursor) => ({
-      cursor,
-      event: { type: "agent_event", event: { type: "tool_execution_end", tool: "read", toolCallId: `read_${cursor}`, success: true } },
-    })),
-    { cursor: 5, event: { type: "agent_event", event: { type: "tool_execution_start", tool: "edit", toolCallId: "edit_1", args: { file_path: "src/Hero.astro" } } } },
-  ]);
-
-  const card = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 7).blocks[0];
-  assert.equal(card.type, "container");
-  assert.equal(card.is_collapsible, true);
-  assert.equal(card.default_collapsed, false);
-  assert.equal(card.title.text, presentation.title);
-  assert.doesNotMatch(card.title.text, /✅|🔄|❌|💬/u);
-
-  const activity = activityRows(card);
-  assert.deepEqual(activity.map(textFromRichTextSection), [
-    "… 2 earlier steps",
-    "✓ Completed — Reading files",
-    "● Running — Editing code — Hero.astro",
-  ]);
-  assert.deepEqual(activity.at(-1).elements[1], {
-    type: "text",
-    text: "Running",
-    style: { bold: true },
-  });
-  assert.equal(detailsLines(presentation).filter((line) => /^(?:●|✓|✗) /.test(line)).length, 2);
-});
-
-test("renders failed rows and counts dropped, collapsed, and windowed steps", () => {
-  const presentation = {
-    ...createExternalRunPresentation("run_1", "Ship the fix"),
-    steps: [
-      { id: "old-1", label: "Reading files", status: "done", rank: 1 },
-      { id: "old-2", label: "Reading files", status: "done", rank: 2 },
-      { id: "middle", label: "Searching code", status: "error", rank: 3 },
-      { id: "visible-1", label: "Editing code", status: "done", rank: 4 },
-      { id: "visible-2", label: "Running checks", status: "error", rank: 5 },
-      { id: "visible-3", label: "Publishing changes", status: "active", rank: 6 },
-    ],
-    droppedSteps: 2,
-  };
-
-  assert.deepEqual(detailsLines(presentation), [
-    "… 5 earlier steps",
-    "✓ Completed — Editing code",
-    "× Failed — Running checks",
-    "● Running — Publishing changes",
-  ]);
-});
-
 test("projects supported lifecycle events into a redacted, granular step list", () => {
   const presentation = projectExternalRunEvents([
     { cursor: 1, event: started },
@@ -139,6 +67,7 @@ test("projects supported lifecycle events into a redacted, granular step list", 
   assert.equal(presentation.phase, "Preparing");
   assert.deepEqual(presentation.steps, [{ id: "call_1", label: "Running commands", detail: undefined, status: "done", rank: 3 }]);
   assert.doesNotMatch(JSON.stringify(presentation), /secret|private|ghp_/i);
+  assert.equal(slackThreadStatus(presentation), "is preparing...");
 });
 
 test("maps each tool family to a granular label and folds bash args into no detail", () => {
@@ -166,6 +95,7 @@ test("maps each tool family to a granular label and folds bash args into no deta
     { cursor: 2, event: { type: "agent_event", event: { type: "tool_execution_start", tool: "edit", toolCallId: "c_e", args: { file_path: "src/auth/login.ts" } } } },
   ]);
   assert.equal(withPath.steps[0].detail, "login.ts");
+  assert.equal(slackThreadStatus(withPath), "is editing code — login.ts...");
 
   const bash = projectExternalRunEvents([
     { cursor: 1, event: started },
@@ -175,7 +105,7 @@ test("maps each tool family to a granular label and folds bash args into no deta
   assert.doesNotMatch(JSON.stringify(bash), /sk-secret/i);
 });
 
-test("windows steps to the current step plus a few older ones on the card", () => {
+test("windows steps to a bounded recent list", () => {
   const events = [{ cursor: 1, event: started }];
   for (let index = 0; index < 12; index += 1) {
     events.push({ cursor: index + 2, event: {
@@ -184,18 +114,9 @@ test("windows steps to the current step plus a few older ones on the card", () =
     } });
   }
   const presentation = projectExternalRunEvents(events);
-  // Internal cap keeps the fingerprint bounded; the card renders only the tail.
   assert.equal(presentation.steps.length, 10);
   assert.equal(presentation.droppedSteps, 2);
-  assert.equal(MAX_VISIBLE_STEPS, 3);
-
-  const lines = detailsLines(presentation);
-  const stepLines = lines.filter((line) => line.startsWith("✓"));
-  assert.equal(stepLines.length, 1);
-  assert.deepEqual(stepLines.map((line) => line.split(" — ")[1]), [
-    "Reading files",
-  ]);
-  assert.ok(lines.some((line) => /… 11 earlier steps/.test(line)));
+  assert.equal(slackThreadStatus(presentation), "is investigating...");
 });
 
 test("shows a queued run with its queue position until it starts", () => {
@@ -205,32 +126,30 @@ test("shows a queued run with its queue position until it starts", () => {
   ]);
   assert.equal(queued.queuedPosition, 2);
   assert.equal(queued.phase, "Queued");
-  assert.equal(renderSlackRunCard(queued, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "In queue (position 2)");
+  assert.equal(slackThreadStatus(queued), "is in queue (position 2)...");
 
   const running = projectExternalRunEvents([
     queued && { cursor: 3, event: started },
   ].filter(Boolean));
   assert.equal(running.queuedPosition, undefined);
   assert.equal(running.status, "in_progress");
+  assert.equal(slackThreadStatus(running), "is starting...");
 });
 
-test("renders an explicit question waiting subtitle", () => {
+test("does not set status while waiting for a question or approval", () => {
   const waiting = projectExternalRunEvents([
     { cursor: 1, event: started },
     { cursor: 2, event: { type: "question_raised", request_id: "q1", run_id: "run_1", question: "Which region?", allow_freeform: false, allow_multiple: false, answerable_by: "anyone", status: "open", raised_at: "2026-08-13T00:00:00.000Z" } },
   ]);
   assert.equal(waiting.waitingFor, "question");
-  assert.equal(waiting.phase, "Waiting for input");
-  assert.equal(renderSlackRunCard(waiting, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "Waiting for your answer");
-});
+  assert.equal(slackThreadStatus(waiting), null);
 
-test("renders an explicit plan approval waiting subtitle", () => {
   const approval = projectExternalRunEvents([
     { cursor: 1, event: started },
     { cursor: 2, event: { type: "approval_requested", run_id: "run_1", plan: "Update the header." } },
   ]);
   assert.equal(approval.waitingFor, "approval");
-  assert.equal(renderSlackRunCard(approval, "https://app.codevil.example/sessions/ses_1", 1).blocks[0].subtitle.text, "Waiting for plan approval");
+  assert.equal(slackThreadStatus(approval), null);
 });
 
 test("projects terminal and deterministic completion states", () => {
@@ -241,65 +160,25 @@ test("projects terminal and deterministic completion states", () => {
   assert.equal(complete.status, "complete");
   assert.equal(complete.prUrl, "https://github.com/acme/repo/pull/12");
   assert.equal(complete.summary, "Completed successfully.");
+  assert.equal(slackThreadStatus(complete), null);
 });
 
-test("renders a container with accessible fallback and fresh block ids", () => {
-  const presentation = createExternalRunPresentation("run_1", "Investigate auth");
-  const first = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 7);
-  const second = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 8);
-  const block = first.blocks[0];
-
-  assert.equal(block.type, "container");
-  assert.equal(block.title.text, "Investigate auth");
-  assert.equal(block.subtitle.text, "Starting");
-  assert.equal(block.is_collapsible, true);
-  assert.equal(block.default_collapsed, false);
-  assert.notEqual(first.blocks[0].block_id, second.blocks[0].block_id);
-  assert.deepEqual(block.child_blocks.at(-1).elements[0].elements, [
-    { type: "link", url: "https://app.codevil.example/sessions/ses_1", text: "Open Codevil" },
-  ]);
-  assert.match(first.text, /Investigate auth/);
-});
-
-test("keeps the terminal summary in the subtitle instead of repeating it in activity", () => {
-  const presentation = {
-    ...createExternalRunPresentation("run_1", "Ship"),
-    status: "complete",
-    phase: "Complete",
-    summary: "Completed successfully.",
-  };
-  const rendered = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 1);
-
-  assert.doesNotMatch(JSON.stringify(rendered.blocks[0].child_blocks), /Completed successfully\./);
-  assert.equal(rendered.blocks[0].subtitle.text, "Completed successfully.");
-});
-
-test("renders only a validated pull-request source", () => {
-  const presentation = { ...createExternalRunPresentation("run_1", "Ship"), status: "complete", summary: "Completed successfully.", steps: [], droppedSteps: 0, prUrl: "https://github.com/acme/repo/pull/12" };
-  const rendered = renderSlackRunCard(presentation, "https://app.codevil.example/sessions/ses_1", 1);
-  assert.deepEqual(rendered.blocks[0].child_blocks.at(-1).elements[0].elements, [
-    { type: "link", url: "https://app.codevil.example/sessions/ses_1", text: "Open Codevil" },
-    { type: "text", text: " · " },
-    { type: "link", url: "https://github.com/acme/repo/pull/12", text: "View pull request" },
-  ]);
-});
-
-test("posts a card immediately for a new request, even before the run starts", async () => {
+test("sets thread status immediately for a new request, even before the run starts", async () => {
   const sql = createPresentationSql();
   const calls = [];
   const coordinator = createCoordinator(sql, calls, async () => {});
   appendEvent(sql, 1, { type: "agent_request", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: "Fix auth", created_at: "2026-08-25T00:00:00.000Z" });
   await coordinator.onEvent(1, { type: "agent_request", run_id: "run_1", actor: { id: "U1", name: "Ada" }, text: "Fix auth", created_at: "2026-08-25T00:00:00.000Z" });
-  assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage"]);
-  assert.match(calls[0].body.text, /Fix auth/);
+  assert.deepEqual(calls.map((call) => call.method), ["assistant.threads.setStatus"]);
+  assert.equal(calls[0].body.status, "is starting...");
 
   appendEvent(sql, 2, { type: "agent_request_queued", run_id: "run_1", position: 2 });
   await coordinator.onEvent(2, { type: "agent_request_queued", run_id: "run_1", position: 2 });
-  assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage", "chat.update"]);
-  assert.match(JSON.stringify(calls[1].body), /In queue \(position 2\)/);
+  assert.deepEqual(calls.map((call) => call.method), ["assistant.threads.setStatus", "assistant.threads.setStatus"]);
+  assert.equal(calls[1].body.status, "is in queue (position 2)...");
 });
 
-test("coalesces live updates, then delivers the final response and deletes the card", async () => {
+test("coalesces live updates, then delivers the final response without posting a card", async () => {
   const sql = createPresentationSql();
   const calls = [];
   const coordinator = createCoordinator(sql, calls, async () => {});
@@ -309,24 +188,23 @@ test("coalesces live updates, then delivers the final response and deletes the c
   await coordinator.onEvent(2, { type: "phase", phase: "executing", model: "model" }, "run_1");
   appendEvent(sql, 3, { type: "status", message: "Running tests" });
   await coordinator.onEvent(3, { type: "status", message: "Running tests" }, "run_1");
-  assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage"]);
+  assert.deepEqual(calls.map((call) => call.method), ["assistant.threads.setStatus"]);
+  assert.equal(calls[0].body.status, "is starting...");
 
   await coordinator.drainDue(Date.now() + 3_000);
+  assert.equal(calls.at(-1).body.status, "is verifying...");
   appendEvent(sql, 4, { type: "agent_response", run_id: "run_1", text: "Done" });
   await coordinator.onEvent(4, { type: "agent_response", run_id: "run_1", text: "Done" });
   appendEvent(sql, 5, { type: "agent_run_completed", run_id: "run_1" });
   await coordinator.onEvent(5, { type: "agent_run_completed", run_id: "run_1" });
 
   const methods = calls.map((call) => call.method);
-  assert.deepEqual(methods, ["chat.postMessage", "chat.update", "chat.update", "chat.postMessage", "chat.delete"]);
-  const terminalUpdate = calls[2];
-  assert.equal(terminalUpdate.body.blocks[0].subtitle.text, "Completed successfully.");
-  assert.equal(calls[3].body.text, "Done");
-  assert.equal(calls[4].method, "chat.delete");
+  assert.deepEqual(methods, ["assistant.threads.setStatus", "assistant.threads.setStatus", "chat.postMessage"]);
+  assert.equal(calls[2].body.text, "Done");
   assert.equal(sql.getRow("run_1"), undefined);
 });
 
-test("deletes the card on failure after sending the failure notice", async () => {
+test("delivers the failure notice without deleting a card", async () => {
   const sql = createPresentationSql();
   const calls = [];
   const coordinator = createCoordinator(sql, calls, async () => {});
@@ -335,13 +213,12 @@ test("deletes the card on failure after sending the failure notice", async () =>
   appendEvent(sql, 2, { type: "agent_run_failed", run_id: "run_1", message: "Tests failed" });
   await coordinator.onEvent(2, { type: "agent_run_failed", run_id: "run_1", message: "Tests failed" });
 
-  assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage", "chat.update", "chat.postMessage", "chat.delete"]);
-  assert.equal(calls[1].body.blocks[0].subtitle.text, "Verification failed.");
-  assert.match(calls[2].body.text, /could not complete the Agent Run/);
+  assert.deepEqual(calls.map((call) => call.method), ["assistant.threads.setStatus", "chat.postMessage"]);
+  assert.match(calls[1].body.text, /could not complete the Agent Run/);
   assert.equal(sql.getRow("run_1"), undefined);
 });
 
-test("first live card event tolerates a missing presentation row", async () => {
+test("first status event tolerates a missing presentation row", async () => {
   const sql = createPresentationSql({ strictPresentationRowRead: true });
   const calls = [];
   const coordinator = createCoordinator(sql, calls, async () => {});
@@ -349,7 +226,7 @@ test("first live card event tolerates a missing presentation row", async () => {
   appendEvent(sql, 1, started);
   await assert.doesNotReject(() => coordinator.onEvent(1, started));
 
-  assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage"]);
+  assert.deepEqual(calls.map((call) => call.method), ["assistant.threads.setStatus"]);
 });
 
 test("keeps one coalescing deadline while activity continues", async () => {
@@ -373,140 +250,81 @@ test("keeps one coalescing deadline while activity continues", async () => {
     appendEvent(sql, 4, { type: "status", message: "Running tests" });
     await coordinator.onEvent(4, { type: "status", message: "Running tests" }, "run_1");
 
-    assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage"]);
+    assert.deepEqual(calls.map((call) => call.method), ["assistant.threads.setStatus"]);
     await coordinator.drainDue(102_001);
-    assert.deepEqual(calls.map((call) => call.method), ["chat.postMessage", "chat.update"]);
+    assert.deepEqual(calls.map((call) => call.method), ["assistant.threads.setStatus", "assistant.threads.setStatus"]);
+    assert.equal(calls[1].body.status, "is reading files...");
   } finally {
     Date.now = originalNow;
   }
 });
 
-test("keeps a failed update pending and recovers it without creating a second card", async () => {
+test("keeps a failed status update pending and recovers it", async () => {
   const sql = createPresentationSql();
   const calls = [];
-  let updateAttempts = 0;
+  let statusAttempts = 0;
   const coordinator = createCoordinator(sql, calls, async () => {}, async (_token, method, body) => {
     calls.push({ method, body });
-    if (method === "chat.update" && updateAttempts++ < 3) return { ok: false, error: "http_503", status: 503 };
-    if (method === "chat.postMessage") return { ok: true, data: { ts: "card_1" } };
+    if (method === "assistant.threads.setStatus" && statusAttempts++ < 3) return { ok: false, error: "http_503", status: 503 };
     return { ok: true, data: { ok: true } };
   });
   appendEvent(sql, 1, started);
   await coordinator.onEvent(1, started);
-  appendEvent(sql, 2, { type: "phase", phase: "executing", model: "model" });
-  await coordinator.onEvent(2, { type: "phase", phase: "executing", model: "model" }, "run_1");
-  await coordinator.drainDue(Date.now() + 3_000);
-  assert.equal(calls.filter((call) => call.method === "chat.postMessage").length, 1);
-  assert.equal(calls.filter((call) => call.method === "chat.update").length, 3);
+  assert.equal(calls.filter((call) => call.method === "assistant.threads.setStatus").length, 3);
 
   await coordinator.drainDue(Date.now() + 10_000);
-  assert.equal(calls.filter((call) => call.method === "chat.postMessage").length, 1);
-  assert.equal(calls.filter((call) => call.method === "chat.update").length, 4);
+  assert.equal(calls.filter((call) => call.method === "assistant.threads.setStatus").length, 4);
 });
 
-test("persists an unsupported-card fallback timestamp and updates that message", async () => {
+test("stops retrying after a permanent Slack status error", async () => {
   const sql = createPresentationSql();
   const calls = [];
   const coordinator = createCoordinator(sql, calls, async () => {}, async (_token, method, body) => {
     calls.push({ method, body });
-    if (method === "chat.postMessage" && body.blocks) return { ok: false, error: "invalid_blocks" };
-    if (method === "chat.postMessage") return { ok: true, data: { ts: "fallback_1" } };
-    if (body.blocks) return { ok: false, error: "invalid_blocks" };
-    return { ok: true, data: { ok: true } };
+    return { ok: false, error: "method_not_supported_for_channel_type" };
   });
-
   appendEvent(sql, 1, started);
   await coordinator.onEvent(1, started);
-  appendEvent(sql, 2, { type: "status", message: "Running tests" });
-  await coordinator.onEvent(2, { type: "status", message: "Running tests" }, "run_1");
-  await coordinator.drainDue(Date.now() + 3_000);
-
-  assert.equal(sql.getRow("run_1").external_message_id, "fallback_1");
-  assert.equal(calls.filter((call) => call.method === "chat.postMessage").length, 2);
-  assert.equal(calls.filter((call) => call.method === "chat.update").length, 2);
-  assert.ok(calls.slice(-1)[0].body.ts === "fallback_1");
-});
-
-test("retries a failed card deletion via the alarm, then removes the row", async () => {
-  const sql = createPresentationSql();
-  const calls = [];
-  const alarms = [];
-  let deleteAttempts = 0;
-  const coordinator = createCoordinator(sql, calls, async () => {}, async (_token, method, body) => {
-    calls.push({ method, body });
-    if (method === "chat.delete" && deleteAttempts++ < 3) return { ok: false, error: "http_503", status: 503 };
-    if (method === "chat.postMessage") return { ok: true, data: { ts: "card_1" } };
-    return { ok: true, data: { ok: true } };
-  }, alarms);
-
-  appendEvent(sql, 1, started);
-  await coordinator.onEvent(1, started);
-  appendEvent(sql, 2, { type: "agent_response", run_id: "run_1", text: "Done" });
-  await coordinator.onEvent(2, { type: "agent_response", run_id: "run_1", text: "Done" });
-  appendEvent(sql, 3, { type: "agent_run_completed", run_id: "run_1" });
-  await coordinator.onEvent(3, { type: "agent_run_completed", run_id: "run_1" });
-
-  // Response delivered, delete exhausted retries: row survives with a retry.
-  assert.equal(sql.getRow("run_1").card_delete_pending_at !== null, true);
-  assert.ok(sql.getRow("run_1").next_retry_at > Date.now());
-  assert.ok(alarms.length > 0);
-
   await coordinator.drainDue(Date.now() + 10_000);
-  assert.equal(calls.filter((call) => call.method === "chat.delete").length, 4);
-  assert.equal(sql.getRow("run_1"), undefined);
+  assert.equal(calls.filter((call) => call.method === "assistant.threads.setStatus").length, 1);
+  assert.equal(sql.getRow("run_1").presentation_status, "uncertain");
 });
 
-test("treats a 404 card delete as already-done and cleans up", async () => {
-  const sql = createPresentationSql();
-  const calls = [];
-  const coordinator = createCoordinator(sql, calls, async () => {}, async (_token, method, body) => {
-    calls.push({ method, body });
-    if (method === "chat.delete") return { ok: false, error: "message_not_found", status: 404 };
-    if (method === "chat.postMessage") return { ok: true, data: { ts: "card_1" } };
-    return { ok: true, data: { ok: true } };
-  });
-
-  appendEvent(sql, 1, started);
-  await coordinator.onEvent(1, started);
-  appendEvent(sql, 2, { type: "agent_run_completed", run_id: "run_1" });
-  await coordinator.onEvent(2, { type: "agent_run_completed", run_id: "run_1" });
-
-  assert.equal(calls.filter((call) => call.method === "chat.delete").length, 1);
-  assert.equal(sql.getRow("run_1"), undefined);
-});
-
-test("replays a pending card teardown after coordinator restart", async () => {
+test("heartbeats the same status before Slack's two-minute timeout", async () => {
   const originalNow = Date.now;
-  Date.now = () => 200_000;
+  let now = 100_000;
+  Date.now = () => now;
   try {
     const sql = createPresentationSql();
     const calls = [];
-    const alarms = [];
-    let deleteAttempts = 0;
-    const api = async (_token, method, body) => {
-      calls.push({ method, body });
-      if (method === "chat.delete" && deleteAttempts++ < 3) return { ok: false, error: "http_503", status: 503 };
-      if (method === "chat.postMessage") return { ok: true, data: { ts: "message_1" } };
-      return { ok: true, data: { ok: true } };
-    };
-    const firstCoordinator = createCoordinator(sql, calls, async () => {}, api, alarms);
+    const coordinator = createCoordinator(sql, calls, async () => {});
     appendEvent(sql, 1, started);
-    await firstCoordinator.onEvent(1, started);
-    appendEvent(sql, 2, { type: "agent_run_completed", run_id: "run_1" });
-    await firstCoordinator.onEvent(2, { type: "agent_run_completed", run_id: "run_1" });
-    assert.ok(sql.getRow("run_1").next_retry_at !== null);
-    assert.ok(alarms.length > 0);
+    await coordinator.onEvent(1, started);
+    assert.equal(calls.length, 1);
 
-    const restartedCoordinator = createCoordinator(sql, calls, async () => {}, api, alarms);
-    await restartedCoordinator.drainDue(210_000);
-    assert.equal(calls.filter((call) => call.method === "chat.delete").length, 4);
-    assert.equal(sql.getRow("run_1"), undefined);
+    now += 90_000;
+    await coordinator.drainDue(now);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].method, "assistant.threads.setStatus");
+    assert.equal(calls[1].body.status, "is starting...");
   } finally {
     Date.now = originalNow;
   }
 });
 
-test("queued turns surface live progress after they start, each card resolves independently", async () => {
+test("does not set status when waiting for a question", async () => {
+  const sql = createPresentationSql();
+  const calls = [];
+  const coordinator = createCoordinator(sql, calls, async () => {});
+  appendEvent(sql, 1, started);
+  await coordinator.onEvent(1, started);
+  appendEvent(sql, 2, { type: "question_raised", request_id: "q1", run_id: "run_1", question: "Which region?", allow_freeform: false, allow_multiple: false, answerable_by: "anyone", status: "open", raised_at: "2026-08-13T00:00:00.000Z" });
+  await coordinator.onEvent(2, { type: "question_raised", request_id: "q1", run_id: "run_1", question: "Which region?", allow_freeform: false, allow_multiple: false, answerable_by: "anyone", status: "open", raised_at: "2026-08-13T00:00:00.000Z" });
+  assert.deepEqual(calls.map((call) => call.method), ["assistant.threads.setStatus"]);
+  assert.equal(sql.getRow("run_1").last_render_fingerprint, "");
+});
+
+test("queued turns surface live progress after they start, each status resolves independently", async () => {
   const sql = createPresentationSql();
   const calls = [];
   const coordinator = createCoordinator(sql, calls, async () => {});
@@ -530,8 +348,7 @@ test("queued turns surface live progress after they start, each card resolves in
   await append(req(3, "Third task"), "run_1");
   await append(queued(3), "run_1");
 
-  // Cards posted for all three turns before any run starts.
-  assert.equal(calls.filter((call) => call.method === "chat.postMessage").length, 3);
+  assert.equal(calls.filter((call) => call.method === "assistant.threads.setStatus").length, 6);
 
   await append({ type: "agent_run_completed", run_id: "run_1" }, "run_1");
   await append(startedR(2, "Second task"), "run_2");
@@ -539,28 +356,22 @@ test("queued turns surface live progress after they start, each card resolves in
   await append({ type: "agent_event", event: { type: "tool_execution_start", tool: "edit", toolCallId: "c2", args: { file_path: "src/a.ts" } } }, "run_2");
   await coordinator.drainDue(Date.now() + 3_000);
 
-  // Run 2's card now shows live progress (not stale queue state) and the
-  // title of its own request.
-  const cardUpdates = calls.filter((call) => call.method === "chat.update");
-  const run2Updates = cardUpdates.filter((call) => JSON.stringify(call.body).includes("Second task"));
-  const run2LiveUpdate = run2Updates.at(-1);
-  assert.ok(run2LiveUpdate, "run 2 card should have a live update");
-  assert.match(JSON.stringify(run2LiveUpdate.body), /Editing code/);
-  assert.match(JSON.stringify(run2LiveUpdate.body), /login\.ts|a\.ts/);
-  assert.doesNotMatch(JSON.stringify(run2LiveUpdate.body), /In queue/);
-  assert.doesNotMatch(JSON.stringify(run2LiveUpdate.body), /First task/);
+  const statusUpdates = calls.filter((call) => call.method === "assistant.threads.setStatus");
+  const run2Live = statusUpdates.filter((call) => call.body.status.includes("editing code")).at(-1);
+  assert.ok(run2Live, "run 2 should have a live status");
+  assert.match(run2Live.body.status, /a\.ts/);
+  assert.doesNotMatch(run2Live.body.status, /queue/);
 
   await append({ type: "agent_response", run_id: "run_2", text: "Second done" }, "run_2");
   await append({ type: "agent_run_completed", run_id: "run_2" }, "run_2");
 
-  assert.equal(calls.filter((call) => call.method === "chat.delete").length, 2);
+  assert.equal(calls.filter((call) => call.method === "chat.delete").length, 0);
   assert.equal(sql.getRow("run_1"), undefined);
   assert.equal(sql.getRow("run_2"), undefined);
   assert.notEqual(sql.getRow("run_3"), undefined);
-  assert.equal(sql.getRow("run_3").card_delete_pending_at, null);
 });
 
-test("never folds another run's live progress into a queued card", async () => {
+test("never folds another run's live progress into a queued status", async () => {
   const sql = createPresentationSql();
   const calls = [];
   const coordinator = createCoordinator(sql, calls, async () => {});
@@ -578,61 +389,36 @@ test("never folds another run's live progress into a queued card", async () => {
 
   await append(req(1, "First task"), "run_1");
   await append(startedR(1, "First task"), "run_1");
-  // run_2 queued while run_1 executes...
   await append(req(2, "Second task"), "run_1");
   await append(queued(2, 1), "run_1");
-  // ...and run_1 keeps producing global progress after run_2 was queued.
   await append({ type: "status", message: "Running tests" }, "run_1");
   await append({ type: "agent_event", event: { type: "tool_execution_start", tool: "read", toolCallId: "c1", args: { file_path: "src/lib.ts" } } }, "run_1");
   await coordinator.drainDue(Date.now() + 3_000);
 
-  const run2Updates = calls.filter((call) => call.method === "chat.update" && JSON.stringify(call.body).includes("Second task"));
-  const run2Card = run2Updates.at(-1);
-  assert.ok(run2Card, "run 2 should have a queued card update");
-  assert.match(JSON.stringify(run2Card.body), /In queue \(position 1\)/);
-  assert.doesNotMatch(JSON.stringify(run2Card.body), /Verifying|Investigating|Reading files|lib\.ts/);
+  const queuedStatuses = calls.filter((call) => call.method === "assistant.threads.setStatus" && call.body.status.includes("queue"));
+  assert.ok(queuedStatuses.at(-1));
+  assert.equal(queuedStatuses.at(-1).body.status, "is in queue (position 1)...");
+  const run2Fingerprints = sql.getRow("run_2").last_render_fingerprint;
+  assert.equal(run2Fingerprints, "is in queue (position 1)...");
 });
 
-test("teardown stays scheduled across a restart mid-delete", async () => {
+test("retries a lost initial status after a network error", async () => {
   const sql = createPresentationSql();
   const calls = [];
-  const alarms = [];
-  let deleteAttempts = 0;
   const api = async (_token, method, body) => {
     calls.push({ method, body });
-    if (method === "chat.delete" && deleteAttempts++ < 3) return { ok: false, error: "http_503", status: 503 };
-    if (method === "chat.postMessage") return { ok: true, data: { ts: "card_1" } };
-    return { ok: true, data: { ok: true } };
+    return { ok: false, error: "network_error" };
   };
-  const firstCoordinator = createCoordinator(sql, calls, async () => {}, api, alarms);
   appendEvent(sql, 1, started);
-  await firstCoordinator.onEvent(1, started);
-  appendEvent(sql, 2, { type: "agent_response", run_id: "run_1", text: "Done" });
-  await firstCoordinator.onEvent(2, { type: "agent_response", run_id: "run_1", text: "Done" });
-  appendEvent(sql, 3, { type: "agent_run_completed", run_id: "run_1" });
-  await firstCoordinator.onEvent(3, { type: "agent_run_completed", run_id: "run_1" });
-
-  // Response delivered; delete failing but the row stays scheduled (due
-  // immediately at teardown, re-armed on exhaustion), so even a hard restart
-  // cannot strand the card.
-  const row = sql.getRow("run_1");
-  assert.equal(row.pending_final_response_cursor, null);
-  assert.notEqual(row.card_delete_pending_at, null);
-  assert.ok(row.next_retry_at !== null);
-  assert.ok(alarms.length > 0);
-
-  const restartedCoordinator = createCoordinator(sql, calls, async () => {}, api, alarms);
-  const retryAt = restartedCoordinator.nextRetryAt();
-  assert.ok(retryAt !== null);
-  await restartedCoordinator.drainDue(Date.now() + 10_000);
-  assert.equal(sql.getRow("run_1"), undefined);
+  const coordinator = createCoordinator(sql, calls, async () => {}, api);
+  await coordinator.onEvent(1, started);
+  await coordinator.drainDue(Date.now() + 100_000);
+  assert.ok(calls.filter((call) => call.method === "assistant.threads.setStatus").length > 1);
 });
 
 function createCoordinator(sql, calls, sleep, api = async (_token, method, body) => {
   calls.push({ method, body });
-  return method === "chat.postMessage"
-    ? { ok: true, data: { ts: "card_1" } }
-    : { ok: true, data: { ok: true } };
+  return { ok: true, data: method === "chat.postMessage" ? { ts: "msg_1" } : { ok: true } };
 }, alarms = []) {
   const env = {
     DB: fakeD1(),

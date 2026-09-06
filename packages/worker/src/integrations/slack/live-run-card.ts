@@ -1,4 +1,3 @@
-import type { DeliveryState } from "../notification-delivery.js";
 import type { DOToCLIEvent } from "@codevil/shared";
 import type { Env } from "../../orchestrator/types.js";
 import { redactEvent } from "../../redaction.js";
@@ -53,7 +52,6 @@ export class LiveRunCardCoordinator {
     private readonly scheduleAlarm: (when: number) => void,
     api?: SlackApi,
     sleep: (delayMs: number) => Promise<void> = sleepFor,
-    private readonly deliverNotification?: (cursor: number, event: DOToCLIEvent) => DeliveryState,
   ) {
     this.api = api ?? createSlackWebApi();
     this.sleep = sleep;
@@ -261,13 +259,7 @@ export class LiveRunCardCoordinator {
       : terminal.event.type === "agent_run_failed"
         ? terminal.event
         : { type: "agent_response", run_id: row.run_id, text: `Completed.${presentation.prUrl ? ` Draft PR: ${presentation.prUrl}` : ""}` } as DOToCLIEvent;
-    const durable = this.deliverNotification?.(response?.cursor ?? terminal.cursor, event);
-    if (durable && durable.status !== "delivered") {
-      this.upsert({ ...row, next_retry_at: durable.nextRetryAt, updated_at: new Date().toISOString() });
-      if (durable.nextRetryAt !== null) this.scheduleAlarm(Math.max(durable.nextRetryAt, Date.now() + 1));
-      return;
-    }
-    const delivered = durable?.status === "delivered" || await notifyExternalConversation({
+    const delivered = await notifyExternalConversation({
       env: this.env,
       sessionId: this.sessionId(),
       workerOrigin: this.workerOrigin(),

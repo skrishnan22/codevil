@@ -30,7 +30,9 @@ export type { Env } from "./worker-env.js";
 // Subclass the Cloudflare Sandbox so Codevil can keep active agent sessions
 // alive and persist stop diagnostics across abnormal socket closures.
 export class Sandbox<RuntimeEnv extends Env = Env> extends BaseSandbox<RuntimeEnv> {
-  override sleepAfter = "10m";
+  // Keep the sandbox container warm for 20 minutes after the last activity
+  // before it is put to sleep and must cold-start again.
+  override sleepAfter = "20m";
   private readonly redactionSecrets: readonly string[];
 
   constructor(ctx: DurableObjectState<{}>, env: RuntimeEnv) {

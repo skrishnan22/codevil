@@ -26,6 +26,9 @@ head_sampling_rate = 1
 enabled = true
 head_sampling_rate = 1
 
+[triggers]
+crons = ["0 4 * * *"]
+
 [[containers]]
 class_name = "Sandbox"
 image = "../../Dockerfile.sandbox"

@@ -251,6 +251,7 @@ export type {
   SandboxToDOMessage,
 } from "./messages-sandbox.js";
 export {
+  ThinkingLevelSchema,
   InitMessageSchema,
   AgentTurnMessageSchema,
   PlanMessageSchema,

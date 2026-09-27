@@ -37,6 +37,7 @@ import type {
   ConsolidationResult,
   PlanResult,
   TurnResult,
+  ThinkingLevel,
 } from "./runtime.js";
 
 const DEFAULT_CODEVIL_PI_AGENT_DIR = "/opt/codevil/pi-agent";
@@ -137,6 +138,7 @@ export class PiAgentDriver implements AgentDriver {
       cwd: options.cwd,
       agentDir,
       model: proxiedModel,
+      ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       authStorage,
       modelRegistry,
       customTools,
@@ -282,8 +284,14 @@ export class PiAgentDriver implements AgentDriver {
     }
   }
 
-  async switchToExecution(modelId: string, provider = "anthropic"): Promise<void> {
+  async switchToExecution(
+    modelId: string,
+    provider = "anthropic",
+    thinkingLevel?: ThinkingLevel,
+  ): Promise<void> {
     const session = this.requireSession();
+    this.assertSessionIdle("change model or reasoning effort");
+    const nextThinkingLevel = thinkingLevel ?? session.thinkingLevel;
     const modelRegistry = this.modelRegistry;
     if (!modelRegistry) throw new Error("Model registry has not been initialized");
     const authStorage = this.authStorage;
@@ -307,6 +315,15 @@ export class PiAgentDriver implements AgentDriver {
 
     session.setActiveToolsByName(["read", "bash", "edit", "write"]);
     await session.setModel(proxiedModel);
+    // Apply after setModel so Pi can clamp the requested level to the new model.
+    // This preserves the previous effort when only the model changes.
+    session.setThinkingLevel(nextThinkingLevel);
+  }
+
+  setThinkingLevel(thinkingLevel: ThinkingLevel): void {
+    const session = this.requireSession();
+    this.assertSessionIdle("change reasoning effort");
+    session.setThinkingLevel(thinkingLevel);
   }
 
   refreshProxyCapabilities(tokens: Partial<Record<ProviderApi, string>>): void {
@@ -331,6 +348,12 @@ export class PiAgentDriver implements AgentDriver {
   private requireSession(): AgentSession {
     if (!this.session) throw new Error("Pi session has not been started");
     return this.session;
+  }
+
+  private assertSessionIdle(operation: string): void {
+    if (this.session?.isStreaming) {
+      throw new Error(`Cannot ${operation} while an agent turn is streaming; retry between turns.`);
+    }
   }
 }
 

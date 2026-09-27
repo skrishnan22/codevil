@@ -35,12 +35,16 @@ const TraceContextFields = {
   parent_span_id: z.string().optional(),
 };
 
+/** Provider-neutral reasoning effort understood by the sandbox agent. */
+export const ThinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]);
+
 export const PlanMessageSchema = z.object({
   type: z.literal("plan"),
   run_id: z.string(),
   prompt: z.string(),
   model: z.string(),
   provider: z.string().optional(),
+  thinking_level: ThinkingLevelSchema.optional(),
   ...TraceContextFields,
 });
 
@@ -50,6 +54,7 @@ export const AgentTurnMessageSchema = z.object({
   prompt: z.string(),
   model: z.string(),
   provider: z.string().optional(),
+  thinking_level: ThinkingLevelSchema.optional(),
   ...TraceContextFields,
 });
 
@@ -58,12 +63,14 @@ export const ExecuteMessageSchema = z.object({
   plan: z.string(),
   model: z.string(),
   provider: z.string().optional(),
+  thinking_level: ThinkingLevelSchema.optional(),
   ...TraceContextFields,
 });
 
 export const RefinePlanSandboxMessageSchema = z.object({
   type: z.literal("refine_plan"),
   feedback: z.string(),
+  thinking_level: ThinkingLevelSchema.optional(),
   ...TraceContextFields,
 });
 

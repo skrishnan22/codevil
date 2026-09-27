@@ -57,6 +57,7 @@ export type {
   ConsolidationResult,
   AgentDriver,
   AgentDriverFactory,
+  ThinkingLevel,
   GitDriver,
   ProxyCapabilities,
   PushBranchOptions,
@@ -69,6 +70,7 @@ import type {
   AgentDriverFactory,
   AskQuestionOutcome,
   AskQuestionParams,
+  ThinkingLevel,
   CreatePullRequestToolOptions,
   GitDriver,
   ProxyCapabilities,
@@ -161,19 +163,19 @@ export class SandboxRuntime {
           await this.handleInit(message.repo, message.restored_from_cache ?? false);
           return;
         case "agent_turn":
-          await this.handleAgentTurn(message.run_id, message.prompt, message.model, message.provider, parent);
+          await this.handleAgentTurn(message.run_id, message.prompt, message.model, message.provider, message.thinking_level, parent);
           return;
         case "plan":
-          await this.handlePlan(message.run_id, message.prompt, message.model, message.provider, parent);
+          await this.handlePlan(message.run_id, message.prompt, message.model, message.provider, message.thinking_level, parent);
           return;
         case "refine_plan":
-          await this.handleRefine(message.feedback, parent);
+          await this.handleRefine(message.feedback, message.thinking_level, parent);
           return;
         case "consolidate_annotations":
           await this.handleConsolidateAnnotations(message, parent);
           return;
         case "execute":
-          await this.handleExecute(message.plan, message.model, message.provider, parent);
+          await this.handleExecute(message.plan, message.model, message.provider, message.thinking_level, parent);
           return;
         case "create_pr":
           await this.handleCreatePullRequest(message, parent);
@@ -292,6 +294,7 @@ export class SandboxRuntime {
     prompt: string,
     model: string,
     provider: string | undefined,
+    thinkingLevel: ThinkingLevel | undefined,
     parent: SpanContext | undefined,
   ): Promise<void> {
     const repoDir = this.requireRepo().dir;
@@ -303,6 +306,7 @@ export class SandboxRuntime {
       mode: "coding",
       model,
       provider: provider ?? this.provider,
+      ...(thinkingLevel ? { thinkingLevel } : {}),
       providerConfig: this.providerConfig,
       llmKey: this.llmKey,
       proxyBase: this.proxyBase,
@@ -339,6 +343,7 @@ export class SandboxRuntime {
     prompt: string,
     model: string,
     provider: string | undefined,
+    thinkingLevel: ThinkingLevel | undefined,
     parent: SpanContext | undefined,
   ): Promise<void> {
     const repoDir = this.requireRepo().dir;
@@ -349,6 +354,7 @@ export class SandboxRuntime {
         mode: "coding",
         model,
         provider: provider ?? this.provider,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
         providerConfig: this.providerConfig,
         llmKey: this.llmKey,
         proxyBase: this.proxyBase,
@@ -364,6 +370,7 @@ export class SandboxRuntime {
       this.agent = agent;
     }
 
+    if (thinkingLevel !== undefined) this.agent.setThinkingLevel?.(thinkingLevel);
     this.activeRunId = runId;
     try {
       try {
@@ -421,8 +428,13 @@ export class SandboxRuntime {
     });
   }
 
-  private async handleRefine(feedback: string, parent: SpanContext | undefined): Promise<void> {
+  private async handleRefine(
+    feedback: string,
+    thinkingLevel: ThinkingLevel | undefined,
+    parent: SpanContext | undefined,
+  ): Promise<void> {
     const agent = this.requireAgent();
+    if (thinkingLevel !== undefined) agent.setThinkingLevel?.(thinkingLevel);
     const result = await this.maybeSpan("llm.refine", { parent }, () =>
       agent.refine(refinePrompt(feedback)),
     );
@@ -486,10 +498,11 @@ export class SandboxRuntime {
     plan: string,
     model: string,
     provider: string | undefined,
+    thinkingLevel: ThinkingLevel | undefined,
     parent: SpanContext | undefined,
   ): Promise<void> {
     const agent = this.requireAgent();
-    await agent.switchToExecution(model, provider ?? this.provider);
+    await agent.switchToExecution(model, provider ?? this.provider, thinkingLevel);
     let cost = await this.maybeSpan(
       "llm.execute",
       { parent, attributes: { model, provider: provider ?? this.provider } },

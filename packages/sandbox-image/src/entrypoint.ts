@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import WebSocket from "ws";
 
 import type { DOToSandboxMessage, SandboxToDOMessage } from "@codevil/shared";
@@ -121,6 +123,9 @@ export async function startEntrypoint(
 
   connection = new ReconnectingWebSocketClient({
     createSocket: () => {
+      // A resumed sandbox may have an expired in-memory token; the Orchestrator
+      // writes a fresh one to the token file before the agent reconnects.
+      wsUrl = currentSandboxWebSocketUrl(wsUrl, readTokenFile);
       sandboxLogger().log("INFO", "sandbox.ws.connecting", { target: wsUrlForLog(wsUrl) });
       return new WebSocket(wsUrl);
     },
@@ -159,6 +164,21 @@ export async function startEntrypoint(
     },
   });
   connection.start();
+}
+
+export const SANDBOX_WS_TOKEN_FILE = "/run/codevil/ws-token";
+
+export function currentSandboxWebSocketUrl(wsUrl: string, readToken: () => string | undefined): string {
+  const token = readToken()?.trim();
+  return token ? withSandboxWebSocketToken(wsUrl, token) : wsUrl;
+}
+
+function readTokenFile(): string | undefined {
+  try {
+    return readFileSync(SANDBOX_WS_TOKEN_FILE, "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 function withSandboxWebSocketToken(wsUrl: string, token: string | undefined): string {

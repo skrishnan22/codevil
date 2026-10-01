@@ -7,7 +7,7 @@ import { SandboxToDOMessageSchema, clientValidationErrorMessage, getProviderDefi
 import { redactEvent } from "../redaction.js";
 import {
   buildSandboxWebSocketUrl,
-  provisionSandbox,
+  startAgentOnHandle,
 } from "../sandbox.js";
 import {
   restoreLatestWorkspaceCache,
@@ -30,7 +30,7 @@ import {
   createPreviewToken,
   hashPreviewToken,
 } from "./preview.js";
-import { slugify } from "./session-guards.js";
+import { parseMaxTimeMs, slugify } from "./session-guards.js";
 import type { OrchestratorHost } from "./host.js";
 import {
   completeActiveRun,
@@ -69,24 +69,34 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
         plan_model: host.meta.plan_model,
         has_llm_key: provisioningContext.hasLlmKey,
       },
-      provision: () =>
-        provisionSandbox({
-          binding: host.workerEnv.Sandbox,
-          sessionId: host.meta!.session_id,
+      provision: async () => {
+        const meta = host.meta!;
+        const provider = host.sandboxProvider();
+        const handle = await provider.create({
+          sessionId: meta.session_id,
+          leaseMs: parseMaxTimeMs(meta.max_time) ?? 3_600_000,
+        });
+        meta.sandbox_ref = handle.ref;
+        host.saveMeta();
+        if (handle.secret) {
+          await host.ctx.storage.put("codevil:sandbox_secret", handle.secret);
+        }
+        if (provider.capabilities.workspaceCache && handle.workspaceCache) {
+          const restored = await restoreWorkspaceCacheBeforeStart(host, handle.workspaceCache);
+          if (host.meta) {
+            host.meta.workspace_cache_restored = restored;
+            host.saveMeta();
+          }
+        }
+        await startAgentOnHandle(handle, {
           wsUrl,
           wsToken,
-          provider: host.meta!.provider,
+          provider: meta.provider,
           providerConfig,
-          proxyBase: host.meta!.worker_url,
+          proxyBase: meta.worker_url,
           proxyTokens,
-          beforeStart: async (sandbox) => {
-            const restored = await restoreWorkspaceCacheBeforeStart(host, sandbox as WorkspaceCacheSandbox);
-            if (host.meta) {
-              host.meta.workspace_cache_restored = restored;
-              host.saveMeta();
-            }
-          },
-        }),
+        });
+      },
     });
     host.appendAndBroadcast({ type: "status", message: "Sandbox process started." });
   } catch (error) {
@@ -335,7 +345,7 @@ export function handleSandboxCloneComplete(
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
     // Backups can outlive the socket message invocation. Leave the work in
     // durable job state and let the alarm run it so a DO restart can resume it.
-    enqueueWorkspaceCacheJob(host);
+    if (host.sandboxProvider().capabilities.workspaceCache) enqueueWorkspaceCacheJob(host);
     // Requests queued while cloning (e.g. Slack messages) must start now —
     // without this they would wait for the alarm, which claims the backup
     // first and only drains queued work after the upload finishes.

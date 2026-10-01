@@ -61,6 +61,35 @@ export function createFakeSql(initial = {}) {
   };
 }
 
+/** A Cloudflare-like fake sandbox handle; override any member per test. */
+export function createFakeSandboxHandle(overrides = {}) {
+  return {
+    ref: { provider: "cloudflare", id: "ses_test" },
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    writeFile: async () => {},
+    startProcess: async () => {},
+    readProcessLogs: async () => ({ stdout: "", stderr: "" }),
+    fetchPort: async () => new Response("ok"),
+    renewLease: async () => {},
+    destroy: async () => {},
+    workspaceCache: {
+      restoreBackup: async () => ({}),
+      createBackup: async () => ({ id: "backup_test", dir: "/workspace" }),
+    },
+    ...overrides,
+  };
+}
+
+export function createFakeSandboxProvider(overrides = {}) {
+  return {
+    name: "cloudflare",
+    capabilities: { pauseResume: false, workspaceCache: true },
+    create: async () => createFakeSandboxHandle(),
+    connect: async () => createFakeSandboxHandle(),
+    ...overrides,
+  };
+}
+
 export function createFakeTracer() {
   return {
     trace_id: "trace_test",
@@ -78,6 +107,7 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
   const backgroundWork = [];
   let saveMetaCalls = 0;
   let previewRevoked = false;
+  const storage = new Map();
 
   const host = {
     meta,
@@ -88,6 +118,10 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
       DB: {},
     },
     ctx: {
+      storage: {
+        put: async (key, value) => { storage.set(key, value); },
+        get: async (key) => storage.get(key),
+      },
       waitUntil(promise) {
         backgroundWork.push(Promise.resolve(promise).catch(() => {}));
       },
@@ -165,6 +199,13 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
       return { type: "error", message: fallbackMessage };
     },
     armNextAlarm: async () => {},
+    sandboxProvider() {
+      return options.sandboxProvider ?? createFakeSandboxProvider();
+    },
+    async sandboxHandle() {
+      if (options.sandboxHandle !== undefined) return options.sandboxHandle;
+      return meta.sandbox_ref ? createFakeSandboxHandle({ ref: meta.sandbox_ref }) : null;
+    },
   };
 
   return {
@@ -174,6 +215,7 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     transitions,
     sandboxMessages,
     directoryPatches,
+    storage,
     get saveMetaCalls() {
       return saveMetaCalls;
     },

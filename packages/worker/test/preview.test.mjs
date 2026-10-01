@@ -3,9 +3,11 @@ import test from "node:test";
 
 import {
   buildPreviewUrl,
+  hashPreviewToken,
   injectPreviewBaseHref,
   isRetryablePreviewStatus,
   previewPathPrefix,
+  proxyPreviewRequest,
   rewriteHeadersForSandboxDevServer,
 } from "../dist/orchestrator/preview.js";
 
@@ -105,4 +107,46 @@ test("isRetryablePreviewStatus matches transient upstream failures", () => {
   assert.equal(isRetryablePreviewStatus(504), true);
   assert.equal(isRetryablePreviewStatus(500), false);
   assert.equal(isRetryablePreviewStatus(404), false);
+});
+
+async function activePreviewMeta(token) {
+  return {
+    session_id: "ses_abc",
+    state: "ready",
+    preview_active: true,
+    preview_port: 5173,
+    preview_token_hash: await hashPreviewToken(token),
+  };
+}
+
+test("proxyPreviewRequest forwards through the handle's port and keeps the path", async () => {
+  const fetched = [];
+  const handle = {
+    fetchPort: async (port, request) => {
+      fetched.push([port, new URL(request.url).pathname + new URL(request.url).search, request.headers.get("host")]);
+      return new Response("body", { headers: { "content-type": "text/plain" } });
+    },
+  };
+  const request = new Request("https://worker.example/sessions/ses_abc/preview/tok/app.js?x=1");
+
+  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "tok", handle);
+
+  assert.equal(await response.text(), "body");
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  assert.deepEqual(fetched, [[5173, "/app.js?x=1", "localhost:5173"]]);
+});
+
+test("proxyPreviewRequest answers 404 when the Session has no sandbox handle", async () => {
+  const request = new Request("https://worker.example/sessions/ses_abc/preview/tok/");
+  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "tok", null);
+  assert.equal(response.status, 404);
+  assert.equal(await response.text(), "Preview is not active.");
+});
+
+test("proxyPreviewRequest still rejects unknown tokens before using the handle", async () => {
+  const handle = { fetchPort: async () => assert.fail("must not reach the sandbox") };
+  const request = new Request("https://worker.example/sessions/ses_abc/preview/nope/");
+  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "nope", handle);
+  assert.equal(response.status, 404);
+  assert.equal(await response.text(), "Unknown preview token.");
 });

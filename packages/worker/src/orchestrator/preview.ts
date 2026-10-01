@@ -1,6 +1,6 @@
-import type { Sandbox } from "@cloudflare/sandbox";
 import { isTerminalState } from "@codevil/shared";
 
+import type { SandboxHandle } from "../sandbox-provider/types.js";
 import type { SessionMeta } from "./types.js";
 
 export function createPreviewToken(sessionId: string): string {
@@ -61,7 +61,7 @@ export async function proxyPreviewRequest(
   request: Request,
   meta: SessionMeta,
   token: string,
-  sandboxNamespace: DurableObjectNamespace<Sandbox>,
+  handle: SandboxHandle | null,
 ): Promise<Response> {
   const blocked = validatePreviewAccess(meta);
   if (blocked) return blocked;
@@ -70,6 +70,8 @@ export async function proxyPreviewRequest(
   if (tokenHash !== meta.preview_token_hash) {
     return new Response("Unknown preview token.", { status: 404 });
   }
+
+  if (!handle) return new Response("Preview is not active.", { status: 404 });
 
   const originalUrl = new URL(request.url);
   const prefix = `/sessions/${meta.session_id}/preview/${token}`;
@@ -82,17 +84,14 @@ export async function proxyPreviewRequest(
 
   const proxyRequest = new Request(proxyUrl, request);
 
-  const { getSandbox } = await import("@cloudflare/sandbox");
-  const sandbox = getSandbox(sandboxNamespace, meta.session_id);
   const previewPort = meta.preview_port!;
   const portedHeaders = rewriteHeadersForSandboxDevServer(proxyRequest.headers, {
     port: previewPort,
     publicHost: originalUrl.host,
     publicProto: originalUrl.protocol.replace(/:$/, ""),
   });
-  portedHeaders.set("cf-container-target-port", String(previewPort));
   const portedRequest = new Request(proxyRequest, { headers: portedHeaders });
-  const response = await fetchPreviewWithRetries(sandbox, portedRequest);
+  const response = await fetchPreviewWithRetries((req) => handle.fetchPort(previewPort, req), portedRequest);
 
   if (response.status === 101) return response;
 
@@ -245,7 +244,7 @@ const PREVIEW_PROXY_RETRY_BACKOFF_MS = [0, 200, 500];
 const PREVIEW_PROXY_MAX_ATTEMPTS = 3;
 
 async function fetchPreviewWithRetries(
-  sandbox: Sandbox,
+  fetchOnce: (request: Request) => Promise<Response>,
   request: Request,
 ): Promise<Response> {
   let lastError: unknown;
@@ -256,7 +255,7 @@ async function fetchPreviewWithRetries(
     }
 
     try {
-      const response = await sandbox.fetch(request);
+      const response = await fetchOnce(request);
       if (response.status === 101 || !isRetryablePreviewStatus(response.status)) {
         return response;
       }

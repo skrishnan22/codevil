@@ -13,7 +13,13 @@ import {
 } from "../dist/orchestrator/sandbox-handlers.js";
 import { processWorkspaceCacheJob } from "../dist/orchestrator/workspace-cache-job.js";
 import { handleSandboxProxy } from "../dist/sandbox-proxy.js";
-import { actor, createFakeHost, createFakeTracer } from "./helpers/fake-host.mjs";
+import {
+  actor,
+  createFakeHost,
+  createFakeSandboxHandle,
+  createFakeSandboxProvider,
+  createFakeTracer,
+} from "./helpers/fake-host.mjs";
 
 function createCacheJobSql() {
   let row = null;
@@ -462,4 +468,81 @@ test("provisionSessionSandbox failure transitions to failed and patches director
     { room_state: "failed", sandbox_state: "failed" },
   ]);
   assert.ok(broadcasts.some((e) => e.type === "error"));
+});
+
+function provisioningEnv() {
+  const cacheMiss = { prepare: () => ({ bind: () => ({ first: async () => null, run: async () => ({}) }) }) };
+  return {
+    OPENAI_API_KEY: "sk-test",
+    CODEVIL_API_KEY: "test-key",
+    CODEVIL_PROXY_SIGNING_SECRET: "test-signing-secret",
+    Sandbox: {},
+    DB: cacheMiss,
+  };
+}
+
+test("provisionSessionSandbox creates through the provider, records the ref, restores, then starts the agent", async () => {
+  const calls = [];
+  const handle = createFakeSandboxHandle({
+    ref: { provider: "cloudflare", id: "ses_test" },
+    secret: "handle-secret",
+    startProcess: async (command, options) => calls.push(["startProcess", options.processId, options.cwd]),
+  });
+  const provider = createFakeSandboxProvider({
+    create: async (options) => { calls.push(["create", options]); return handle; },
+  });
+  const { host } = createFakeHost(
+    { state: "initializing", max_time: "30m" },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
+  );
+
+  await provisionSessionSandbox(host);
+
+  assert.equal(host.meta.state, "provisioning_sandbox");
+  assert.deepEqual(host.meta.sandbox_ref, { provider: "cloudflare", id: "ses_test" });
+  assert.equal(host.meta.workspace_cache_restored, false);
+  assert.equal(await host.ctx.storage.get("codevil:sandbox_secret"), "handle-secret");
+  assert.deepEqual(calls, [
+    ["create", { sessionId: "ses_test", leaseMs: 30 * 60_000 }],
+    ["startProcess", "codevil-agent", "/workspace"],
+  ]);
+});
+
+test("provisionSessionSandbox skips the workspace cache when the provider has none", async () => {
+  let restored = false;
+  const handle = createFakeSandboxHandle({
+    workspaceCache: { restoreBackup: async () => { restored = true; }, createBackup: async () => ({}) },
+  });
+  const provider = createFakeSandboxProvider({
+    capabilities: { pauseResume: false, workspaceCache: false },
+    create: async () => handle,
+  });
+  const { host } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
+  );
+
+  await provisionSessionSandbox(host);
+
+  assert.equal(restored, false);
+  assert.equal(host.meta.workspace_cache_restored, undefined);
+  assert.equal(await host.ctx.storage.get("codevil:sandbox_secret"), undefined);
+});
+
+test("handleSandboxCloneComplete does not enqueue cache work for a provider without a workspace cache", () => {
+  const sql = createCacheJobSql();
+  const fixture = createFakeHost(
+    { state: "cloning_repo" },
+    {
+      sql,
+      sandboxProvider: createFakeSandboxProvider({
+        capabilities: { pauseResume: false, workspaceCache: false },
+      }),
+    },
+  );
+
+  handleSandboxCloneComplete(fixture.host);
+
+  assert.equal(sql.row, null);
+  assert.equal(fixture.host.meta.state, "ready");
 });

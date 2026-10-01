@@ -80,6 +80,7 @@ test("createSession inserts a session, initializes the orchestrator, and returns
       exec_model: normalized.exec_model,
       max_time: normalized.max_session_time,
       created_by: { id: "usr_123", name: "Alice" },
+      sandbox_provider: "cloudflare",
     },
   ]);
 });

@@ -8,6 +8,7 @@ import type {
 import type { Span, Tracer } from "@codevil/shared";
 import type { AgentRun } from "../agent-runs.js";
 import type { LastDecision } from "../multiplayer.js";
+import type { SandboxHandle, SandboxProvider } from "../sandbox-provider/types.js";
 import type { Env, SessionMeta } from "./types.js";
 
 export interface OrchestratorHost {
@@ -48,4 +49,7 @@ export interface OrchestratorHost {
     fallbackMessage: string,
   ): { type: "error"; message: string; actor?: string };
   armNextAlarm(now?: number): Promise<void>;
+  sandboxProvider(): SandboxProvider;
+  /** Null when the Session has no sandbox yet (`meta.sandbox_ref` unset). */
+  sandboxHandle(): Promise<SandboxHandle | null>;
 }

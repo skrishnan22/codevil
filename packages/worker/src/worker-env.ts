@@ -73,4 +73,5 @@ export interface Env extends WorkerSecretEnv {
   SLACK_BOT_TOKEN?: string;
   SLACK_SIGNING_SECRET?: string;
   CODEVIL_SLACK_BOT_USER_ID?: string;
+  SANDBOX_PROVIDER?: string;
 }

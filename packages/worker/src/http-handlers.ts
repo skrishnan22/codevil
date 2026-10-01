@@ -49,10 +49,7 @@ import {
 import { configuredWebOrigins, missingAuthConfigKeys } from "./auth-config.js";
 import { createEmailProvider } from "./email.js";
 import { can, type AuthAction, CreateInvitationRequestSchema, SetupClaimRequestSchema } from "@codevil/shared";
-import {
-  getCodevilSandbox,
-  readSandboxDiagnostics,
-} from "./sandbox.js";
+import { configuredSandboxProviderName } from "./sandbox-provider/index.js";
 import { redactEvent } from "./redaction.js";
 import { collectWorkerSecretValues } from "./worker-env.js";
 import type { Env } from "./worker-env.js";
@@ -598,6 +595,7 @@ export async function handleCreateSession(
       exec_model: normalized.exec_model,
       max_time: normalized.max_session_time,
       created_by: { id: auth.userId, name: auth.name },
+      sandbox_provider: configuredSandboxProviderName(env),
     });
   } catch (error) {
     const failedAt = new Date().toISOString();
@@ -724,14 +722,7 @@ export async function handleSessionPreview(
 
 export async function handleLogs(env: Env, sessionId: string): Promise<Response> {
   try {
-    const { getSandbox } = await import("@cloudflare/sandbox");
-    const sandbox = getCodevilSandbox(
-      getSandbox,
-      env.Sandbox as unknown as Parameters<typeof getSandbox>[0],
-      sessionId,
-    );
-    const logs = await sandbox.getProcessLogs("codevil-agent");
-    return json(redactSandboxDiagnosticResponse(logs, env), 200);
+    return await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).readSandboxLogs();
   } catch {
     return json({ error: "Failed to read sandbox logs" }, 500);
   }
@@ -739,15 +730,7 @@ export async function handleLogs(env: Env, sessionId: string): Promise<Response>
 
 export async function handleDiagnostics(env: Env, sessionId: string): Promise<Response> {
   try {
-    return json(redactSandboxDiagnosticResponse(
-      await readSandboxDiagnostics(
-        env.Sandbox,
-        sessionId,
-        "codevil-agent",
-        collectWorkerSecretValues(env),
-      ),
-      env,
-    ), 200);
+    return await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).readSandboxDiagnosticsResponse();
   } catch {
     return json({ error: "Failed to read sandbox diagnostics" }, 500);
   }

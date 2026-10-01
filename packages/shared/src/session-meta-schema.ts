@@ -37,6 +37,8 @@ export const SessionMetaSchema = z.object({
   expected_close: z.boolean().optional(),
   sandbox_disconnected_at: z.string().optional(),
   workspace_cache_restored: z.boolean().optional(),
+  sandbox_provider: z.enum(["e2b", "cloudflare"]).optional(),
+  sandbox_ref: z.object({ provider: z.enum(["e2b", "cloudflare"]), id: z.string() }).optional(),
   last_decision: LastDecisionSchema.optional(),
 });
 

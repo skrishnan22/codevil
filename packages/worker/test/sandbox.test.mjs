@@ -2,19 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AGENT_COMMAND,
   buildSandboxWebSocketUrl,
   buildSandboxDisconnectLogPayload,
   CODEVIL_SANDBOX_OPTIONS,
   collectSandboxDiagnostics,
   getCodevilSandbox,
   lifecycleErrorEvent,
-  provisionSandboxOnInstance,
   recordSandboxLifecycleEvent,
   redactSandboxKeepAliveState,
   retrySandboxOperation,
   SANDBOX_LIFECYCLE_EVENT_KEY,
   sandboxProcessEnv,
   setCodevilSandboxKeepAlive,
+  startAgentOnHandle,
   shouldDeferSandboxActivityExpiry,
   stopDiagnostics,
 } from "../dist/sandbox.js";
@@ -58,31 +59,26 @@ test("sandbox process environment never receives the deployment API key or provi
   assert.doesNotMatch(JSON.stringify(env), /sk-ant-real-provider-key/);
 });
 
-test("repairs restored workspace access after beforeStart and provisions the agent as uid 10001", async () => {
+test("starts the agent on a handle as uid 10001 with the session-bound environment", async () => {
   const calls = [];
-  const sandbox = {
-    setKeepAlive: async (active) => calls.push(["setKeepAlive", active]),
-    setCodevilKeepAlive: async (active, reason) => calls.push(["setCodevilKeepAlive", active, reason]),
-    mkdir: async () => assert.fail("provisioning must not create a secrets directory"),
-    writeFile: async () => assert.fail("provisioning must not write an environment file"),
+  const handle = {
     startProcess: async (command, options) => calls.push(["startProcess", command, options]),
   };
 
-  await provisionSandboxOnInstance(sandbox, {
-    sessionId: "ses_123",
+  await startAgentOnHandle(handle, {
     wsUrl: "wss://codevil.example.com/sessions/ses_123/sandbox/ws",
     wsToken: "session-bound-ws-capability",
     provider: "anthropic",
     proxyBase: "https://codevil.example.com",
     proxyTokens: { "anthropic-messages": "proxy-capability" },
-    beforeStart: async () => calls.push(["beforeStart"]),
   });
 
+  assert.equal(
+    AGENT_COMMAND,
+    "chown 10001:10001 /workspace && chmod u+rwx /workspace && exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js",
+  );
   assert.deepEqual(calls, [
-    ["setKeepAlive", true],
-    ["setCodevilKeepAlive", true, "session provisioning"],
-    ["beforeStart"],
-    ["startProcess", "chown 10001:10001 /workspace && chmod u+rwx /workspace && exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js", {
+    ["startProcess", AGENT_COMMAND, {
       cwd: "/workspace",
       env: {
         HOME: "/home/codevil",
@@ -96,7 +92,6 @@ test("repairs restored workspace access after beforeStart and provisions the age
         CODEVIL_PROXY_TOKENS: '{"anthropic-messages":"proxy-capability"}',
       },
       processId: "codevil-agent",
-      autoCleanup: true,
     }],
   ]);
 });

@@ -8,6 +8,7 @@ import {
   type NormalizedCreateSession,
   type SessionDirectoryRow,
 } from "./session-directory.js";
+import { configuredSandboxProviderName } from "./sandbox-provider/index.js";
 import type { Env } from "./worker-env.js";
 
 export interface SessionCreator {
@@ -72,6 +73,7 @@ export async function createSession(
       exec_model: normalized.exec_model,
       max_time: normalized.max_session_time,
       created_by: { id: createdBy.id, name: createdBy.name },
+      sandbox_provider: configuredSandboxProviderName(env),
     });
   } catch (error) {
     const failedAt = new Date().toISOString();

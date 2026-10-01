@@ -7,6 +7,8 @@ upload_source_maps = true
 
 [vars]
 EMAIL_PROVIDER = "none"
+SANDBOX_PROVIDER = "e2b"
+E2B_TEMPLATE_ID = "codevil-sandbox"
 CODEVIL_WEB_ORIGIN = "http://localhost:5173,http://localhost:8787"
 # Leaving CODEVIL_PREVIEW_ORIGIN unset keeps preview URLs on the portable
 # workers.dev path. Set it in an untracked operator overlay to use a domain.

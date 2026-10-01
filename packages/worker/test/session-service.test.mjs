@@ -81,7 +81,7 @@ test("createSession inserts a session, initializes the orchestrator, and returns
       exec_model: normalized.exec_model,
       max_time: normalized.max_session_time,
       created_by: { id: "usr_123", name: "Alice" },
-      sandbox_provider: "cloudflare",
+      sandbox_provider: "e2b",
       max_idle_time: normalized.max_idle_time,
     },
   ]);
@@ -178,7 +178,7 @@ test("handleCreateSession forwards a provided max_idle_time to the orchestrator"
 
   assert.equal(response.status, 201);
   assert.equal(initCall[3].max_idle_time, "45m");
-  assert.equal(initCall[3].sandbox_provider, "cloudflare");
+  assert.equal(initCall[3].sandbox_provider, "e2b");
 });
 
 test("handleCreateSession forwards the default max_idle_time when none is provided", async () => {

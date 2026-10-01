@@ -11,6 +11,23 @@ import type {
 
 export const AGENT_PROCESS_ID = "codevil-agent";
 
+/** Durable Object storage key for the provider secret (E2B traffic token). */
+export const SANDBOX_SECRET_KEY = "codevil:sandbox_secret";
+
+/** Add a provider secret to the live redaction list, in place and at most once. */
+export function registerSandboxSecret(secrets: string[], secret: string | undefined): void {
+  const normalized = secret?.trim();
+  if (normalized && !secrets.includes(normalized)) secrets.push(normalized);
+}
+
+/** Cold start: put the persisted provider secret back on the redaction list. */
+export async function loadStoredSandboxSecret(
+  storage: { get<T>(key: string): Promise<T | undefined> },
+  secrets: string[],
+): Promise<void> {
+  registerSandboxSecret(secrets, await storage.get<string>(SANDBOX_SECRET_KEY));
+}
+
 export type SandboxHandleResolver = () => Promise<SandboxHandle | null>;
 
 /**

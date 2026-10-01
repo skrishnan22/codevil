@@ -25,7 +25,9 @@ import {
   collectAgentDiagnostics,
   connectSandboxHandle,
   destroySandbox,
+  loadStoredSandboxSecret,
   readRedactedAgentLogs,
+  SANDBOX_SECRET_KEY,
   sandboxDiagnosticsResponse,
   sandboxLogsResponse,
 } from "./orchestrator/sandbox-access.js";
@@ -163,6 +165,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.ctx = ctx as DurableObjectState<{}>;
     this.workerEnv = env;
     this.redactionSecrets = collectWorkerSecretValues(env);
+    // Gate every request on the stored provider secret being redactable.
+    ctx.blockConcurrencyWhile(() => loadStoredSandboxSecret(ctx.storage, this.redactionSecrets));
     this.sql = ctx.storage.sql;
     this.eventLog = new SessionEventLog(
       this.sql,
@@ -744,7 +748,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     return connectSandboxHandle({
       meta: this.meta,
       provider: this.sandboxProvider(),
-      readSecret: () => this.ctx.storage.get<string>("codevil:sandbox_secret"),
+      readSecret: () => this.ctx.storage.get<string>(SANDBOX_SECRET_KEY),
     });
   }
 

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { safeExceptionAttributes } from "@codevil/shared";
+import { registerSandboxSecret } from "../dist/orchestrator/sandbox-access.js";
 import { redactEvent } from "../dist/redaction.js";
+import { collectWorkerSecretValues } from "../dist/worker-env.js";
 
 test("redacts exact secret values from nested event payloads", () => {
   const event = redactEvent({
@@ -95,4 +98,16 @@ test("redacts Error causes and custom properties without invoking throwing diagn
   assert.equal(redacted.error.cause.context.detail, "provider returned [REDACTED]");
   assert.equal(redacted.error.provider_context.stdout, "sandbox printed [REDACTED]");
   assert.equal(redacted.error.diagnostic, "[UNAVAILABLE]");
+});
+
+test("E2B API key and sandbox traffic token are redacted from error logging attributes", () => {
+  const error = new Error("e2b rejected e2b_key_value with traffic token tat_secret_value");
+  error.stack = "Error: e2b rejected e2b_key_value tat_secret_value\n    at create (e2b.js:1:1)";
+  const secrets = collectWorkerSecretValues({ E2B_API_KEY: "e2b_key_value" });
+  registerSandboxSecret(secrets, "tat_secret_value");
+
+  const serialized = JSON.stringify(redactEvent(safeExceptionAttributes(error), secrets));
+
+  assert.doesNotMatch(serialized, /e2b_key_value|tat_secret_value/);
+  assert.match(serialized, /\[REDACTED\]/);
 });

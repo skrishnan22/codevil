@@ -4,7 +4,10 @@ import test from "node:test";
 import {
   connectSandboxHandle,
   destroySandbox,
+  loadStoredSandboxSecret,
   readRedactedAgentLogs,
+  registerSandboxSecret,
+  SANDBOX_SECRET_KEY,
   sandboxDiagnosticsResponse,
   sandboxLogsResponse,
   sandboxRefForMeta,
@@ -146,4 +149,34 @@ test("diagnostics response is a 500 with the legacy body when no sandbox exists"
   const response = await sandboxDiagnosticsResponse(async () => null, [secret]);
   assert.equal(response.status, 500);
   assert.deepEqual(await response.json(), { error: "Failed to read sandbox diagnostics" });
+});
+
+test("registerSandboxSecret adds a trimmed secret once, in place", () => {
+  const secrets = ["existing"];
+  const same = secrets;
+  registerSandboxSecret(secrets, " tat_secret ");
+  registerSandboxSecret(secrets, "tat_secret");
+  registerSandboxSecret(secrets, undefined);
+  registerSandboxSecret(secrets, "  ");
+  assert.equal(secrets, same);
+  assert.deepEqual(secrets, ["existing", "tat_secret"]);
+});
+
+test("loadStoredSandboxSecret restores the persisted secret into the redaction list on cold start", async () => {
+  const secrets = ["e2b_key"];
+  const reads = [];
+  await loadStoredSandboxSecret({
+    get: async (key) => { reads.push(key); return "tat_secret"; },
+  }, secrets);
+  assert.equal(SANDBOX_SECRET_KEY, "codevil:sandbox_secret");
+  assert.deepEqual(reads, ["codevil:sandbox_secret"]);
+  assert.deepEqual(secrets, ["e2b_key", "tat_secret"]);
+  const logs = await sandboxLogsResponse(
+    async () => createFakeSandboxHandle({ readProcessLogs: async () => ({ stdout: "token tat_secret", stderr: "key e2b_key" }) }),
+    secrets,
+  );
+  const body = JSON.stringify(await logs.json());
+  assert.doesNotMatch(body, /tat_secret|e2b_key/);
+  await loadStoredSandboxSecret({ get: async () => undefined }, secrets);
+  assert.deepEqual(secrets, ["e2b_key", "tat_secret"]);
 });

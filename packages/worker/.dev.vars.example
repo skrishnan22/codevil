@@ -15,6 +15,12 @@ GITHUB_PAT=
 BETTER_AUTH_URL=http://localhost:8787
 CODEVIL_WEB_ORIGIN=http://localhost:5173,http://localhost:8787
 
+# Sandbox provider (e2b | cloudflare). E2B is the default.
+# SANDBOX_PROVIDER=e2b
+E2B_API_KEY=
+# E2B_TEMPLATE_ID=codevil-sandbox
+# E2B_MAX_SANDBOX_SECONDS=3600
+
 # Optional email delivery.
 # EMAIL_PROVIDER=resend
 # RESEND_API_KEY=

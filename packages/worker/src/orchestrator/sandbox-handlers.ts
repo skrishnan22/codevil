@@ -25,6 +25,7 @@ import { getProvisioningCredentialContext, requireProviderPublicConfig } from ".
 import { createSandboxGitProxyToken, createSandboxProxyToken } from "../sandbox-proxy.js";
 import { createSandboxWebSocketToken } from "../sandbox-ws-token.js";
 import { traceSandboxProvisioning } from "./provisioning.js";
+import { registerSandboxSecret, SANDBOX_SECRET_KEY } from "./sandbox-access.js";
 import {
   buildPreviewUrl,
   createPreviewToken,
@@ -79,7 +80,9 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
         meta.sandbox_ref = handle.ref;
         host.saveMeta();
         if (handle.secret) {
-          await host.ctx.storage.put("codevil:sandbox_secret", handle.secret);
+          // Redact before anything can log it, then persist for cold starts.
+          registerSandboxSecret(host.redactionSecrets, handle.secret);
+          await host.ctx.storage.put(SANDBOX_SECRET_KEY, handle.secret);
         }
         if (provider.capabilities.workspaceCache && handle.workspaceCache) {
           const restored = await restoreWorkspaceCacheBeforeStart(host, handle.workspaceCache);

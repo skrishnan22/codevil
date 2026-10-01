@@ -13,6 +13,11 @@ upload_source_maps = true
 
 [vars]
 EMAIL_PROVIDER = "none"
+# Sandbox provider: "e2b" (default) or "cloudflare". E2B_API_KEY is a secret:
+# set it with `wrangler secret put E2B_API_KEY`, never in this file.
+SANDBOX_PROVIDER = "e2b"
+E2B_TEMPLATE_ID = "codevil-sandbox"
+# E2B_MAX_SANDBOX_SECONDS = "3600"
 CODEVIL_WEB_ORIGIN = "https://your-web-origin.example"
 CODEVIL_PREVIEW_ORIGIN = "https://your-preview-origin.example"
 BACKUP_BUCKET_NAME = "your-backup-bucket"

@@ -21,6 +21,8 @@ export interface Env extends WorkerSecretEnv {
   CODEVIL_WEB_ORIGIN?: string;
   SLACK_BOT_TOKEN?: string;
   SANDBOX_PROVIDER?: string;
+  E2B_TEMPLATE_ID?: string;
+  E2B_MAX_SANDBOX_SECONDS?: string;
 }
 
 export interface InitOptions {

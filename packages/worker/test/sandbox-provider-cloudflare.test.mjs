@@ -169,7 +169,8 @@ test("provider name parsing and legacy meta default", () => {
   assert.equal(parseSandboxProviderName("e2b"), "e2b");
   assert.equal(parseSandboxProviderName("modal"), undefined);
   assert.equal(new SandboxNotFoundError().name, "SandboxNotFoundError");
-  assert.equal(configuredSandboxProviderName({}), "cloudflare");
+  assert.equal(configuredSandboxProviderName({}), "e2b");
+  assert.equal(configuredSandboxProviderName({ SANDBOX_PROVIDER: "cloudflare" }), "cloudflare");
   assert.throws(() => configuredSandboxProviderName({ SANDBOX_PROVIDER: "modal" }), /Unsupported SANDBOX_PROVIDER/);
   const provider = sandboxProviderForMeta({ Sandbox: {} }, {});
   assert.equal(provider.name, "cloudflare");

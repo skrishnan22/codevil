@@ -503,6 +503,7 @@ test("provisionSessionSandbox creates through the provider, records the ref, res
   assert.deepEqual(host.meta.sandbox_ref, { provider: "cloudflare", id: "ses_test" });
   assert.equal(host.meta.workspace_cache_restored, false);
   assert.equal(await host.ctx.storage.get("codevil:sandbox_secret"), "handle-secret");
+  assert.ok(host.redactionSecrets.includes("handle-secret"));
   assert.deepEqual(calls, [
     ["create", { sessionId: "ses_test", leaseMs: 30 * 60_000 }],
     ["startProcess", "codevil-agent", "/workspace"],

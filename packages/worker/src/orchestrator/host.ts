@@ -16,7 +16,8 @@ export interface OrchestratorHost {
   sql: SqlStorage;
   workerEnv: Env;
   ctx: DurableObjectState;
-  redactionSecrets: readonly string[];
+  /** Mutable: provisioning appends the provider secret so later logs redact it. */
+  redactionSecrets: string[];
 
   loadMeta(): void;
   saveMeta(): void;

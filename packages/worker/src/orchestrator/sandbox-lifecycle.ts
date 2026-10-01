@@ -5,6 +5,9 @@ export const SANDBOX_LEASE_RENEW_INTERVAL_MS = 5 * 60_000;
 /** Default time a ready session may sit idle before its sandbox is paused. */
 export const DEFAULT_MAX_IDLE_MS = 10 * 60_000;
 
+/** Retry delay for a pause/lease-renew deadline that is already due (bounds alarm re-fire rate). */
+export const SANDBOX_PAST_DUE_RETRY_MS = 30_000;
+
 const MIN_SANDBOX_LEASE_MS = 60_000;
 
 export interface IdlePauseInput {
@@ -25,7 +28,8 @@ export function idlePauseDeadline(
   input: Pick<IdlePauseInput, "lastActivityAt" | "maxIdleMs">,
 ): number | null {
   if (input.maxIdleMs === null) return null;
-  return Date.parse(input.lastActivityAt) + input.maxIdleMs;
+  const deadline = Date.parse(input.lastActivityAt) + input.maxIdleMs;
+  return Number.isFinite(deadline) ? deadline : null;
 }
 
 export function shouldPauseSandbox(input: IdlePauseInput): boolean {
@@ -59,5 +63,13 @@ export function sandboxLeaseMs(input: {
 }
 
 export function leaseRenewDeadline(input: { renewedAt?: string; createdAt: string }): number {
-  return Date.parse(input.renewedAt ?? input.createdAt) + SANDBOX_LEASE_RENEW_INTERVAL_MS;
+  // Unparseable timestamps fall back renewedAt -> createdAt -> 0 (renew immediately).
+  const renewedAtMs = input.renewedAt === undefined ? Number.NaN : Date.parse(input.renewedAt);
+  const baseMs = Number.isFinite(renewedAtMs)
+    ? renewedAtMs
+    : (() => {
+        const createdAtMs = Date.parse(input.createdAt);
+        return Number.isFinite(createdAtMs) ? createdAtMs : 0;
+      })();
+  return baseMs + SANDBOX_LEASE_RENEW_INTERVAL_MS;
 }

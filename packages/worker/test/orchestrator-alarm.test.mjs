@@ -67,3 +67,55 @@ test("propagates a replacement alarm persistence failure", async () => {
     /setAlarm failed/,
   );
 });
+
+test("alarm includes idle pause and lease renewal deadlines", async () => {
+  const { nextAlarmDeadline } = alarmModule;
+  const T0 = Date.parse("2026-10-01T00:00:00.000Z");
+  const base = { now: T0 + 120_000, state: "ready", createdAt: T0, maxTimeMs: null };
+  assert.equal(nextAlarmDeadline({ ...base, idlePauseAt: T0 + 200_000, leaseRenewAt: T0 + 300_000 }), T0 + 200_000);
+  assert.equal(nextAlarmDeadline({ ...base, idlePauseAt: null, leaseRenewAt: T0 + 300_000 }), T0 + 300_000);
+  assert.equal(nextAlarmDeadline({ ...base, state: "failed", idlePauseAt: T0 + 200_000 }), undefined);
+  assert.equal(nextAlarmDeadline({ ...base, state: "failed", leaseRenewAt: T0 + 200_000 }), undefined);
+});
+
+test("past-due idle pause and lease renewal deadlines retry after the past-due delay", async () => {
+  const { nextAlarmDeadline } = alarmModule;
+  const { SANDBOX_PAST_DUE_RETRY_MS } = await import("../dist/orchestrator/sandbox-lifecycle.js");
+  assert.equal(SANDBOX_PAST_DUE_RETRY_MS, 30_000);
+  const T0 = Date.parse("2026-10-01T00:00:00.000Z");
+  const base = { now: T0 + 120_000, state: "ready", createdAt: T0, maxTimeMs: null };
+  assert.equal(nextAlarmDeadline({ ...base, idlePauseAt: T0 + 1_000 }), base.now + 30_000);
+  assert.equal(nextAlarmDeadline({ ...base, leaseRenewAt: base.now }), base.now + 30_000);
+  // Future deadlines beyond the retry delay are unchanged.
+  assert.equal(nextAlarmDeadline({ ...base, idlePauseAt: base.now + 90_000 }), base.now + 90_000);
+});
+
+test("non-finite idle pause and lease renewal deadlines are ignored", async () => {
+  const { nextAlarmDeadline } = alarmModule;
+  const T0 = Date.parse("2026-10-01T00:00:00.000Z");
+  const base = { now: T0 + 120_000, state: "ready", createdAt: T0, maxTimeMs: null };
+  assert.equal(nextAlarmDeadline({ ...base, idlePauseAt: Number.NaN, leaseRenewAt: Number.NaN }), undefined);
+  assert.equal(nextAlarmDeadline({ ...base, idlePauseAt: Number.POSITIVE_INFINITY }), undefined);
+  assert.equal(nextAlarmDeadline({ ...base, idlePauseAt: Number.NaN, leaseRenewAt: base.now + 50_000 }), base.now + 50_000);
+});
+
+test("earlier existing deadlines still win over idle pause and lease renewal", async () => {
+  const { nextAlarmDeadline } = alarmModule;
+  const T0 = Date.parse("2026-10-01T00:00:00.000Z");
+  const now = T0 + 120_000;
+  assert.equal(
+    nextAlarmDeadline({ now, state: "ready", createdAt: T0, maxTimeMs: 150_000, idlePauseAt: now - 1, leaseRenewAt: now + 100_000 }),
+    T0 + 150_000,
+  );
+  const disconnectedAt = new Date(now).toISOString();
+  const { sandboxReconnectDeadline } = await import("../dist/sandbox-connection.js");
+  const reconnect = sandboxReconnectDeadline(disconnectedAt);
+  assert.ok(reconnect > now);
+  assert.equal(
+    nextAlarmDeadline({
+      now, state: "ready", createdAt: T0, maxTimeMs: null,
+      sandboxDisconnectedAt: disconnectedAt, idlePauseAt: reconnect + 10_000, leaseRenewAt: reconnect + 20_000,
+    }),
+    reconnect,
+  );
+});

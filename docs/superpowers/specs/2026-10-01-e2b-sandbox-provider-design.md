@@ -212,14 +212,14 @@ E2B error messages pass through `redactEvent` before logging, like Cloudflare er
 
 ## Feasibility Gate
 
-Implementation task 1 is a throwaway probe. Nothing else starts until it passes. It runs in `wrangler dev` with `nodejs_compat` and a real `E2B_API_KEY`, and answers:
+The feasibility gate is a throwaway probe that runs after the provider-neutral refactor (which does not depend on E2B and is reused by any fallback provider). No E2B-specific task starts until it passes. It runs in `wrangler dev` with `nodejs_compat` and a real `E2B_API_KEY`, and answers:
 
 1. Does the E2B JS SDK run in workerd for create, `commands.run` (foreground and background), file write and read, `pause`, `connect` (resume), `setTimeout`, and `kill`?
 2. Does a Worker `fetch` to `https://{port}-{sandboxId}.e2b.app` with `e2b-traffic-access-token` work for HTTP and for a WebSocket upgrade?
 3. Does resuming a paused sandbox reset the Hobby one-hour session clock?
 4. Which tool publishes a template from our multi-stage Dockerfile?
 
-If (1) fails, implementation stops and the design is revisited (a Node control service or E2B's REST API are the fallbacks). Answers to (2)–(4) are recorded in this spec before task 2.
+If (1) fails, implementation stops and the design is revisited (a Node control service or E2B's REST API are the fallbacks). Answers to (2)–(4) are recorded in this spec before any E2B-specific task starts.
 
 ## Testing
 

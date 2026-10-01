@@ -242,3 +242,61 @@ If (1) fails, implementation stops and the design is revisited (a Node control s
   3. Idle past `max_idle_time`; the sandbox pauses.
   4. Resume once with a prompt and once by opening the preview; the dev server is still running and the agent continues.
   5. Stop the Session; the sandbox is destroyed in the E2B dashboard.
+
+## Feasibility Findings
+
+Probe run on 2026-10-01 under `wrangler dev` 4.100.0 (workerd, `compatibility_date = "2026-04-07"`, `nodejs_compat`) with `e2b` **2.51.0** (`^2.51.0` in `packages/worker/package.json`). The probe Worker was throwaway and is not committed. Secrets are never recorded; only booleans, lengths and status codes.
+
+**Gate: PASSED.** The SDK bundles and runs in workerd with no polyfill and no alternate import path (`import { Sandbox } from "e2b"`). Steps 1-3 succeeded.
+
+### Answers
+
+1. **SDK in workerd:** Yes. `Sandbox.create`, `commands.run`, `files.write`, `pause`, `connect`, `setTimeout`, `getInfo`, `kill` and `Sandbox.list` all worked. `create` took ~0.5-1.4s.
+2. **WebSocket upgrade through `getHost(port)` with token:** Yes. A Worker `fetch("https://" + sandbox.getHost(8001) + "/", { headers: { Upgrade: "websocket", "e2b-traffic-access-token": token } })` returned `status 101` with `response.webSocket` non-null. After `ws.accept()`, a sent `ping` came back as `echo:ping`. Without the token header the upgrade returns 403. (Echo server: a ~25-line stdlib `python3` script; `websockets`/`wscat` were not needed.)
+3. **Option-name correction (important for Task 4):** In e2b 2.51.0 `secure` is deprecated and ignored (every sandbox secures envd). `allowPublicTraffic` is **not** a top-level create option; it lives under `network`: `Sandbox.create({ network: { allowPublicTraffic: false } })`. With the plan's original options (`secure: true, allowPublicTraffic: false` top-level) the sandbox was created with public traffic allowed: `trafficAccessToken` was absent and requests with and without the header both returned 200 (and the WS upgrade succeeded without a token). With `network: { allowPublicTraffic: false }`, `trafficAccessToken` is present (64 chars), the HTTP request with the token returns 200 and without it 403.
+4. **`Sandbox.connect` repopulates `trafficAccessToken`:** Yes. After `pause()` then `Sandbox.connect(id, { apiKey, timeoutMs })`, the connected instance had `trafficAccessToken` present (64 chars) and it equals the one from `create`. The background `python3 -m http.server` from before the pause still answered 200 after resume, and `/tmp/x` survived. Pause took ~0.5s, resume ~0.4s.
+5. **Hobby 1-hour clock after resume:** Docs (https://docs.e2b.dev/sandbox/persistence): continuous runtime max is 1 hour on Hobby (24 hours on Pro), and "the continuous runtime limit is reset" after pause then resume. Observed: after `connect`, `getInfo().startedAt` was reset to the resume time and `endAt = startedAt + timeoutMs`. Record: **resets** (each resume starts a fresh clock). `SDK` doc for `timeoutMs` also states max 1h Hobby / 24h Pro. Do not request a `timeoutMs` above 3_600_000 on Hobby.
+6. **Killed sandbox:** `Sandbox.connect(killedId)` throws class `SandboxNotFoundError` (message "Paused sandbox <id> not found"), which `extends NotFoundError extends SandboxError`. Catch `NotFoundError` (instanceof) to cover both; do not match on the literal class name `NotFoundError`.
+7. **Template publishing:**
+   - The v2 Template SDK `Template().fromDockerfile(pathOrContent)` **rejects multi-stage Dockerfiles**: the converter throws `"Multi-stage Dockerfiles are not supported"` when a Dockerfile has more than one `FROM` (verified in `e2b/dist/index.mjs`). It also requires exactly one `FROM`.
+   - `Template().fromImage('registry/image:tag', { username, password })` accepts any registry image (also `fromTemplate`, and an ECR variant), so a multi-stage Dockerfile must be built and pushed with Docker first, then referenced via `fromImage`. Build with `Template.build(template, 'name', { cpuCount, memoryMB, onBuildLogs })`.
+   - CLI (`@e2b/cli` 2.21.0): `e2b template create <name> -d <Dockerfile> -p <dir> [-c <start-cmd>] [--ready-cmd <cmd>] [--cpu-count N] [--memory-mb N]` "builds a Dockerfile as a sandbox template". `e2b template migrate` converts `e2b.Dockerfile`/`e2b.toml` to the SDK format; `e2b template publish` only makes an existing template public (it is not the build step). Multi-stage support in the CLI path was not verified (no template was built); assume unsupported and use the `fromImage` route. Not published, per instructions.
+   - Recommended command for Task 8: `docker build` + `docker push` the multi-stage image, then a small script calling `Template.build(Template().fromImage('<registry>/<image>:<tag>', creds), '<template-name>')`.
+
+### Probe results (redacted JSON)
+
+Run 1 (original plan options, `secure: true, allowPublicTraffic: false`; sandbox `idbq4u63mdmmsc6p3bbga`, killed):
+
+```json
+{
+  "step1_create": { "ok": true, "ms": 1444, "trafficAccessTokenPresent": false },
+  "step2_echo": { "ok": true, "stdout": "hi\n", "exitCode": 0 },
+  "step3_files": { "ok": true, "stdout": "y" },
+  "step4_http": { "ok": false, "withTokenStatus": 200, "withoutTokenStatus": 200 },
+  "step5_ws": { "status": 101, "webSocketNonNull": true, "echo": "echo:ping", "withoutTokenStatus": 101 },
+  "step6_pause_resume": { "pauseMs": 517, "resumeMs": 351, "connectedTrafficAccessTokenPresent": false, "backgroundServerStatusAfterResume": 200, "fileSurvives": true },
+  "step7_connectKilled": { "class": "SandboxNotFoundError" }
+}
+```
+
+Run 2 (`network: { allowPublicTraffic: false }`; sandbox `ipv0doc3yywqgunnnhbva`, killed):
+
+```json
+{
+  "step1_create": { "ok": true, "ms": 475, "trafficAccessTokenPresent": true, "trafficAccessTokenLength": 64 },
+  "step2_echo": { "ok": true, "stdout": "hi\n", "exitCode": 0 },
+  "step3_files": { "ok": true, "stdout": "y" },
+  "step4_http": { "ok": true, "withTokenStatus": 200, "withoutTokenStatus": 403, "hostShape": "8000-<id>.e2b.app" },
+  "step5_ws": { "ok": true, "status": 101, "webSocketNonNull": true, "echo": "echo:ping", "withoutTokenStatus": 403 },
+  "step6_pause_resume": {
+    "pauseMs": 516, "resumeMs": 418,
+    "connectedTrafficAccessTokenPresent": true, "connectedTrafficAccessTokenLength": 64, "sameTokenAsCreate": true,
+    "backgroundServerStatusAfterResume": 200, "fileSurvives": true,
+    "startedAtAfterConnect": "2026-10-01T17:26:37Z (reset to resume time)", "endAtAfterConnect": "startedAt + 300s"
+  },
+  "step7_timeout": { "ok": true, "setTimeout120sApplied": true },
+  "step7_connectKilled": { "class": "SandboxNotFoundError", "message": "Paused sandbox <id> not found" }
+}
+```
+
+A final `Sandbox.list` for the key returned 0 running sandboxes.

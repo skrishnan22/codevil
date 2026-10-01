@@ -85,7 +85,6 @@ test("createSession inserts a session, initializes the orchestrator, and returns
       max_idle_time: normalized.max_idle_time,
     },
   ]);
-  assert.equal(initCall[3].max_idle_time, "10m");
 });
 
 test("createSession marks the session failed when orchestrator init throws", async () => {
@@ -173,6 +172,45 @@ test("handleCreateSession fails on a bad SANDBOX_PROVIDER without touching D1 wr
   assert.deepEqual(await response.json(), { error: "Sandbox provider is not configured" });
   assert.deepEqual(writes, []);
 });
+
+test("handleCreateSession forwards a provided max_idle_time to the orchestrator", async () => {
+  const { response, initCall } = await createViaHandler({ repo: "github.com/acme/app", max_idle_time: "45m" });
+
+  assert.equal(response.status, 201);
+  assert.equal(initCall[3].max_idle_time, "45m");
+  assert.equal(initCall[3].sandbox_provider, "cloudflare");
+});
+
+test("handleCreateSession forwards the default max_idle_time when none is provided", async () => {
+  const { response, initCall } = await createViaHandler({ repo: "github.com/acme/app" });
+
+  assert.equal(response.status, 201);
+  assert.equal(initCall[3].max_idle_time, "10m");
+});
+
+async function createViaHandler(body) {
+  let initCall = null;
+  const env = {
+    DB: {
+      prepare: () => ({ bind: () => ({ run: async () => ({}) }) }),
+      batch: async () => [],
+    },
+    ORCHESTRATOR: {
+      idFromName: (name) => `do:${name}`,
+      get: () => ({
+        async init(...args) {
+          initCall = args;
+        },
+      }),
+    },
+  };
+  const response = await handleCreateSession(
+    new Request("https://codevil.example/api/sessions", { method: "POST", body: JSON.stringify(body) }),
+    env,
+    { userId: "usr_123", email: "owner@example.com", name: "Owner", role: "owner" },
+  );
+  return { response, initCall };
+}
 
 function createFakeDb() {
   const rows = new Map();

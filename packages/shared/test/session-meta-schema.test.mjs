@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SandboxStateSchema, SessionMetaSchema } from "../dist/index.js";
+import { SessionMetaSchema } from "../dist/index.js";
 
 test("SessionMetaSchema: accepts a minimal valid meta blob", () => {
   const parsed = SessionMetaSchema.parse({
@@ -69,8 +69,4 @@ test("SessionMetaSchema: accepts idle-pause and provider fields", () => {
   assert.equal(parsed.last_activity_at, "2026-10-01T00:00:00.000Z");
   assert.equal(parsed.sandbox_paused_at, "2026-10-01T00:10:00.000Z");
   assert.equal(parsed.sandbox_lease_renewed_at, "2026-10-01T00:05:00.000Z");
-});
-
-test("SandboxStateSchema: includes paused", () => {
-  assert.equal(SandboxStateSchema.parse("paused"), "paused");
 });

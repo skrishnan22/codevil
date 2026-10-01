@@ -8,7 +8,6 @@ import type {
   AgentRunState,
 } from "@codevil/shared";
 import {
-  DEFAULT_CONFIG,
   isValidTransition,
   isTerminalState,
   CLIToDOMessageSchema,
@@ -79,6 +78,7 @@ import type { OrchestratorHost } from "./orchestrator/host.js";
 import { SessionEventLog } from "./orchestrator/event-log.js";
 import { notifyExternalConversation } from "./integrations/notify-external-conversation.js";
 import { loadSessionMeta, saveSessionMeta } from "./orchestrator/session-meta.js";
+import { buildInitialSessionMeta } from "./orchestrator/initial-meta.js";
 import { sessionWideEventGroup } from "./orchestrator/session-telemetry.js";
 import {
   completeActiveRun as completeActiveRunFn,
@@ -251,28 +251,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   async init(sessionId: string, prompt: string, repo: string, options: InitOptions): Promise<void> {
-    const createdAt = new Date().toISOString();
-    this.meta = {
-      session_id: sessionId,
-      prompt,
-      repo,
-      worker_url: options.worker_url,
-      provider: options.provider ?? DEFAULT_CONFIG.provider,
-      plan_model: options.plan_model ?? DEFAULT_CONFIG.plan_model,
-      exec_model: options.exec_model ?? DEFAULT_CONFIG.exec_model,
-      max_time: options.max_time ?? DEFAULT_CONFIG.max_time,
-      state: "initializing",
-      refinement_round: 0,
-      verification_attempts: 0,
-      cost_total_usd: 0,
-      active_run: null,
-      queued_runs: [],
-      created_by: options.created_by,
-      sandbox_provider: options.sandbox_provider ?? "cloudflare",
-      max_idle_time: options.max_idle_time ?? "10m",
-      last_activity_at: createdAt,
-      created_at: createdAt,
-    };
+    this.meta = buildInitialSessionMeta(sessionId, prompt, repo, options, new Date());
     this.saveMeta();
 
     this.appendAndBroadcast({ type: "session_created", session_id: sessionId });

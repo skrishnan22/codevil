@@ -9,6 +9,8 @@ export interface AlarmScheduleInput {
   sandboxDisconnectedAt?: string;
   presentationRetryAt?: number | null;
   workspaceCacheRetryAt?: number | null;
+  idlePauseAt?: number | null;
+  leaseRenewAt?: number | null;
 }
 
 export function nextAlarmDeadline(input: AlarmScheduleInput): number | undefined {
@@ -18,6 +20,12 @@ export function nextAlarmDeadline(input: AlarmScheduleInput): number | undefined
     if (input.maxTimeMs !== null) deadlines.push(input.createdAt + input.maxTimeMs);
     if (input.sandboxDisconnectedAt) {
       deadlines.push(sandboxReconnectDeadline(input.sandboxDisconnectedAt));
+    }
+    if (input.idlePauseAt !== null && input.idlePauseAt !== undefined) {
+      deadlines.push(input.idlePauseAt);
+    }
+    if (input.leaseRenewAt !== null && input.leaseRenewAt !== undefined) {
+      deadlines.push(input.leaseRenewAt);
     }
   }
   if (input.presentationRetryAt !== null && input.presentationRetryAt !== undefined) {

@@ -99,23 +99,36 @@ test("non-finite idle pause and lease renewal deadlines are ignored", async () =
   assert.equal(nextAlarmDeadline({ ...base, idlePauseAt: Number.NaN, leaseRenewAt: base.now + 50_000 }), base.now + 50_000);
 });
 
-test("earlier existing deadlines still win over idle pause and lease renewal", async () => {
+test("an earlier maxTime deadline wins over a clamped past-due idle pause", async () => {
+  const { nextAlarmDeadline } = alarmModule;
+  const T0 = Date.parse("2026-10-01T00:00:00.000Z");
+  const now = T0 + 120_000;
+  // maxTime deadline (now + 10s) is earlier than the clamped pause (now + 30s).
+  assert.equal(
+    nextAlarmDeadline({ now, state: "ready", createdAt: T0, maxTimeMs: 130_000, idlePauseAt: now - 1 }),
+    now + 10_000,
+  );
+});
+
+test("an earlier reconnect deadline wins over a clamped past-due lease renewal", async () => {
+  const { nextAlarmDeadline } = alarmModule;
+  const { sandboxReconnectDeadline } = await import("../dist/sandbox-connection.js");
+  const T0 = Date.parse("2026-10-01T00:00:00.000Z");
+  const now = T0 + 120_000;
+  const sandboxDisconnectedAt = new Date(now - 55_000).toISOString();
+  assert.equal(sandboxReconnectDeadline(sandboxDisconnectedAt), now + 5_000);
+  assert.equal(
+    nextAlarmDeadline({ now, state: "ready", createdAt: T0, maxTimeMs: null, sandboxDisconnectedAt, leaseRenewAt: now - 1 }),
+    now + 5_000,
+  );
+});
+
+test("a past-due idle pause with no earlier deadline arms exactly the clamped retry", async () => {
   const { nextAlarmDeadline } = alarmModule;
   const T0 = Date.parse("2026-10-01T00:00:00.000Z");
   const now = T0 + 120_000;
   assert.equal(
-    nextAlarmDeadline({ now, state: "ready", createdAt: T0, maxTimeMs: 150_000, idlePauseAt: now - 1, leaseRenewAt: now + 100_000 }),
-    T0 + 150_000,
-  );
-  const disconnectedAt = new Date(now).toISOString();
-  const { sandboxReconnectDeadline } = await import("../dist/sandbox-connection.js");
-  const reconnect = sandboxReconnectDeadline(disconnectedAt);
-  assert.ok(reconnect > now);
-  assert.equal(
-    nextAlarmDeadline({
-      now, state: "ready", createdAt: T0, maxTimeMs: null,
-      sandboxDisconnectedAt: disconnectedAt, idlePauseAt: reconnect + 10_000, leaseRenewAt: reconnect + 20_000,
-    }),
-    reconnect,
+    nextAlarmDeadline({ now, state: "ready", createdAt: T0, maxTimeMs: null, idlePauseAt: now - 1 }),
+    now + 30_000,
   );
 });

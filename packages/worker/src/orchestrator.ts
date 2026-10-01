@@ -21,12 +21,15 @@ import {
   type Span,
   type Tracer,
 } from "@codevil/shared";
+import { buildSandboxDisconnectLogPayload } from "./sandbox.js";
 import {
-  buildSandboxDisconnectLogPayload,
-  collectSandboxDiagnostics,
-  type SandboxDiagnostics,
-  type SandboxLifecycleSnapshot,
-} from "./sandbox.js";
+  collectAgentDiagnostics,
+  connectSandboxHandle,
+  destroySandbox,
+  readRedactedAgentLogs,
+  sandboxDiagnosticsResponse,
+  sandboxLogsResponse,
+} from "./orchestrator/sandbox-access.js";
 import {
   sandboxProviderForMeta,
   type SandboxHandle,
@@ -328,7 +331,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
 
     if (this.meta.state === "provisioning_sandbox" && now >= createdAt + 60_000) {
-      const logs = await this.readRedactedAgentLogs();
+      const logs = await readRedactedAgentLogs(this.sandboxResolver, this.redactionSecrets);
       this.getTracer()?.log("ERROR", "sandbox.timeout", {
         stdout: logs?.stdout ?? "(none)",
         stderr: logs?.stderr ?? "(none)",
@@ -756,83 +759,36 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   async sandboxHandle(): Promise<SandboxHandle | null> {
-    // Legacy Cloudflare Sessions predate `sandbox_ref`; their id is the Session id.
-    const ref = this.meta?.sandbox_ref
-      ?? (this.meta && this.sandboxProvider().name === "cloudflare"
-        ? { provider: "cloudflare" as const, id: this.meta.session_id }
-        : undefined);
-    if (!ref) return null;
-    const secret = await this.ctx.storage.get<string>("codevil:sandbox_secret");
-    return this.sandboxProvider().connect(ref, secret ? { secret } : undefined);
+    return connectSandboxHandle({
+      meta: this.meta,
+      provider: this.sandboxProvider(),
+      readSecret: () => this.ctx.storage.get<string>("codevil:sandbox_secret"),
+    });
   }
 
-  /** Agent process logs, redacted; null when the sandbox cannot be read. */
-  private async readRedactedAgentLogs(): Promise<{ stdout: string; stderr: string } | null> {
-    try {
-      const handle = await this.sandboxHandle();
-      if (!handle) return null;
-      return redactEvent(await handle.readProcessLogs("codevil-agent"), this.redactionSecrets);
-    } catch {
-      return null;
-    }
-  }
-
-  private async collectDiagnostics(): Promise<SandboxDiagnostics> {
-    const handle = await this.requireSandboxHandle();
-    return collectSandboxDiagnostics(
-      {
-        getProcessLogs: (processId) => handle.readProcessLogs(processId),
-        ...(handle.readLifecycle
-          ? { getCodevilLifecycleSnapshot: () => handle.readLifecycle!() as Promise<SandboxLifecycleSnapshot | null> }
-          : {}),
-      },
-      "codevil-agent",
-      this.redactionSecrets,
-    );
-  }
+  private readonly sandboxResolver = (): Promise<SandboxHandle | null> => this.sandboxHandle();
 
   /** RPC for `GET /sessions/:id/logs`. */
   async readSandboxLogs(): Promise<Response> {
-    try {
-      const handle = await this.requireSandboxHandle();
-      const logs = await handle.readProcessLogs("codevil-agent");
-      return Response.json(redactEvent(logs, this.redactionSecrets), { status: 200 });
-    } catch {
-      return Response.json({ error: "Failed to read sandbox logs" }, { status: 500 });
-    }
+    this.loadMeta();
+    return sandboxLogsResponse(this.sandboxResolver, this.redactionSecrets);
   }
 
   /** RPC for `GET /sessions/:id/diagnostics`. */
   async readSandboxDiagnosticsResponse(): Promise<Response> {
-    try {
-      return Response.json(
-        redactEvent(await this.collectDiagnostics(), this.redactionSecrets),
-        { status: 200 },
-      );
-    } catch {
-      return Response.json({ error: "Failed to read sandbox diagnostics" }, { status: 500 });
-    }
-  }
-
-  private async requireSandboxHandle(): Promise<SandboxHandle> {
     this.loadMeta();
-    const handle = await this.sandboxHandle();
-    if (!handle) throw new Error("Sandbox not found");
-    return handle;
+    return sandboxDiagnosticsResponse(this.sandboxResolver, this.redactionSecrets);
   }
 
   private async terminateSandbox(reason: string): Promise<void> {
     if (!this.meta) return;
     this.meta.expected_close = true;
     this.saveMeta();
-    try {
-      const handle = await this.sandboxHandle();
-      await handle?.destroy(reason);
-    } catch (error) {
+    await destroySandbox(this.sandboxResolver, reason, (error) => {
       this.getTracer()?.log("ERROR", "sandbox.stop.failed", {
         ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
       });
-    }
+    });
     this.closeSandboxSockets(reason);
   }
 
@@ -1115,7 +1071,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     state: SessionState;
   }): Promise<void> {
     try {
-      const diagnostics = await this.collectDiagnostics();
+      const diagnostics = await collectAgentDiagnostics(this.sandboxResolver, this.redactionSecrets);
       const payload = buildSandboxDisconnectLogPayload({
         sessionId: options.sessionId,
         closeCode: options.closeCode,
@@ -1171,8 +1127,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       return new Response("Preview is not active.", { status: 404 });
     }
 
-    const handle = this.meta.preview_active ? await this.sandboxHandle() : null;
-    return proxyPreviewRequest(request, this.meta, token, handle);
+    return proxyPreviewRequest(request, this.meta, token, () => this.sandboxHandle());
   }
 
   submitAgentRequest(args: {

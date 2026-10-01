@@ -213,6 +213,8 @@ export async function createWorkspaceCacheSnapshot(input: {
   }
 }
 
+export const WORKSPACE_CACHE_UNSUPPORTED_REASON = "workspace cache is not supported by this sandbox provider";
+
 export async function createWorkspaceCacheSnapshotForSandbox(input: {
   db: D1Database;
   /** Absent when the Session's sandbox provider has no workspace cache. */
@@ -224,7 +226,7 @@ export async function createWorkspaceCacheSnapshotForSandbox(input: {
     return {
       created: false,
       phase: "backup",
-      reason: "workspace cache is not supported by this sandbox provider",
+      reason: WORKSPACE_CACHE_UNSUPPORTED_REASON,
     };
   }
   return createWorkspaceCacheSnapshot({

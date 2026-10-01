@@ -34,6 +34,8 @@ export async function createSession(
   const normalized = isNormalizedCreateSession(input)
     ? input
     : normalizeCreateSessionBody(input);
+  // Resolve before touching D1 so a bad deployment setting leaves no Session row behind.
+  const sandboxProvider = configuredSandboxProviderName(env);
   const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;
   const now = new Date().toISOString();
   const origin = new URL(requestUrlOrOrigin).origin;
@@ -73,7 +75,7 @@ export async function createSession(
       exec_model: normalized.exec_model,
       max_time: normalized.max_session_time,
       created_by: { id: createdBy.id, name: createdBy.name },
-      sandbox_provider: configuredSandboxProviderName(env),
+      sandbox_provider: sandboxProvider,
     });
   } catch (error) {
     const failedAt = new Date().toISOString();

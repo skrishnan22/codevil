@@ -1,12 +1,11 @@
+import type { SandboxLifecycleSnapshot } from "../sandbox.js";
+
 export type SandboxProviderName = "e2b" | "cloudflare";
 export const SANDBOX_PROVIDER_NAMES: readonly SandboxProviderName[] = ["e2b", "cloudflare"];
 
 export interface SandboxRef { provider: SandboxProviderName; id: string }
 export interface ShellResult { stdout: string; stderr: string; exitCode: number }
-export interface SandboxLifecycleView {
-  keepAlive?: { active: boolean; reason?: string; updated_at?: string };
-  lastEvent?: { type: string; at: string; exit_code?: number; reason?: string; error?: string };
-}
+export type SandboxLifecycleView = SandboxLifecycleSnapshot;
 
 export interface SandboxProvider {
   readonly name: SandboxProviderName;

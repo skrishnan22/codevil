@@ -361,4 +361,6 @@ test("a Session sandbox without a workspace cache ends the job without a snapsho
   assert.equal(getWorkspaceCacheJob(sql).status, "failed");
   assert.equal(getWorkspaceCacheJob(sql).snapshot_id, null);
   assert.match(getWorkspaceCacheJob(sql).last_error, /not supported/);
+  const skipLog = host.logs.find(([, event]) => event === "workspace_cache.create.failed");
+  assert.equal(skipLog[0], "INFO");
 });

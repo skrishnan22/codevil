@@ -61,7 +61,8 @@ export async function proxyPreviewRequest(
   request: Request,
   meta: SessionMeta,
   token: string,
-  handle: SandboxHandle | null,
+  /** Resolved only after access and token checks pass, so unauthenticated requests never reach the sandbox. */
+  resolveHandle: () => Promise<SandboxHandle | null>,
 ): Promise<Response> {
   const blocked = validatePreviewAccess(meta);
   if (blocked) return blocked;
@@ -71,6 +72,7 @@ export async function proxyPreviewRequest(
     return new Response("Unknown preview token.", { status: 404 });
   }
 
+  const handle = await resolveHandle();
   if (!handle) return new Response("Preview is not active.", { status: 404 });
 
   const originalUrl = new URL(request.url);

@@ -50,8 +50,6 @@ import { configuredWebOrigins, missingAuthConfigKeys } from "./auth-config.js";
 import { createEmailProvider } from "./email.js";
 import { can, type AuthAction, CreateInvitationRequestSchema, SetupClaimRequestSchema } from "@codevil/shared";
 import { configuredSandboxProviderName } from "./sandbox-provider/index.js";
-import { redactEvent } from "./redaction.js";
-import { collectWorkerSecretValues } from "./worker-env.js";
 import type { Env } from "./worker-env.js";
 import type { SocketAuthContext } from "./ws-authorization.js";
 import { createSocketAuthToken } from "./ws-token.js";
@@ -523,6 +521,14 @@ export async function handleCreateSession(
     }, 400);
   }
 
+  // Resolve before touching D1 so a bad deployment setting leaves no Session row behind.
+  let sandboxProvider: ReturnType<typeof configuredSandboxProviderName>;
+  try {
+    sandboxProvider = configuredSandboxProviderName(env);
+  } catch {
+    return json({ error: "Sandbox provider is not configured" }, 500);
+  }
+
   const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;
   const now = new Date().toISOString();
   const legacyGuards = legacyDirectoryGuardColumns();
@@ -595,7 +601,7 @@ export async function handleCreateSession(
       exec_model: normalized.exec_model,
       max_time: normalized.max_session_time,
       created_by: { id: auth.userId, name: auth.name },
-      sandbox_provider: configuredSandboxProviderName(env),
+      sandbox_provider: sandboxProvider,
     });
   } catch (error) {
     const failedAt = new Date().toISOString();
@@ -734,11 +740,6 @@ export async function handleDiagnostics(env: Env, sessionId: string): Promise<Re
   } catch {
     return json({ error: "Failed to read sandbox diagnostics" }, 500);
   }
-}
-
-/** Final HTTP boundary for sandbox-controlled diagnostic text. */
-export function redactSandboxDiagnosticResponse(data: unknown, env: Env): unknown {
-  return redactEvent(data, collectWorkerSecretValues(env));
 }
 
 export function json(data: unknown, status: number): Response {

@@ -14,7 +14,7 @@ import type {
 } from "./types.js";
 
 /** The slice of `@cloudflare/sandbox`'s Sandbox the adapter relies on. */
-export interface CloudflareSandboxLike {
+export interface CloudflareSandboxLike extends WorkspaceCacheSandbox {
   exec(command: string, options?: {
     cwd?: string;
     env?: Record<string, string>;
@@ -94,7 +94,12 @@ function cloudflareHandle(sandbox: CloudflareSandboxLike, ref: SandboxRef): Sand
       const steps: string[] = [];
       if (options?.mode !== undefined) steps.push(`chmod ${options.mode.toString(8)} ${shellQuote(path)}`);
       if (options?.owner !== undefined) steps.push(`chown ${OWNER_IDS[options.owner]} ${shellQuote(path)}`);
-      if (steps.length > 0) await exec(steps.join(" && "));
+      if (steps.length > 0) {
+        const result = await exec(steps.join(" && "));
+        if (result.exitCode !== 0) {
+          throw new Error(`Failed to set permissions on ${path} (exit ${result.exitCode}): ${result.stderr}`);
+        }
+      }
     },
     async startProcess(command, { processId, cwd, env }) {
       await retrySandboxOperation(() =>
@@ -117,7 +122,7 @@ function cloudflareHandle(sandbox: CloudflareSandboxLike, ref: SandboxRef): Sand
       await setCodevilSandboxKeepAlive(sandbox, false, reason);
       await sandbox.stop();
     },
-    workspaceCache: sandbox as unknown as WorkspaceCacheSandbox,
+    workspaceCache: sandbox,
   };
 }
 

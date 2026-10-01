@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { handleCreateSession } from "../dist/http-handlers.js";
 import { createSession } from "../dist/session-service.js";
 import { normalizeCreateSessionBody } from "../dist/session-directory.js";
 
@@ -117,6 +118,58 @@ test("createSession marks the session failed when orchestrator init throws", asy
   const [failedRow] = db.rows.values();
   assert.equal(failedRow.room_state, "failed");
   assert.equal(failedRow.sandbox_state, "failed");
+});
+
+test("createSession rejects a bad SANDBOX_PROVIDER before writing a Session row", async () => {
+  const db = createFakeDb();
+  const env = {
+    DB: db,
+    SANDBOX_PROVIDER: "modal",
+    ORCHESTRATOR: {
+      idFromName: () => assert.fail("must not reach the orchestrator"),
+      get: () => assert.fail("must not reach the orchestrator"),
+    },
+  };
+
+  await assert.rejects(
+    () => createSession(
+      env,
+      "https://codevil.example.workers.dev",
+      { repo: "github.com/acme/app" },
+      { id: "usr_123", name: "Alice" },
+    ),
+    /Unsupported SANDBOX_PROVIDER/,
+  );
+
+  assert.equal(db.rows.size, 0);
+});
+
+test("handleCreateSession fails on a bad SANDBOX_PROVIDER without touching D1 writes", async () => {
+  const writes = [];
+  const env = {
+    SANDBOX_PROVIDER: "modal",
+    DB: {
+      prepare: (sql) => ({ bind: () => { writes.push(sql); return { run: async () => ({}) }; } }),
+      batch: async () => { writes.push("batch"); },
+    },
+    ORCHESTRATOR: {
+      idFromName: () => assert.fail("must not reach the orchestrator"),
+      get: () => assert.fail("must not reach the orchestrator"),
+    },
+  };
+
+  const response = await handleCreateSession(
+    new Request("https://codevil.example/sessions", {
+      method: "POST",
+      body: JSON.stringify({ repo: "github.com/acme/app" }),
+    }),
+    env,
+    { userId: "usr_123", email: "owner@example.com", name: "Owner", role: "owner" },
+  );
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: "Sandbox provider is not configured" });
+  assert.deepEqual(writes, []);
 });
 
 function createFakeDb() {

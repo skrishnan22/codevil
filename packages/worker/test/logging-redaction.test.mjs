@@ -9,7 +9,6 @@ import {
   sandboxLifecycleLogger,
 } from "../dist/logging.js";
 import { handleCreateSession } from "../dist/http-handlers.js";
-import { redactSandboxDiagnosticResponse } from "../dist/http-handlers.js";
 
 test("worker logging redacts configured secrets from exceptions and nested sandbox output", () => {
   const lines = [];
@@ -145,22 +144,3 @@ test("final logging boundary never coerces hostile Error fields", () => {
   assert.doesNotThrow(() => workerLog("ERROR", "hostile.error", { error }, []));
 });
 
-test("sandbox diagnostics responses redact deployment secrets and tolerate hostile errors", () => {
-  const secret = "diagnostics-response-secret";
-  const hostile = {};
-  Object.defineProperty(hostile, "message", {
-    get() {
-      throw new Error("must not read hostile error");
-    },
-  });
-
-  const response = redactSandboxDiagnosticResponse({
-    logs: { stdout: `stdout ${secret}`, stderr: `stderr ${secret}` },
-    lifecycle: { lastEvent: { type: "error", at: "2026-07-10", error: secret } },
-    errors: { logs: hostile },
-  }, { CODEVIL_API_KEY: secret });
-
-  const serialized = JSON.stringify(response);
-  assert.doesNotMatch(serialized, new RegExp(secret));
-  assert.match(serialized, /\[REDACTED\]/);
-});

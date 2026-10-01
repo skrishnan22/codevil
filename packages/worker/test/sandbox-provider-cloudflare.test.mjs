@@ -99,6 +99,64 @@ test("cloudflare writeFile applies mode and owner only when requested", async ()
   ]);
 });
 
+test("cloudflare writeFile fails loudly when chmod/chown fails", async () => {
+  const sandbox = fakeCloudflareSandbox();
+  sandbox.exec = async () => ({ success: false, exitCode: 1, stdout: "", stderr: "chown: invalid user" });
+  const { provider } = providerWith(sandbox);
+  const handle = await provider.connect({ provider: "cloudflare", id: "ses_1" });
+  await assert.rejects(
+    () => handle.writeFile("/etc/key", "y", { mode: 0o600, owner: "codevil" }),
+    /Failed to set permissions on \/etc\/key \(exit 1\): chown: invalid user/,
+  );
+});
+
+async function withImmediateTimers(fn) {
+  const original = globalThis.setTimeout;
+  globalThis.setTimeout = (callback) => original(callback, 0);
+  try {
+    return await fn();
+  } finally {
+    globalThis.setTimeout = original;
+  }
+}
+
+test("cloudflare create retries transient keepalive failures", async () => {
+  const sandbox = fakeCloudflareSandbox();
+  let attempts = 0;
+  sandbox.setKeepAlive = async (active) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("503 temporarily unavailable");
+    sandbox.calls.push(["setKeepAlive", active]);
+  };
+  const { provider } = providerWith(sandbox);
+  await withImmediateTimers(() => provider.create({ sessionId: "ses_1", leaseMs: 1 }));
+  assert.equal(attempts, 2);
+  assert.deepEqual(sandbox.calls, [["setKeepAlive", true], ["setCodevilKeepAlive", true, "session provisioning"]]);
+});
+
+test("cloudflare startProcess retries transient failures but not permanent ones", async () => {
+  const sandbox = fakeCloudflareSandbox();
+  let attempts = 0;
+  sandbox.startProcess = async (command, options) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("no container instance available");
+    sandbox.calls.push(["startProcess", command, options]);
+  };
+  const { provider } = providerWith(sandbox);
+  const handle = await provider.connect({ provider: "cloudflare", id: "ses_1" });
+  await withImmediateTimers(() => handle.startProcess("node x", { processId: "p", cwd: "/workspace", env: {} }));
+  assert.equal(attempts, 2);
+  assert.equal(sandbox.calls.length, 1);
+
+  sandbox.startProcess = async () => { attempts += 1; throw new Error("syntax error"); };
+  attempts = 0;
+  await assert.rejects(
+    () => handle.startProcess("node x", { processId: "p", cwd: "/workspace", env: {} }),
+    /syntax error/,
+  );
+  assert.equal(attempts, 1);
+});
+
 test("cloudflare renewLease is a no-op", async () => {
   const sandbox = fakeCloudflareSandbox();
   const { provider } = providerWith(sandbox);

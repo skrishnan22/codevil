@@ -204,7 +204,9 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     },
     async sandboxHandle() {
       if (options.sandboxHandle !== undefined) return options.sandboxHandle;
-      return meta.sandbox_ref ? createFakeSandboxHandle({ ref: meta.sandbox_ref }) : null;
+      return createFakeSandboxHandle({
+        ref: meta.sandbox_ref ?? { provider: "cloudflare", id: meta.session_id },
+      });
     },
   };
 

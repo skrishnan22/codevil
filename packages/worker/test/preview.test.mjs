@@ -129,7 +129,7 @@ test("proxyPreviewRequest forwards through the handle's port and keeps the path"
   };
   const request = new Request("https://worker.example/sessions/ses_abc/preview/tok/app.js?x=1");
 
-  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "tok", handle);
+  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "tok", async () => handle);
 
   assert.equal(await response.text(), "body");
   assert.equal(response.headers.get("Cache-Control"), "no-store");
@@ -138,15 +138,35 @@ test("proxyPreviewRequest forwards through the handle's port and keeps the path"
 
 test("proxyPreviewRequest answers 404 when the Session has no sandbox handle", async () => {
   const request = new Request("https://worker.example/sessions/ses_abc/preview/tok/");
-  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "tok", null);
+  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "tok", async () => null);
   assert.equal(response.status, 404);
   assert.equal(await response.text(), "Preview is not active.");
 });
 
-test("proxyPreviewRequest still rejects unknown tokens before using the handle", async () => {
-  const handle = { fetchPort: async () => assert.fail("must not reach the sandbox") };
+test("proxyPreviewRequest still rejects unknown tokens before resolving the sandbox", async () => {
   const request = new Request("https://worker.example/sessions/ses_abc/preview/nope/");
-  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "nope", handle);
+  const response = await proxyPreviewRequest(request, await activePreviewMeta("tok"), "nope", async () => assert.fail("must not resolve the sandbox"));
   assert.equal(response.status, 404);
   assert.equal(await response.text(), "Unknown preview token.");
+});
+
+test("proxyPreviewRequest never resolves the sandbox for ended or inactive previews", async () => {
+  const resolve = async () => assert.fail("must not resolve the sandbox");
+  const request = new Request("https://worker.example/sessions/ses_abc/preview/tok/");
+
+  const ended = await proxyPreviewRequest(
+    request,
+    { ...(await activePreviewMeta("tok")), state: "completed" },
+    "tok",
+    resolve,
+  );
+  assert.equal(ended.status, 410);
+
+  const inactive = await proxyPreviewRequest(
+    request,
+    { ...(await activePreviewMeta("tok")), preview_active: false },
+    "tok",
+    resolve,
+  );
+  assert.equal(inactive.status, 404);
 });

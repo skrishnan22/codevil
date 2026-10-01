@@ -12,6 +12,7 @@ import {
   provisionSessionSandbox,
 } from "../dist/orchestrator/sandbox-handlers.js";
 import { processWorkspaceCacheJob } from "../dist/orchestrator/workspace-cache-job.js";
+import { createCloudflareSandboxProvider } from "../dist/sandbox-provider/cloudflare.js";
 import { handleSandboxProxy } from "../dist/sandbox-proxy.js";
 import {
   actor,
@@ -505,6 +506,44 @@ test("provisionSessionSandbox creates through the provider, records the ref, res
   assert.deepEqual(calls, [
     ["create", { sessionId: "ses_test", leaseMs: 30 * 60_000 }],
     ["startProcess", "codevil-agent", "/workspace"],
+  ]);
+});
+
+test("provisionSessionSandbox through the Cloudflare adapter keeps keepalive, then restore, then agent start", async () => {
+  const calls = [];
+  const sandbox = {
+    setKeepAlive: async (active) => calls.push(["setKeepAlive", active]),
+    setCodevilKeepAlive: async (active, reason) => calls.push(["setCodevilKeepAlive", active, reason]),
+    restoreBackup: async (backup) => calls.push(["restoreBackup", backup]),
+    createBackup: async () => ({}),
+    startProcess: async (_command, options) => calls.push(["startProcess", options.processId, options.autoCleanup]),
+  };
+  const provider = createCloudflareSandboxProvider({ binding: {}, getSandbox: () => sandbox });
+  const snapshotRow = {
+    id: "wsc_1",
+    backup_id: "backup_1",
+    backup_dir: "/workspace",
+    backup_local_bucket: 0,
+  };
+  const env = {
+    ...provisioningEnv(),
+    DB: { prepare: () => ({ bind: () => ({ first: async () => snapshotRow, run: async () => ({}) }) }) },
+  };
+  const { host } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: env },
+  );
+
+  await provisionSessionSandbox(host);
+
+  assert.equal(host.meta.state, "provisioning_sandbox");
+  assert.equal(host.meta.workspace_cache_restored, true);
+  assert.deepEqual(host.meta.sandbox_ref, { provider: "cloudflare", id: "ses_test" });
+  assert.deepEqual(calls, [
+    ["setKeepAlive", true],
+    ["setCodevilKeepAlive", true, "session provisioning"],
+    ["restoreBackup", { id: "backup_1", dir: "/workspace" }],
+    ["startProcess", "codevil-agent", true],
   ]);
 });
 

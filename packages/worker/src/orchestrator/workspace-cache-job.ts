@@ -5,6 +5,7 @@ import {
   createWorkspaceCacheSnapshotForSandbox,
   isRetryableWorkspaceCacheError,
   WORKSPACE_CACHE_TTL_SECONDS,
+  WORKSPACE_CACHE_UNSUPPORTED_REASON,
   WORKSPACE_CACHE_VERSION,
   type WorkspaceCacheCreateResult,
   type WorkspaceCacheSandbox,
@@ -227,7 +228,9 @@ export async function processWorkspaceCacheJob(
     new Date().toISOString(),
     WORKSPACE_CACHE_JOB_ID,
   );
-  host.getTracer()?.log("ERROR", "workspace_cache.create.failed", {
+  // A provider without a workspace cache is a skip, not a failure.
+  const level = result.reason === WORKSPACE_CACHE_UNSUPPORTED_REASON ? "INFO" : "ERROR";
+  host.getTracer()?.log(level, "workspace_cache.create.failed", {
     phase: result.phase ?? "unknown",
     reason,
     repo: job.repo,

@@ -251,6 +251,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   async init(sessionId: string, prompt: string, repo: string, options: InitOptions): Promise<void> {
+    const createdAt = new Date().toISOString();
     this.meta = {
       session_id: sessionId,
       prompt,
@@ -268,7 +269,9 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       queued_runs: [],
       created_by: options.created_by,
       sandbox_provider: options.sandbox_provider ?? "cloudflare",
-      created_at: new Date().toISOString(),
+      max_idle_time: options.max_idle_time ?? "10m",
+      last_activity_at: createdAt,
+      created_at: createdAt,
     };
     this.saveMeta();
 

@@ -31,6 +31,7 @@ export interface InitOptions {
   max_time?: string;
   created_by?: ParticipantIdentity;
   sandbox_provider?: "e2b" | "cloudflare";
+  max_idle_time?: string;
 }
 
 export const SNAPSHOT_TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([

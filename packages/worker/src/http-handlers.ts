@@ -602,6 +602,7 @@ export async function handleCreateSession(
       max_time: normalized.max_session_time,
       created_by: { id: auth.userId, name: auth.name },
       sandbox_provider: sandboxProvider,
+      max_idle_time: normalized.max_idle_time,
     });
   } catch (error) {
     const failedAt = new Date().toISOString();

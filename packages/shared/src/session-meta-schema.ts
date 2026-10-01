@@ -39,6 +39,10 @@ export const SessionMetaSchema = z.object({
   workspace_cache_restored: z.boolean().optional(),
   sandbox_provider: z.enum(["e2b", "cloudflare"]).optional(),
   sandbox_ref: z.object({ provider: z.enum(["e2b", "cloudflare"]), id: z.string() }).optional(),
+  max_idle_time: z.string().optional(),
+  last_activity_at: z.string().optional(),
+  sandbox_paused_at: z.string().optional(),
+  sandbox_lease_renewed_at: z.string().optional(),
   last_decision: LastDecisionSchema.optional(),
 });
 

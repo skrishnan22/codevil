@@ -76,6 +76,7 @@ export async function createSession(
       max_time: normalized.max_session_time,
       created_by: { id: createdBy.id, name: createdBy.name },
       sandbox_provider: sandboxProvider,
+      max_idle_time: normalized.max_idle_time,
     });
   } catch (error) {
     const failedAt = new Date().toISOString();

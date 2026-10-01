@@ -82,8 +82,10 @@ test("createSession inserts a session, initializes the orchestrator, and returns
       max_time: normalized.max_session_time,
       created_by: { id: "usr_123", name: "Alice" },
       sandbox_provider: "cloudflare",
+      max_idle_time: normalized.max_idle_time,
     },
   ]);
+  assert.equal(initCall[3].max_idle_time, "10m");
 });
 
 test("createSession marks the session failed when orchestrator init throws", async () => {

@@ -99,6 +99,7 @@ export async function startEntrypoint(
 
   await configureDefaultGitIdentity();
 
+  const wsTokenSource = createSandboxWsTokenSource();
   let connection: ReconnectingWebSocketClient;
   let proxyCapabilityRefreshTimer: NodeJS.Timeout | undefined;
 
@@ -125,7 +126,7 @@ export async function startEntrypoint(
     createSocket: () => {
       // A resumed sandbox may have an expired in-memory token; the Orchestrator
       // writes a fresh one to the token file before the agent reconnects.
-      wsUrl = currentSandboxWebSocketUrl(wsUrl, readTokenFile);
+      wsUrl = wsTokenSource.applyTo(wsUrl);
       sandboxLogger().log("INFO", "sandbox.ws.connecting", { target: wsUrlForLog(wsUrl) });
       return new WebSocket(wsUrl);
     },
@@ -168,20 +169,42 @@ export async function startEntrypoint(
 
 export const SANDBOX_WS_TOKEN_FILE = "/run/codevil/ws-token";
 
-export function currentSandboxWebSocketUrl(wsUrl: string, readToken: () => string | undefined): string {
-  const token = readToken()?.trim();
-  return token ? withSandboxWebSocketToken(wsUrl, token) : wsUrl;
-}
-
-function readTokenFile(): string | undefined {
+export function readTokenFile(path: string = SANDBOX_WS_TOKEN_FILE): string | undefined {
   try {
-    return readFileSync(SANDBOX_WS_TOKEN_FILE, "utf8");
-  } catch {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== "ENOENT") {
+      sandboxLogger().log("WARN", "sandbox.ws_token_file.read_failed", { code: code ?? "unknown" });
+    }
     return undefined;
   }
 }
 
-function withSandboxWebSocketToken(wsUrl: string, token: string | undefined): string {
+export interface SandboxWsTokenSource {
+  applyTo(wsUrl: string): string;
+}
+
+/**
+ * Adopts a token from the token file only when it differs from the last file
+ * token this process consumed. An unchanged (possibly stale) file therefore
+ * never overrides a newer in-memory token delivered via proxy_capabilities.
+ */
+export function createSandboxWsTokenSource(
+  readToken: () => string | undefined = readTokenFile,
+): SandboxWsTokenSource {
+  let lastFileToken: string | undefined;
+  return {
+    applyTo(wsUrl: string): string {
+      const token = readToken()?.trim();
+      if (!token || token === lastFileToken) return wsUrl;
+      lastFileToken = token;
+      return withSandboxWebSocketToken(wsUrl, token);
+    },
+  };
+}
+
+export function withSandboxWebSocketToken(wsUrl: string, token: string | undefined): string {
   if (!token) return wsUrl;
   const url = new URL(wsUrl);
   url.searchParams.set("sandbox_ws_token", token);

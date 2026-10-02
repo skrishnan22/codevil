@@ -156,19 +156,21 @@ function e2bHandle(context: {
       );
       assertOk(prepare, `Failed to prepare staging for ${path}`);
       try {
-        await sandbox.files.write(stage, content, { user: "root" });
+        try {
+          await sandbox.files.write(stage, content, { user: "root" });
+        } catch (error) {
+          throw mapNotFound(sdk, error);
+        }
+        const steps: string[] = [];
+        if (fileOptions?.mode !== undefined) steps.push(`chmod ${fileOptions.mode.toString(8)} ${shellQuote(stage)}`);
+        if (fileOptions?.owner !== undefined) steps.push(`chown ${OWNER_IDS[fileOptions.owner]} ${shellQuote(stage)}`);
+        steps.push(`mkdir -p ${shellQuote(parentDirectory(path))}`);
+        steps.push(`mv -fT ${shellQuote(stage)} ${shellQuote(path)}`);
+        assertOk(await exec(steps.join(" && ")), `Failed to write ${path}`);
       } catch (error) {
-        throw mapNotFound(sdk, error);
-      }
-      const steps: string[] = [];
-      if (fileOptions?.mode !== undefined) steps.push(`chmod ${fileOptions.mode.toString(8)} ${shellQuote(stage)}`);
-      if (fileOptions?.owner !== undefined) steps.push(`chown ${OWNER_IDS[fileOptions.owner]} ${shellQuote(stage)}`);
-      steps.push(`mkdir -p ${shellQuote(parentDirectory(path))}`);
-      steps.push(`mv -fT ${shellQuote(stage)} ${shellQuote(path)}`);
-      const result = await exec(steps.join(" && "));
-      if (result.exitCode !== 0) {
+        // Non-zero exit or transport failure: never leave staged content behind.
         await exec(`rm -f ${shellQuote(stage)}`).catch(() => undefined);
-        throw new Error(`Failed to write ${path} (exit ${result.exitCode}): ${result.stderr}`);
+        throw error;
       }
     },
     async startProcess(command, { processId, cwd, env }) {
@@ -178,14 +180,16 @@ function e2bHandle(context: {
         throw new Error(`Failed to create ${LOG_DIR} (exit ${mkdir.exitCode}): ${mkdir.stderr}`);
       }
       const redirected = `sh -c ${shellQuote(command)} >${LOG_DIR}/${processId}.out 2>${LOG_DIR}/${processId}.err`;
+      let handle: { disconnect(): Promise<void> };
       try {
-        const handle = await sandbox.commands.run(redirected, { background: true, user: "root", cwd, envs: env });
-        // The process keeps running; this only closes the SDK's event stream,
-        // which would otherwise keep the Durable Object resident.
-        await handle.disconnect();
+        handle = await sandbox.commands.run(redirected, { background: true, user: "root", cwd, envs: env });
       } catch (error) {
         throw mapNotFound(sdk, error);
       }
+      // Closes the SDK's event stream so the Durable Object is not kept resident.
+      // The process is already running, so a failure here must not fail
+      // startProcess: a retry would start a duplicate agent.
+      await handle.disconnect().catch(() => undefined);
     },
     async readProcessLogs(processId) {
       assertProcessId(processId);

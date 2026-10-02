@@ -186,6 +186,30 @@ test("writeFile stages as root, permissions the staged file, then renames over t
   );
 });
 
+test("writeFile removes the staged file when a step throws instead of exiting non-zero", async () => {
+  const commands = [];
+  const { p } = provider({}, {
+    run: async (cmd) => {
+      commands.push(cmd);
+      if (cmd.includes("mv -fT")) throw new Error("transport reset");
+      return { stdout: "", stderr: "", exitCode: 0 };
+    },
+  });
+  const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
+  await assert.rejects(handle.writeFile("/run/x", "y", { mode: 0o600 }), /transport reset/);
+  assert.match(commands.at(-1), /^rm -f '\/run\/\.codevil-stage\/[0-9a-f-]{36}'$/);
+});
+
+test("startProcess succeeds when disconnecting the command stream fails", async () => {
+  const { p } = provider({}, {
+    run: async (cmd, opts) => opts?.background
+      ? { disconnect: async () => { throw new Error("stream already closed"); } }
+      : { stdout: "", stderr: "", exitCode: 0 },
+  });
+  const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
+  await handle.startProcess("x", { processId: "p", cwd: "/", env: {} });
+});
+
 test("writeFile quotes hostile paths and skips chmod/chown when not requested", async () => {
   const { p, fake } = provider();
   const handle = await p.connect({ provider: "e2b", id: "sbx_1" });

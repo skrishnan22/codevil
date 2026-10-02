@@ -76,6 +76,26 @@ export class ReconnectingWebSocketClient {
     this.socket = undefined;
   }
 
+  /**
+   * Drops the current socket (live, half-dead, or mid-backoff) and reconnects
+   * at once with a fresh `createSocket()` call, e.g. after the credentials the
+   * old socket was opened with changed. Queued messages are kept for the new socket.
+   */
+  reconnectNow(): void {
+    if (this.stopped) return;
+    this.clearConnectionTimers();
+    if (this.reconnectTimer !== undefined) {
+      this.options.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    const previous = this.socket;
+    // Detach first: every handler ignores a socket that is no longer current.
+    this.socket = undefined;
+    previous?.terminate();
+    this.reconnectAttempt = 0;
+    this.connect();
+  }
+
   send(value: string): void {
     if (this.socket?.readyState === OPEN) {
       this.socket.send(value);

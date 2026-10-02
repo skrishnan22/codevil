@@ -105,6 +105,7 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
           wsUrl,
           wsToken,
           provider: meta.provider,
+          sandboxProvider: provider.name,
           providerConfig,
           proxyBase: meta.worker_url,
           proxyTokens,

@@ -6,6 +6,8 @@ export interface SandboxProcessEnvOptions {
   wsUrl: string;
   wsToken: string;
   provider: string;
+  /** Sandbox provider running this process; the preview server adapts to its host names. */
+  sandboxProvider?: string;
   /** Registry-limited, non-secret provider values (for example Cloudflare IDs). */
   providerConfig?: ProviderPublicConfig;
   proxyBase?: string;
@@ -148,6 +150,7 @@ export function sandboxProcessEnv(options: SandboxProcessEnvOptions): Record<str
     CODEVIL_SANDBOX_WS_TOKEN: options.wsToken,
     CODEVIL_WORKSPACE: "/workspace",
     CODEVIL_PROVIDER: options.provider,
+    ...(options.sandboxProvider ? { CODEVIL_SANDBOX_PROVIDER: options.sandboxProvider } : {}),
     ...(options.providerConfig && Object.keys(options.providerConfig).length > 0
       ? { CODEVIL_PROVIDER_CONFIG: JSON.stringify(options.providerConfig) }
       : {}),

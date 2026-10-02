@@ -32,6 +32,14 @@ test("checked-in Worker config keeps production on the Cloudflare sandbox until 
   assert.match(envExample, /^E2B_API_KEY=/m);
 });
 
+test("CI builds and smoke-tests both the Cloudflare and the E2B sandbox image variants", async () => {
+  const workflow = await readFile(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+  assert.match(workflow, /docker build -f Dockerfile\.sandbox -t codevil-sandbox:ci \./);
+  assert.match(workflow, /--build-arg SANDBOX_BASE=node:22-slim -t codevil-sandbox-e2b:ci/);
+  assert.match(workflow, /CODEVIL_SANDBOX_IMAGE: codevil-sandbox-e2b:ci/);
+  assert.equal(workflow.match(/sandbox-image-smoke\.mjs/g)?.length, 2);
+});
+
 test("operator config and local variables are templates, not deployment credentials", async () => {
   const [ignore, operatorTemplate, varsTemplate] = await Promise.all([
     readFile(resolve(repoRoot, ".gitignore"), "utf8"),

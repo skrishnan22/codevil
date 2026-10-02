@@ -482,3 +482,14 @@ test("does not retry non-transient sandbox failures", async () => {
 
   assert.equal(calls, 1);
 });
+
+test("sandbox process environment names the sandbox provider only when one is given", () => {
+  const base = {
+    wsUrl: "wss://codevil.example.com/sessions/ses_123/sandbox/ws",
+    wsToken: "token",
+    provider: "anthropic",
+  };
+  assert.equal(sandboxProcessEnv({ ...base, sandboxProvider: "e2b" }).CODEVIL_SANDBOX_PROVIDER, "e2b");
+  assert.equal(sandboxProcessEnv({ ...base, sandboxProvider: "cloudflare" }).CODEVIL_SANDBOX_PROVIDER, "cloudflare");
+  assert.equal("CODEVIL_SANDBOX_PROVIDER" in sandboxProcessEnv(base), false);
+});

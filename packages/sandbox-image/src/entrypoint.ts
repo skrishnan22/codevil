@@ -122,6 +122,18 @@ export async function startEntrypoint(
   });
   const dispatch = createSandboxMessageDispatcher(runtime);
 
+  watchSandboxWsToken({
+    tokenSource: wsTokenSource,
+    getUrl: () => wsUrl,
+    setUrl: (url) => { wsUrl = url; },
+    // A resumed sandbox's old socket is dead but only noticed after the heartbeat
+    // timeout; the new token is the signal to replace it now.
+    onTokenAdopted: () => {
+      sandboxLogger().log("INFO", "sandbox.ws_token_file.adopted");
+      connection.reconnectNow();
+    },
+  });
+
   connection = new ReconnectingWebSocketClient({
     createSocket: () => {
       // A resumed sandbox may have an expired in-memory token; the Orchestrator
@@ -202,6 +214,36 @@ export function createSandboxWsTokenSource(
       return withSandboxWebSocketToken(wsUrl, token);
     },
   };
+}
+
+export const WS_TOKEN_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Polls the token file and calls `onTokenAdopted` when it supplied a token the
+ * process had not used yet (an unchanged file is ignored, per the token
+ * source's rules). Returns a function that stops the polling. The timer never
+ * keeps the process alive and nothing here logs the token.
+ */
+export function watchSandboxWsToken(options: {
+  tokenSource: SandboxWsTokenSource;
+  getUrl(): string;
+  setUrl(url: string): void;
+  onTokenAdopted(): void;
+  intervalMs?: number;
+  setInterval?: (callback: () => void, delayMs: number) => { unref?: () => unknown };
+  clearInterval?: (timer: never) => void;
+}): () => void {
+  const schedule = options.setInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
+  const cancel = options.clearInterval ?? ((timer: never) => clearInterval(timer));
+  const timer = schedule(() => {
+    const current = options.getUrl();
+    const next = options.tokenSource.applyTo(current);
+    if (next === current) return;
+    options.setUrl(next);
+    options.onTokenAdopted();
+  }, options.intervalMs ?? WS_TOKEN_POLL_INTERVAL_MS);
+  timer.unref?.();
+  return () => cancel(timer as never);
 }
 
 export function withSandboxWebSocketToken(wsUrl: string, token: string | undefined): string {

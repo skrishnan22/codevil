@@ -47,6 +47,13 @@ jobs:
 
       - run: node packages/sandbox-image/test/sandbox-image-smoke.mjs
 
+      # The E2B template is built from the same Dockerfile on a plain Node base.
+      - run: docker build -f Dockerfile.sandbox --build-arg SANDBOX_BASE=node:22-slim -t codevil-sandbox-e2b:ci .
+
+      - run: node packages/sandbox-image/test/sandbox-image-smoke.mjs
+        env:
+          CODEVIL_SANDBOX_IMAGE: codevil-sandbox-e2b:ci
+
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs:

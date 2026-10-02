@@ -147,3 +147,46 @@ test("buffers outbound messages and flushes them after reconnect", () => {
 
   assert.deepEqual(sockets[1].sent, ["during reconnect"]);
 });
+
+test("reconnectNow drops the live socket and reconnects immediately with a fresh socket", () => {
+  const { client, sockets, scheduler, events } = createHarness();
+  client.start();
+  sockets[0].open();
+  client.send("before");
+  assert.equal(sockets.length, 1);
+
+  client.reconnectNow();
+
+  assert.equal(sockets[0].terminated, true);
+  assert.equal(sockets.length, 2);
+  // The replaced socket's late close must not trigger a second reconnect.
+  sockets[0].disconnect(1006, "late");
+  assert.equal(sockets.length, 2);
+  assert.deepEqual(scheduler.delays(), []);
+  assert.deepEqual(events.filter((event) => event.startsWith("close")), []);
+
+  sockets[1].open();
+  client.send("after");
+  assert.deepEqual(sockets[1].sent.slice(-1), ["after"]);
+});
+
+test("reconnectNow also cuts a pending backoff short", () => {
+  const { client, sockets, scheduler } = createHarness();
+  client.start();
+  sockets[0].open();
+  sockets[0].disconnect();
+  assert.deepEqual(scheduler.delays().includes(1_000), true);
+
+  client.reconnectNow();
+
+  assert.equal(sockets.length, 2);
+  assert.equal(scheduler.delays().includes(1_000), false);
+});
+
+test("reconnectNow is a no-op once the client is stopped", () => {
+  const { client, sockets } = createHarness();
+  client.start();
+  client.stop();
+  client.reconnectNow();
+  assert.equal(sockets.length, 1);
+});

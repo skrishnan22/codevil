@@ -493,7 +493,7 @@ test("provisionSessionSandbox creates through the provider, records the ref, res
     create: async (options) => { calls.push(["create", options]); return handle; },
   });
   const { host } = createFakeHost(
-    { state: "initializing", max_time: "30m" },
+    { state: "initializing", max_time: "30m", created_at: new Date().toISOString() },
     { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
   );
 
@@ -501,11 +501,16 @@ test("provisionSessionSandbox creates through the provider, records the ref, res
 
   assert.equal(host.meta.state, "provisioning_sandbox");
   assert.deepEqual(host.meta.sandbox_ref, { provider: "cloudflare", id: "ses_test" });
+  assert.ok(host.meta.sandbox_lease_renewed_at);
+  // The lease is the time left until max_time, measured from Session creation.
+  const [, createOptions] = calls[0];
+  assert.ok(createOptions.leaseMs <= 30 * 60_000 && createOptions.leaseMs > 30 * 60_000 - 5_000);
+  calls[0][1] = { sessionId: createOptions.sessionId };
   assert.equal(host.meta.workspace_cache_restored, false);
   assert.equal(await host.ctx.storage.get("codevil:sandbox_secret"), "handle-secret");
   assert.ok(host.redactionSecrets.includes("handle-secret"));
   assert.deepEqual(calls, [
-    ["create", { sessionId: "ses_test", leaseMs: 30 * 60_000 }],
+    ["create", { sessionId: "ses_test" }],
     ["startProcess", "codevil-agent", "/workspace"],
   ]);
 });

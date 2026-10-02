@@ -24,7 +24,6 @@ import { buildSandboxDisconnectLogPayload } from "./sandbox.js";
 import {
   collectAgentDiagnostics,
   connectSandboxHandle,
-  destroySandbox,
   loadStoredSandboxSecret,
   readRedactedAgentLogs,
   SANDBOX_SECRET_KEY,
@@ -40,6 +39,7 @@ import {
   SANDBOX_RECONNECT_GRACE_MS,
   sandboxConnectionMode,
   completeSandboxReconnect,
+  isUnexpectedSandboxDisconnect,
   sandboxReconnectExpired,
 } from "./sandbox-connection.js";
 import { redactEvent } from "./redaction.js";
@@ -117,8 +117,19 @@ import {
   drainQueuedAgentWorkIfReady,
   dispatchSandboxSocketMessage,
   initializeSandboxConnection,
+  issueSandboxWebSocketCapability,
   provisionSessionSandbox,
 } from "./orchestrator/sandbox-handlers.js";
+import {
+  clearStalePausedMarker,
+  expireSessionAtMaxTime,
+  pauseIdleSandbox,
+  prepareAuthenticatedPreview,
+  renewSandboxLeaseIfDue,
+  resumeSandbox,
+  sandboxAlarmDeadlines,
+  terminateSandbox as terminateSandboxFn,
+} from "./orchestrator/sandbox-resume.js";
 import {
   nextSessionDirectoryTimestamp,
   runSessionDirectoryUpdateWithRetry,
@@ -141,6 +152,8 @@ import {
 import { armNextAlarm as armNextAlarmAt } from "./orchestrator/alarm.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
+
+const ACTIVITY_WRITE_INTERVAL_MS = 1_000;
 
 export class Orchestrator extends DurableObject<Env> implements OrchestratorHost {
   readonly ctx: DurableObjectState<{}>;
@@ -292,18 +305,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
 
     const createdAt = Date.parse(this.meta.created_at);
-    const maxTimeMs = parseMaxTimeMs(this.meta.max_time);
-    if (maxTimeMs !== null && now >= createdAt + maxTimeMs) {
-      const activeRunId = this.meta.active_run?.id;
-      this.transition("timed_out");
-      if (activeRunId) {
-        this.cancelOpenQuestions(activeRunId, "session timed out");
-      }
-      this.appendAndBroadcast({
-        type: "error",
-        message: `Session timed out after ${this.meta.max_time}.`,
-      });
-      await this.terminateSandbox("timed out");
+    if (await expireSessionAtMaxTime(this, now)) {
       await this.armNextAlarm(Date.now() - 1);
       return;
     }
@@ -339,6 +341,10 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       await this.armNextAlarm(Date.now() - 1);
       return;
     }
+
+    clearStalePausedMarker(this);
+    await renewSandboxLeaseIfDue(this, now);
+    await pauseIdleSandbox(this, now);
 
     drainQueuedAgentWorkIfReady(this);
     await this.armNextAlarm(now);
@@ -566,10 +572,11 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     });
 
     if (isSandbox && this.meta) {
-      if (
-        !this.meta.expected_close
-        && !isTerminalState(this.meta.state)
-      ) {
+      if (isUnexpectedSandboxDisconnect({
+        expectedClose: this.meta.expected_close,
+        state: this.meta.state,
+        otherSandboxSocketsAttached: this.ctx.getWebSockets("sandbox").some((socket) => socket !== ws),
+      })) {
         const state = this.meta.state;
         if (!this.meta.sandbox_disconnected_at) {
           this.meta.sandbox_disconnected_at = new Date().toISOString();
@@ -768,16 +775,32 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     return sandboxDiagnosticsResponse(this.sandboxResolver, this.redactionSecrets);
   }
 
-  private async terminateSandbox(reason: string): Promise<void> {
+  async terminateSandbox(reason: string): Promise<void> {
+    await terminateSandboxFn(this, reason);
+  }
+
+  recordActivity(): void {
     if (!this.meta) return;
-    this.meta.expected_close = true;
+    const lastMs = this.meta.last_activity_at ? Date.parse(this.meta.last_activity_at) : Number.NaN;
+    const nowMs = Date.now();
+    // Preview traffic can arrive many times a second; the idle clock only needs second resolution.
+    if (Number.isFinite(lastMs) && nowMs - lastMs < ACTIVITY_WRITE_INTERVAL_MS) return;
+    this.meta.last_activity_at = new Date(nowMs).toISOString();
     this.saveMeta();
-    await destroySandbox(this.sandboxResolver, reason, (error) => {
-      this.getTracer()?.log("ERROR", "sandbox.stop.failed", {
+    // The idle-pause deadline moved; re-arm so the alarm tracks it (only providers that pause have one).
+    if (sandboxAlarmDeadlines(this).idlePauseAt !== null) void this.armNextAlarmSafe();
+  }
+
+  requestSandboxResume(): void {
+    this.ctx.waitUntil(resumeSandbox(this).catch((error) => {
+      this.getTracer()?.log("ERROR", "sandbox.resume.request_failed", {
         ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
       });
-    });
-    this.closeSandboxSockets(reason);
+    }));
+  }
+
+  issueSandboxWebSocketToken(): Promise<string> {
+    return issueSandboxWebSocketCapability(this);
   }
 
   // --- OrchestratorHost delegation ---
@@ -1035,6 +1058,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       sandboxDisconnectedAt: this.meta.sandbox_disconnected_at,
       presentationRetryAt: this.liveRunCards.nextRetryAt(),
       workspaceCacheRetryAt: nextWorkspaceCacheJobAt(this.sql),
+      ...sandboxAlarmDeadlines(this),
     }, (deadline) => this.ctx.storage.setAlarm(deadline));
   }
 
@@ -1046,7 +1070,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     });
   }
 
-  private closeSandboxSockets(reason: string): void {
+  closeSandboxSockets(reason: string): void {
     for (const sandbox of this.ctx.getWebSockets("sandbox")) {
       sandbox.close(1000, reason);
     }
@@ -1115,7 +1139,10 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       return new Response("Preview is not active.", { status: 404 });
     }
 
-    return proxyPreviewRequest(request, this.meta, token, () => this.sandboxHandle());
+    return proxyPreviewRequest(request, this.meta, token, () => this.sandboxHandle(), {
+      // Resume and activity are earned only by a request that passed the token check.
+      beforeProxy: () => prepareAuthenticatedPreview(this),
+    });
   }
 
   submitAgentRequest(args: {

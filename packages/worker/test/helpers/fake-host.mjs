@@ -1,5 +1,6 @@
 import { isValidTransition } from "../../../shared/dist/index.js";
 import { createAgentRun } from "../../dist/agent-runs.js";
+import { terminateSandbox as terminateSandboxForHost } from "../../dist/orchestrator/sandbox-resume.js";
 
 const actor = { id: "usr_test", name: "Tester" };
 
@@ -98,6 +99,61 @@ export function createFakeTracer() {
   };
 }
 
+/** A tracer that records `log` calls so tests can assert on (redacted) log output. */
+export function createRecordingTracer() {
+  const logs = [];
+  return {
+    ...createFakeTracer(),
+    logs,
+    log: (level, name, attributes) => logs.push({ level, name, attributes }),
+  };
+}
+
+/**
+ * An E2B-like handle that records its calls as `[name, ...args]`.
+ * `pauseError` makes `pause` reject.
+ */
+export function createFakeE2BHandle(options = {}) {
+  const calls = [];
+  return {
+    calls,
+    ref: { provider: "e2b", id: "sbx_1" },
+    secret: options.secret,
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    writeFile: async (...args) => { calls.push(["writeFile", ...args]); },
+    startProcess: async () => {},
+    readProcessLogs: async () => ({ stdout: "", stderr: "" }),
+    fetchPort: async () => new Response("ok"),
+    renewLease: async (...args) => {
+      calls.push(["renewLease", ...args]);
+      if (options.renewError) throw options.renewError;
+    },
+    pause: async () => {
+      calls.push(["pause"]);
+      if (options.pauseError) throw options.pauseError;
+    },
+    destroy: async (...args) => { calls.push(["destroy", ...args]); },
+  };
+}
+
+/** An E2B-like provider whose `connect` counts calls and resolves `handle` (or throws `connectError`). */
+export function createFakeE2BProvider(handle, options = {}) {
+  const provider = {
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false },
+    connectCalls: 0,
+    connectOptions: [],
+    create: async () => handle,
+    connect: async (_ref, connectOptions) => {
+      provider.connectCalls += 1;
+      provider.connectOptions.push(connectOptions);
+      if (options.connectError) throw options.connectError;
+      return handle;
+    },
+  };
+  return provider;
+}
+
 export function createFakeHost(metaOverrides = {}, options = {}) {
   const meta = createDefaultMeta(metaOverrides);
   const broadcasts = [];
@@ -108,6 +164,13 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
   let saveMetaCalls = 0;
   let previewRevoked = false;
   const storage = new Map();
+  // `e2b: true` swaps in an E2B-like provider and a call-recording handle.
+  const e2bHandle = options.e2b ? createFakeE2BHandle(options) : undefined;
+  const e2bProvider = options.e2b ? createFakeE2BProvider(e2bHandle, options) : undefined;
+  const sandboxSockets = options.sandboxConnected === false ? [] : [{}];
+  const closedSandboxSockets = [];
+  const activity = { count: 0 };
+  const resumeRequests = { count: 0 };
 
   const host = {
     meta,
@@ -127,7 +190,7 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
       },
       getWebSockets(tag) {
         if (tag !== "sandbox") return [];
-        return options.sandboxConnected === false ? [] : [{}];
+        return [...sandboxSockets];
       },
     },
     redactionSecrets: [],
@@ -200,10 +263,28 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     },
     armNextAlarm: async () => {},
     sandboxProvider() {
-      return options.sandboxProvider ?? createFakeSandboxProvider();
+      return options.sandboxProvider ?? e2bProvider ?? createFakeSandboxProvider();
+    },
+    recordActivity() {
+      activity.count += 1;
+      meta.last_activity_at = new Date().toISOString();
+    },
+    requestSandboxResume() {
+      resumeRequests.count += 1;
+    },
+    closeSandboxSockets(reason) {
+      closedSandboxSockets.push(reason);
+      sandboxSockets.length = 0;
+    },
+    async issueSandboxWebSocketToken() {
+      return "fresh_token";
+    },
+    terminateSandbox(reason) {
+      return terminateSandboxForHost(host, reason);
     },
     async sandboxHandle() {
       if (options.sandboxHandle !== undefined) return options.sandboxHandle;
+      if (e2bHandle) return e2bHandle;
       return createFakeSandboxHandle({
         ref: meta.sandbox_ref ?? { provider: "cloudflare", id: meta.session_id },
       });
@@ -218,6 +299,12 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     sandboxMessages,
     directoryPatches,
     storage,
+    handle: e2bHandle,
+    provider: e2bProvider,
+    sandboxSockets,
+    closedSandboxSockets,
+    activity,
+    resumeRequests,
     get saveMetaCalls() {
       return saveMetaCalls;
     },

@@ -25,6 +25,8 @@ import { getProvisioningCredentialContext, requireProviderPublicConfig } from ".
 import { createSandboxGitProxyToken, createSandboxProxyToken } from "../sandbox-proxy.js";
 import { createSandboxWebSocketToken } from "../sandbox-ws-token.js";
 import { traceSandboxProvisioning } from "./provisioning.js";
+import { sandboxProviderMaxLeaseMs } from "../sandbox-provider/index.js";
+import { sandboxLeaseMs } from "./sandbox-lifecycle.js";
 import { registerSandboxSecret, SANDBOX_SECRET_KEY } from "./sandbox-access.js";
 import {
   buildPreviewUrl,
@@ -39,6 +41,7 @@ import {
   finishRunAndDrainQueue,
   setActiveRunState,
 } from "./agent-run-coordinator.js";
+import { sandboxSocketAttached } from "./sandbox-resume.js";
 import { freezePlanRevision } from "./plan-revision-actions.js";
 import {
   cancelOpenQuestions,
@@ -75,9 +78,15 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
         const provider = host.sandboxProvider();
         const handle = await provider.create({
           sessionId: meta.session_id,
-          leaseMs: parseMaxTimeMs(meta.max_time) ?? 3_600_000,
+          leaseMs: sandboxLeaseMs({
+            now: Date.now(),
+            createdAt: Date.parse(meta.created_at),
+            maxTimeMs: parseMaxTimeMs(meta.max_time),
+            providerMaxMs: sandboxProviderMaxLeaseMs(host.workerEnv, provider.name),
+          }),
         });
         meta.sandbox_ref = handle.ref;
+        meta.sandbox_lease_renewed_at = new Date().toISOString();
         host.saveMeta();
         if (handle.secret) {
           // Redact before anything can log it, then persist for cold starts.
@@ -344,6 +353,7 @@ export function handleSandboxCloneComplete(
 
   if (host.transition("ready")) {
     host.updateDirectory({ room_state: "ready", sandbox_state: "ready" });
+    host.recordActivity();
     host.appendAndBroadcast({ type: "status", message: "Repository cloned. Session is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
     // Backups can outlive the socket message invocation. Leave the work in
@@ -364,7 +374,7 @@ export function drainQueuedAgentWorkIfReady(host: OrchestratorHost): void {
     host.meta?.state === "ready"
     && !host.meta.active_run
     && host.meta.queued_runs.length > 0
-    && host.ctx.getWebSockets("sandbox").length > 0
+    && sandboxSocketAttached(host)
   ) {
     finishRunAndDrainQueue(host, "completed");
   }

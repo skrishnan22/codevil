@@ -35,6 +35,7 @@ import {
   ensureAnnotatableRevision,
   lockPlanRevision,
 } from "./plan-revision-actions.js";
+import { sandboxSocketAttached } from "./sandbox-resume.js";
 
 export function handleApprove(
   host: OrchestratorHost,
@@ -99,7 +100,14 @@ export function handleAgentRequest(
   const trimmed = text.trim();
   if (!trimmed) return;
 
-  const sandboxConnected = host.ctx.getWebSockets("sandbox").length > 0;
+  host.recordActivity();
+  if (host.meta.sandbox_paused_at) {
+    // Sockets are closed while paused, so the run queues below and drains
+    // when the resumed agent reconnects.
+    host.requestSandboxResume();
+  }
+
+  const sandboxConnected = sandboxSocketAttached(host);
   if (
     host.meta.state === "ready"
     && !host.meta.active_run

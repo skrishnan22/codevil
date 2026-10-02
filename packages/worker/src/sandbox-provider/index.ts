@@ -31,6 +31,14 @@ export function e2bMaxLeaseMs(env: Pick<SandboxProviderEnv, "E2B_MAX_SANDBOX_SEC
   return (Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_E2B_MAX_SANDBOX_SECONDS) * 1000;
 }
 
+/** Longest lease the Orchestrator may request from a provider. Cloudflare leases are keepalive-based, so its cap is nominal. */
+export function sandboxProviderMaxLeaseMs(
+  env: Pick<SandboxProviderEnv, "E2B_MAX_SANDBOX_SECONDS">,
+  providerName: SandboxProviderName,
+): number {
+  return providerName === "e2b" ? e2bMaxLeaseMs(env) : 3_600_000;
+}
+
 export function configuredSandboxProviderName(env: Pick<SandboxProviderEnv, "SANDBOX_PROVIDER">): SandboxProviderName {
   const raw = env.SANDBOX_PROVIDER?.trim();
   if (!raw) return "e2b";

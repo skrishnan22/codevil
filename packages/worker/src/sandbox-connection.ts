@@ -19,6 +19,20 @@ export function sandboxConnectionMode(
   return "reject";
 }
 
+/**
+ * Whether a closed sandbox socket means the agent dropped. A close the DO
+ * initiated (pause, teardown) is expected, and a close that arrives after the
+ * agent already reconnected on a newer socket (a paused agent only answers the
+ * close handshake once resumed) must not mark the live connection interrupted.
+ */
+export function isUnexpectedSandboxDisconnect(input: {
+  expectedClose?: boolean;
+  state: SessionState;
+  otherSandboxSocketsAttached: boolean;
+}): boolean {
+  return !input.expectedClose && !isTerminalState(input.state) && !input.otherSandboxSocketsAttached;
+}
+
 export function sandboxReconnectExpired(disconnectedAt: string, now: number): boolean {
   return now >= Date.parse(disconnectedAt) + SANDBOX_RECONNECT_GRACE_MS;
 }

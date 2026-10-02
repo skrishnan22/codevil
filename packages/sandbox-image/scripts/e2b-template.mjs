@@ -14,7 +14,13 @@
 //   CODEVIL_REGISTRY_USERNAME   optional, private registry login (with password)
 //   CODEVIL_REGISTRY_PASSWORD   optional, private registry login (with username)
 //
-// Pass --dry-run to print the planned steps without executing anything.
+// Pass --dry-run to print the planned steps without executing anything. The
+// printed plan and the executed commands come from the same step list
+// (buildSteps), so they cannot drift apart.
+//
+// Test hook: CODEVIL_E2B_TEMPLATE_SKIP_BUILD=1 runs the docker steps for real
+// but skips the final E2B Template.build call (tests put a fake `docker` first
+// on PATH and have no E2B account). Never set it when publishing.
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +51,13 @@ function registryHost(image) {
   return undefined;
 }
 
+/** Image refs and template ids end up in argv/API calls: no option-lookalikes or whitespace. */
+function assertSafeValue(name, value) {
+  if (value.startsWith("-") || /\s/.test(value)) {
+    fail(`${name} must not start with "-" or contain whitespace`);
+  }
+}
+
 function loadConfig() {
   const apiKey = readEnv("E2B_API_KEY");
   const image = readEnv("CODEVIL_SANDBOX_IMAGE");
@@ -63,65 +76,97 @@ function loadConfig() {
       })`,
     );
   }
+  const templateId = readEnv("E2B_TEMPLATE_ID") ?? DEFAULT_TEMPLATE_ID;
+  assertSafeValue("CODEVIL_SANDBOX_IMAGE", image);
+  assertSafeValue("E2B_TEMPLATE_ID", templateId);
   return {
     apiKey,
     image,
-    templateId: readEnv("E2B_TEMPLATE_ID") ?? DEFAULT_TEMPLATE_ID,
+    templateId,
     credentials: username && password ? { username, password } : undefined,
   };
 }
 
-function printPlan(config) {
+/**
+ * The single source of truth for the docker steps: each step carries the exact
+ * argv that is spawned, an optional stdin payload (only the registry password),
+ * and a redacted display form that is the only thing ever printed.
+ */
+function buildSteps(config) {
   const host = registryHost(config.image);
-  const lines = [
-    `docker build --build-arg SANDBOX_BASE=${SANDBOX_BASE} -f ${DOCKERFILE} -t ${config.image} .`,
+  const steps = [
+    {
+      argv: ["docker", "build", "--build-arg", `SANDBOX_BASE=${SANDBOX_BASE}`, "-f", DOCKERFILE, "-t", config.image, "."],
+    },
   ];
   if (config.credentials) {
-    lines.push(
-      `docker login${host ? ` ${host}` : ""} -u "$CODEVIL_REGISTRY_USERNAME" --password-stdin  # password piped from $CODEVIL_REGISTRY_PASSWORD`,
-    );
+    steps.push({
+      argv: ["docker", "login", ...(host ? [host] : []), "-u", config.credentials.username, "--password-stdin"],
+      stdin: config.credentials.password,
+      display: `docker login${host ? ` ${host}` : ""} -u "$CODEVIL_REGISTRY_USERNAME" --password-stdin  # password piped on stdin from $CODEVIL_REGISTRY_PASSWORD`,
+    });
   }
-  lines.push(`docker push ${config.image}`);
-  lines.push(
-    `E2B Template.build(Template().fromImage("${config.image}"${
-      config.credentials ? ", { username: $CODEVIL_REGISTRY_USERNAME, password: $CODEVIL_REGISTRY_PASSWORD }" : ""
-    }), template "${config.templateId}", { cpuCount: ${CPU_COUNT}, memoryMB: ${MEMORY_MB} })  # authenticated with $E2B_API_KEY`,
-  );
-  return lines;
+  steps.push({ argv: ["docker", "push", config.image] });
+  return steps;
 }
 
-function docker(args, options = {}) {
-  const result = spawnSync("docker", args, {
+const displayOf = (step) => step.display ?? step.argv.join(" ");
+
+function templateDisplay(config) {
+  return `E2B Template.build(Template().fromImage("${config.image}"${
+    config.credentials ? ", { username: $CODEVIL_REGISTRY_USERNAME, password: $CODEVIL_REGISTRY_PASSWORD }" : ""
+  }), template "${config.templateId}", { cpuCount: ${CPU_COUNT}, memoryMB: ${MEMORY_MB} })  # authenticated with $E2B_API_KEY`;
+}
+
+/** Docker never needs the E2B key or registry secrets in its environment. */
+function dockerEnv() {
+  const env = { ...process.env };
+  for (const name of ["E2B_API_KEY", "CODEVIL_REGISTRY_USERNAME", "CODEVIL_REGISTRY_PASSWORD"]) delete env[name];
+  return env;
+}
+
+function runStep(step) {
+  const [command, ...args] = step.argv;
+  const result = spawnSync(command, args, {
     cwd: repoRoot,
-    stdio: ["pipe", "inherit", "inherit"],
-    ...options,
+    env: dockerEnv(),
+    stdio: [step.stdin === undefined ? "ignore" : "pipe", "inherit", "inherit"],
+    input: step.stdin,
   });
-  if (result.error) fail(`could not run docker: ${result.error.message}`);
-  if (result.status !== 0) fail(`docker ${args[0]} failed with exit code ${result.status}`);
+  if (result.error) fail(`could not run ${command}: ${result.error.message}`);
+  if (result.status !== 0) fail(`${command} ${args[0]} failed with exit code ${result.status}`);
+}
+
+function parseArgs(argv) {
+  let dryRun = false;
+  for (const arg of argv) {
+    if (arg === "--") continue; // package-manager separator
+    if (arg === "--dry-run") dryRun = true;
+    else fail(`unknown argument "${arg}" (supported: --dry-run)`);
+  }
+  return { dryRun };
 }
 
 async function main() {
-  const dryRun = process.argv.slice(2).includes("--dry-run");
+  const { dryRun } = parseArgs(process.argv.slice(2));
   const config = loadConfig();
+  const steps = buildSteps(config);
 
   if (dryRun) {
     console.log("e2b:template dry run (nothing will be executed):");
-    printPlan(config).forEach((line, index) => console.log(`  ${index + 1}. ${line}`));
+    [...steps.map(displayOf), templateDisplay(config)].forEach((line, index) => console.log(`  ${index + 1}. ${line}`));
     return;
   }
 
-  console.log(`Building ${config.image} on ${SANDBOX_BASE}`);
-  docker(["build", "--build-arg", `SANDBOX_BASE=${SANDBOX_BASE}`, "-f", DOCKERFILE, "-t", config.image, "."]);
-
-  if (config.credentials) {
-    const host = registryHost(config.image);
-    docker(["login", ...(host ? [host] : []), "-u", config.credentials.username, "--password-stdin"], {
-      input: config.credentials.password,
-    });
+  for (const step of steps) {
+    console.log(`> ${displayOf(step)}`);
+    runStep(step);
   }
 
-  console.log(`Pushing ${config.image}`);
-  docker(["push", config.image]);
+  if (process.env.CODEVIL_E2B_TEMPLATE_SKIP_BUILD === "1") {
+    console.log("E2B template build skipped (CODEVIL_E2B_TEMPLATE_SKIP_BUILD=1)");
+    return;
+  }
 
   const { Template, defaultBuildLogger } = await import("e2b");
   console.log(`Publishing E2B template "${config.templateId}" (${CPU_COUNT} vCPU / ${MEMORY_MB} MiB)`);

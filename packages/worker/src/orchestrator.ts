@@ -785,8 +785,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     await terminateSandboxFn(this, reason);
   }
 
-  recordActivity(): void {
-    recordSessionActivity(this);
+  recordActivity(source?: "event" | "preview"): void {
+    recordSessionActivity(this, Date.now(), source);
   }
 
   requestSandboxResume(): void {

@@ -37,13 +37,18 @@ const WEBSOCKET_OPEN = 1;
  */
 export function isLiveSandboxSocket(socket: SandboxSocketLike): boolean {
   if (typeof socket.readyState === "number" && socket.readyState !== WEBSOCKET_OPEN) return false;
+  return !isClosingSandboxSocket(socket);
+}
+
+/** True for a socket the DO closed on purpose (see `closeSandboxSockets`). */
+export function isClosingSandboxSocket(socket: SandboxSocketLike): boolean {
   let attachment: unknown;
   try {
     attachment = socket.deserializeAttachment?.();
   } catch {
     attachment = undefined;
   }
-  return !(typeof attachment === "object" && attachment !== null && (attachment as { closing?: unknown }).closing === true);
+  return typeof attachment === "object" && attachment !== null && (attachment as { closing?: unknown }).closing === true;
 }
 
 export function liveSandboxSockets<T extends SandboxSocketLike>(ctx: { getWebSockets(tag?: string): T[] }): T[] {
@@ -87,6 +92,8 @@ export function isUnexpectedSandboxDisconnect<T extends SandboxSocketLike>(input
   sandboxSockets: readonly T[];
 }): boolean {
   if (input.expectedClose || isTerminalState(input.state)) return false;
+  // The DO closed this socket itself; its close may land after `expected_close` was reset (post-resume).
+  if (isClosingSandboxSocket(input.closedSocket)) return false;
   return !input.sandboxSockets.some((socket) => socket !== input.closedSocket && isLiveSandboxSocket(socket));
 }
 

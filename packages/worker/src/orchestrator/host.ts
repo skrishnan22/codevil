@@ -52,7 +52,7 @@ export interface OrchestratorHost {
   armNextAlarm(now?: number): Promise<void>;
   sandboxProvider(): SandboxProvider;
   /** Records user-visible activity (Agent Request, run finish, authenticated preview) for the idle-pause clock. */
-  recordActivity(): void;
+  recordActivity(source?: "event" | "preview"): void;
   /** Starts a background resume of a paused sandbox; concurrent calls share one resume. */
   requestSandboxResume(): void;
   /** Closes the DO's own sandbox sockets (callers set `expected_close` first when the close is intentional). */

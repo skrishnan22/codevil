@@ -81,20 +81,33 @@ function providerSupportsPause(host: OrchestratorHost): boolean {
 
 const ACTIVITY_WRITE_INTERVAL_MS = 1_000;
 
+/** `preview`: high-frequency authenticated preview traffic; `event`: everything else. */
+export type ActivitySource = "event" | "preview";
+
 /**
  * Counts a user-visible action toward the idle-pause clock. A no-op for
  * providers that cannot pause (their meta stays untouched). Only the meta write
  * is throttled; the alarm is always re-armed while an idle deadline exists so a
  * run that finishes right after a request still gets its idle alarm.
  */
-export function recordSessionActivity(host: OrchestratorHost, now: number = Date.now()): void {
+export function recordSessionActivity(
+  host: OrchestratorHost,
+  now: number = Date.now(),
+  source: ActivitySource = "event",
+): void {
   const meta = host.meta;
   if (!meta || !providerSupportsPause(host)) return;
   const lastMs = meta.last_activity_at ? Date.parse(meta.last_activity_at) : Number.NaN;
-  if (!(Number.isFinite(lastMs) && now - lastMs >= 0 && now - lastMs < ACTIVITY_WRITE_INTERVAL_MS)) {
+  const throttled = Number.isFinite(lastMs) && now - lastMs >= 0 && now - lastMs < ACTIVITY_WRITE_INTERVAL_MS;
+  if (!throttled) {
     meta.last_activity_at = new Date(now).toISOString();
     host.saveMeta();
   }
+  // Discrete events (requests, run finishes) can change whether an idle deadline
+  // applies, so they always re-arm. Preview traffic arrives in bursts and cannot
+  // change eligibility, so it re-arms only when the idle deadline actually moved
+  // (a write happened).
+  if (source === "preview" && throttled) return;
   if (sandboxAlarmDeadlines(host).idlePauseAt !== null) void armAlarmSafely(host);
 }
 
@@ -300,6 +313,10 @@ async function completeResume(host: OrchestratorHost, now: number): Promise<void
   host.saveMeta();
   host.updateDirectory({ sandbox_state: meta.state === "cloning_repo" ? "cloning" : "ready" });
   host.appendAndBroadcast({ type: "status", message: "Sandbox resumed." });
+  // The agent may have reconnected (old token still valid) while the resume was in
+  // flight; that accept ran while the paused marker was set, so release what it left behind.
+  drainQueuedAgentWorkIfReady(host);
+  flushPendingPreviewStart(host);
   await armAlarmSafely(host);
 }
 
@@ -314,6 +331,7 @@ export function clearStalePausedMarker(host: OrchestratorHost): boolean {
   meta.sandbox_paused_at = undefined;
   meta.expected_close = false;
   host.saveMeta();
+  flushPendingPreviewStart(host);
   return true;
 }
 
@@ -464,16 +482,31 @@ export function buildPreviewStartMessage(
  */
 export function deferPreviewStartWhilePaused(host: OrchestratorHost, appKey?: string): boolean {
   const meta = host.meta;
-  if (!meta || (!meta.sandbox_paused_at && !pausing.has(host))) return false;
+  const unavailable = previewUnavailableReason(host);
+  if (!meta || !unavailable) return false;
   meta.pending_preview_start = appKey !== undefined ? { app_key: appKey } : {};
   host.saveMeta();
   host.recordActivity();
   host.requestSandboxResume();
   host.appendAndBroadcast({
     type: "status",
-    message: "Sandbox is resuming; the preview will start when it reconnects.",
+    message: `Sandbox is ${unavailable}; the preview will start when it reconnects.`,
   });
   return true;
+}
+
+/**
+ * Why a preview command cannot reach the agent right now, for providers that
+ * pause: the sandbox is paused or being paused (`resuming`), or it was resumed
+ * and the agent has not reconnected yet (`reconnecting`). Null otherwise,
+ * including always for providers that cannot pause.
+ */
+function previewUnavailableReason(host: OrchestratorHost): "resuming" | "reconnecting" | null {
+  const meta = host.meta;
+  if (!meta || isTerminalState(meta.state) || !providerSupportsPause(host)) return null;
+  if (meta.sandbox_paused_at || pausing.has(host)) return "resuming";
+  if (meta.sandbox_disconnected_at && !sandboxSocketAttached(host)) return "reconnecting";
+  return null;
 }
 
 /** True when there was nothing live to stop: a deferred start was cancelled or the sandbox is paused. */
@@ -485,7 +518,7 @@ export function cancelDeferredPreviewStart(host: OrchestratorHost): boolean {
     meta.pending_preview_start = undefined;
     host.saveMeta();
   }
-  return hadPending || Boolean(meta.sandbox_paused_at) || pausing.has(host);
+  return hadPending || previewUnavailableReason(host) !== null;
 }
 
 /** Sends a deferred preview start once a live agent socket exists. */
@@ -514,7 +547,7 @@ export async function prepareAuthenticatedPreview(
   host: OrchestratorHost,
   timeoutMs: number = PREVIEW_RESUME_TIMEOUT_MS,
 ): Promise<Response | null> {
-  host.recordActivity();
+  host.recordActivity("preview");
   if (!host.meta?.sandbox_paused_at && !pausing.has(host)) return null;
 
   const resume = resumeSandbox(host);

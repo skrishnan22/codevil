@@ -286,9 +286,9 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     sandboxProvider() {
       return options.sandboxProvider ?? e2bProvider ?? createFakeSandboxProvider();
     },
-    recordActivity() {
+    recordActivity(source) {
       activity.count += 1;
-      recordSessionActivity(host);
+      recordSessionActivity(host, Date.now(), source);
     },
     requestSandboxResume() {
       resumeRequests.count += 1;

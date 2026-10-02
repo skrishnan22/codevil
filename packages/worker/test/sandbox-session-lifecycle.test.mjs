@@ -971,3 +971,123 @@ test("lease renewal follows the leaseRenewal capability, not pauseResume", async
   assert.deepEqual(callNames(leaseOnly.handle), ["renewLease"]);
   assert.equal(sandboxAlarmDeadlines(leaseOnly.host).idlePauseAt, null);
 });
+
+// --- follow-ups: resume/reconnect interleaving, reconnect window, closing flag, preview bursts ---
+
+test("an agent that reconnects mid-resume still gets the deferred preview start and queued run", async () => {
+  const { host, provider, handle, sandboxSockets, sandboxMessages } = createFakeHost(
+    { ...pausedMeta, queued_runs: [queuedRun()] },
+    { e2b: true, sandboxConnected: false },
+  );
+  let release;
+  provider.connect = () => new Promise((resolve) => { release = () => resolve(handle); });
+  await handlePreviewStart(host, "web");
+  const resuming = resumeSandbox(host);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // connect woke the VM; the agent reconnects with its old token before completeResume runs.
+  // The accept path drains and flushes, but the paused marker is still set.
+  sandboxSockets.push(createFakeSandboxSocket());
+  assert.equal(flushPendingPreviewStart(host), false);
+
+  release();
+  await resuming;
+
+  assert.equal(host.meta.pending_preview_start, undefined);
+  assert.deepEqual(sandboxMessages.map((message) => message.type).sort(), ["agent_turn", "preview_start"]);
+  // A later stop is a real stop, not swallowed as a cancelled deferred start.
+  await handlePreviewStop(host);
+  assert.ok(sandboxMessages.some((message) => message.type === "preview_stop"));
+});
+
+test("preview_start in the reconnect window after a resume is deferred until the agent returns", async () => {
+  const { host, sandboxMessages, sandboxSockets, broadcasts, resumeRequests } = createFakeHost(
+    { ...idleMeta, sandbox_disconnected_at: "2026-10-01T00:10:01.000Z" },
+    { e2b: true, sandboxConnected: false },
+  );
+
+  await handlePreviewStart(host, "web");
+
+  assert.deepEqual(host.meta.pending_preview_start, { app_key: "web" });
+  assert.deepEqual(sandboxMessages, []);
+  assert.equal(resumeRequests.count, 1);
+  assert.ok(broadcasts.some((event) => event.type === "status" && event.message === "Sandbox is reconnecting; the preview will start when it reconnects."));
+  assert.ok(!broadcasts.some((event) => event.type === "error"));
+
+  sandboxSockets.push(createFakeSandboxSocket());
+  host.meta.sandbox_disconnected_at = undefined; // completeSandboxReconnect
+  assert.equal(flushPendingPreviewStart(host), true);
+  assert.deepEqual(sandboxMessages.map((message) => message.type), ["preview_start"]);
+});
+
+test("preview_stop in the reconnect window has nothing to stop and does not error", async () => {
+  const { host, sandboxMessages, broadcasts } = createFakeHost(
+    { ...idleMeta, sandbox_disconnected_at: "2026-10-01T00:10:01.000Z" },
+    { e2b: true, sandboxConnected: false },
+  );
+  await handlePreviewStop(host);
+  assert.deepEqual(sandboxMessages, []);
+  assert.ok(!broadcasts.some((event) => event.type === "error"));
+});
+
+test("preview_start is not deferred when the agent is attached, or for a provider that cannot pause", async () => {
+  const attached = createFakeHost(
+    { ...idleMeta, sandbox_disconnected_at: "2026-10-01T00:10:01.000Z" },
+    { e2b: true, sandboxConnected: true },
+  );
+  await handlePreviewStart(attached.host, "web");
+  assert.deepEqual(attached.sandboxMessages.map((message) => message.type), ["preview_start"]);
+
+  // Cloudflare behavior is unchanged: the command goes straight to sendToSandbox.
+  const cloudflare = createFakeHost(
+    { state: "ready", sandbox_disconnected_at: "2026-10-01T00:10:01.000Z" },
+    { sandboxConnected: false },
+  );
+  await handlePreviewStart(cloudflare.host, "web");
+  assert.deepEqual(cloudflare.sandboxMessages.map((message) => message.type), ["preview_start"]);
+  assert.equal(cloudflare.host.meta.pending_preview_start, undefined);
+  assert.equal(cloudflare.resumeRequests.count, 0);
+  assert.equal(cloudflare.activity.count, 0);
+});
+
+test("a close of a socket the DO closed on purpose is never an interruption, even after expected_close reset", () => {
+  const closedByDo = createFakeSandboxSocket();
+  closeSandboxSockets({ getWebSockets: () => [closedByDo] }, "sandbox paused");
+  assert.equal(
+    isUnexpectedSandboxDisconnect({ expectedClose: false, state: "ready", closedSocket: closedByDo, sandboxSockets: [closedByDo] }),
+    false,
+  );
+  // The agent's own socket dropping is still an interruption.
+  const dropped = createFakeSandboxSocket();
+  assert.equal(
+    isUnexpectedSandboxDisconnect({ expectedClose: false, state: "ready", closedSocket: dropped, sandboxSockets: [dropped] }),
+    true,
+  );
+});
+
+test("bursts of preview traffic re-arm the idle alarm only when the idle deadline moved", () => {
+  const fake = createFakeHost(
+    { ...idleMeta, last_activity_at: "2026-10-01T00:00:00.000Z" },
+    { e2b: true, sandboxConnected: true },
+  );
+  const { host } = fake;
+
+  recordSessionActivity(host, T0 + 5_000, "preview");
+  assert.equal(fake.armCalls, 1);
+  for (const offset of [5_100, 5_300, 5_900]) recordSessionActivity(host, T0 + offset, "preview");
+  assert.equal(fake.armCalls, 1, "requests inside the throttle window do not re-arm");
+
+  recordSessionActivity(host, T0 + 6_100, "preview");
+  assert.equal(fake.armCalls, 2, "a request that moves the idle deadline re-arms");
+
+  // A discrete event can change idle eligibility, so it re-arms even inside the window.
+  recordSessionActivity(host, T0 + 6_200, "event");
+  assert.equal(fake.armCalls, 3);
+});
+
+test("authenticated preview requests in a burst do not re-arm the alarm each time", async () => {
+  const fake = await previewHost({ sandbox_paused_at: undefined, expected_close: false, last_activity_at: "2026-10-01T00:00:00.000Z" }, { sandboxConnected: true });
+  for (let i = 0; i < 5; i += 1) assert.equal((await proxy(fake, PREVIEW_TOKEN)).status, 200);
+  assert.equal(fake.activity.count, 5);
+  assert.equal(fake.armCalls, 1);
+});

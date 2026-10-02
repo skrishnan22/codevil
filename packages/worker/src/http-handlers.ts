@@ -49,7 +49,7 @@ import {
 import { configuredWebOrigins, missingAuthConfigKeys } from "./auth-config.js";
 import { createEmailProvider } from "./email.js";
 import { can, type AuthAction, CreateInvitationRequestSchema, SetupClaimRequestSchema } from "@codevil/shared";
-import { configuredSandboxProviderName } from "./sandbox-provider/index.js";
+import { configuredSandboxProviderName, resolveSandboxProvider } from "./sandbox-provider/index.js";
 import type { Env } from "./worker-env.js";
 import type { SocketAuthContext } from "./ws-authorization.js";
 import { createSocketAuthToken } from "./ws-token.js";
@@ -527,6 +527,15 @@ export async function handleCreateSession(
     sandboxProvider = configuredSandboxProviderName(env);
   } catch {
     return json({ error: "Sandbox provider is not configured" }, 500);
+  }
+  try {
+    // Fails on a missing credential such as E2B_API_KEY; the message is a fixed, non-secret string.
+    resolveSandboxProvider(env, sandboxProvider);
+  } catch (error) {
+    return json({
+      error: "Sandbox provider is not configured",
+      detail: error instanceof Error ? error.message : "Sandbox provider is unavailable",
+    }, 500);
   }
 
   const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;

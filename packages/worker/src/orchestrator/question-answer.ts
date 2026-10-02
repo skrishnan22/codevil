@@ -124,6 +124,8 @@ export function applyQuestionAnswer(
     ...(selection.freeform !== undefined ? { freeform: selection.freeform } : {}),
     answered_by: input.actor,
   });
+  // Answering is user activity: it restarts the idle-pause clock.
+  host.recordActivity();
   return {
     ok: true,
     status: "answered",

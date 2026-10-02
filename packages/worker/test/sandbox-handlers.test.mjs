@@ -616,3 +616,131 @@ test("handleSandboxCloneComplete does not enqueue cache work for a provider with
   assert.equal(sql.row, null);
   assert.equal(fixture.host.meta.state, "ready");
 });
+
+test("provisioning starts the agent with the sandbox provider name in its environment", async () => {
+  for (const [name, capabilities] of [
+    ["e2b", { pauseResume: true, workspaceCache: false, leaseRenewal: true }],
+    ["cloudflare", { pauseResume: false, workspaceCache: false, leaseRenewal: false }],
+  ]) {
+    let startEnv;
+    const handle = createFakeSandboxHandle({
+      ref: { provider: name, id: "sbx_1" },
+      startProcess: async (_command, options) => { startEnv = options.env; },
+    });
+    const provider = createFakeSandboxProvider({ name, capabilities, create: async () => handle });
+    const { host } = createFakeHost(
+      { state: "initializing" },
+      { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
+    );
+    await provisionSessionSandbox(host);
+    assert.equal(startEnv.CODEVIL_SANDBOX_PROVIDER, name);
+  }
+});
+
+test("provisioning failure broadcasts the redacted reason and destroys a sandbox that was already created", async () => {
+  const destroyed = [];
+  const handle = createFakeSandboxHandle({
+    ref: { provider: "e2b", id: "sbx_1" },
+    startProcess: async () => { throw new Error("start failed with sekret-token and more"); },
+    destroy: async (reason) => { destroyed.push(reason); },
+  });
+  const provider = createFakeSandboxProvider({
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create: async () => handle,
+  });
+  const { host, broadcasts } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv(), sandboxHandle: handle },
+  );
+  host.redactionSecrets.push("sekret-token");
+
+  await provisionSessionSandbox(host);
+
+  assert.equal(host.meta.state, "failed");
+  const error = broadcasts.find((event) => event.type === "error");
+  assert.match(error.message, /^Sandbox provisioning failed: .*start failed with \[REDACTED\] and more/);
+  assert.doesNotMatch(JSON.stringify(broadcasts), /sekret-token/);
+  assert.deepEqual(destroyed, ["provisioning failed"]);
+  assert.equal(host.meta.expected_close, true);
+});
+
+test("provisioning failure before a sandbox exists does not try to destroy anything", async () => {
+  const { host, terminations, broadcasts } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: createFakeSandboxProvider({ create: async () => { throw new Error("no capacity"); } }), workerEnv: provisioningEnv() },
+  );
+  await provisionSessionSandbox(host);
+  assert.deepEqual(terminations, []);
+  assert.match(broadcasts.find((event) => event.type === "error").message, /^Sandbox provisioning failed: no capacity/);
+});
+
+test("a missing provider credential surfaces its reason in the failure message", async () => {
+  const { host, broadcasts } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: undefined, workerEnv: provisioningEnv() },
+  );
+  host.sandboxProvider = () => { throw new Error("E2B_API_KEY is not configured"); };
+  await provisionSessionSandbox(host);
+  assert.match(broadcasts.find((event) => event.type === "error").message, /E2B_API_KEY is not configured/);
+});
+
+test("an agent error outside a run fails the session and destroys its sandbox", async () => {
+  const { host, terminations, broadcasts } = createFakeHost({
+    state: "cloning_repo",
+    sandbox_ref: { provider: "cloudflare", id: "ses_test" },
+  });
+  const { ws } = createWsRecorder();
+  await dispatchSandboxSocketMessage(host, ws, JSON.stringify({ type: "error", message: "clone failed" }));
+  assert.equal(host.meta.state, "failed");
+  assert.deepEqual(terminations.map((t) => t.reason), ["agent error"]);
+  assert.ok(broadcasts.some((e) => e.type === "error" && e.message === "clone failed"));
+});
+
+test("an agent error with no sandbox ref, or during a run, does not destroy the sandbox", async () => {
+  const noRef = createFakeHost({ state: "cloning_repo" });
+  await dispatchSandboxSocketMessage(noRef.host, createWsRecorder().ws, JSON.stringify({ type: "error", message: "x" }));
+  assert.deepEqual(noRef.terminations, []);
+
+  const inRun = createFakeHost({
+    state: "executing",
+    sandbox_ref: { provider: "cloudflare", id: "ses_test" },
+    active_run: createAgentRun({ actor, text: "t", now: "2026-06-03T00:00:00.000Z" }),
+  });
+  await dispatchSandboxSocketMessage(inRun.host, createWsRecorder().ws, JSON.stringify({ type: "error", message: "x" }));
+  assert.deepEqual(inRun.terminations, []);
+});
+
+test("an E2B session longer than the provider limit is warned at provisioning", async () => {
+  const e2bProvider = (create) => createFakeSandboxProvider({
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create,
+  });
+  const make = (maxTime, workerEnv = provisioningEnv(), provider = e2bProvider(async () => createFakeSandboxHandle({ ref: { provider: "e2b", id: "sbx_1" } }))) =>
+    createFakeHost(
+      { state: "initializing", max_time: maxTime, created_at: new Date().toISOString() },
+      { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv },
+    );
+  const warning = (fake) => fake.broadcasts.find((e) => e.type === "status" && /continuous runtime limit/.test(e.message));
+
+  const long = make("2h");
+  await provisionSessionSandbox(long.host);
+  assert.match(warning(long).message, /max time \(2h\).*60 minutes.*cut off/);
+
+  const exact = make("1h");
+  await provisionSessionSandbox(exact.host);
+  assert.equal(warning(exact), undefined);
+
+  const short = make("30m");
+  await provisionSessionSandbox(short.host);
+  assert.equal(warning(short), undefined);
+
+  const raised = make("2h", { ...provisioningEnv(), E2B_MAX_SANDBOX_SECONDS: "86400" });
+  await provisionSessionSandbox(raised.host);
+  assert.equal(warning(raised), undefined);
+
+  const cloudflare = make("8h", provisioningEnv(), createFakeSandboxProvider({ create: async () => createFakeSandboxHandle() }));
+  await provisionSessionSandbox(cloudflare.host);
+  assert.equal(warning(cloudflare), undefined);
+});

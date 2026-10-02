@@ -58,6 +58,7 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
 
   const tracer = host.getTracer();
   try {
+    warnWhenSessionOutlivesProviderLimit(host);
     const wsUrl = buildSandboxWebSocketUrl(host.meta.worker_url, host.meta.session_id);
     // Validate the actual key at provisioning time, but never transfer it into the container.
     const provisioningContext = getProvisioningCredentialContext(host.workerEnv, host.meta.provider);
@@ -116,11 +117,40 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
   } catch (error) {
     host.transition("failed");
     host.updateDirectory({ room_state: "failed", sandbox_state: "failed" });
+    const reason = provisioningFailureReason(error, host.redactionSecrets);
     host.appendAndBroadcast({
       type: "error",
-      message: "Sandbox provisioning failed. Check session diagnostics.",
+      message: `Sandbox provisioning failed${reason ? `: ${reason}` : ""}. Check session diagnostics.`,
     });
+    // A sandbox created before the failure (e.g. the agent never started) must not be left running.
+    if (host.meta?.sandbox_ref) await host.terminateSandbox("provisioning failed");
   }
+}
+
+const MAX_FAILURE_REASON_LENGTH = 200;
+
+/** One-line, secret-redacted reason for a provisioning failure, safe to show to Session participants. */
+function provisioningFailureReason(error: unknown, secrets: readonly string[]): string {
+  const attributes = redactEvent(safeExceptionAttributes(error), secrets) as { error?: unknown };
+  const text = typeof attributes.error === "string" ? attributes.error.replace(/\s+/g, " ").trim() : "";
+  return text.length > MAX_FAILURE_REASON_LENGTH ? `${text.slice(0, MAX_FAILURE_REASON_LENGTH)}...` : text;
+}
+
+/** E2B caps continuous runtime (Hobby: 1h); a longer Session may be cut off by the provider. */
+function warnWhenSessionOutlivesProviderLimit(host: OrchestratorHost): void {
+  const meta = host.meta;
+  if (!meta) return;
+  const provider = host.sandboxProvider();
+  if (provider.name !== "e2b") return;
+  const maxTimeMs = parseMaxTimeMs(meta.max_time);
+  const limitMs = sandboxProviderMaxLeaseMs(host.workerEnv, provider.name);
+  if (maxTimeMs === null || maxTimeMs <= limitMs) return;
+  host.appendAndBroadcast({
+    type: "status",
+    message:
+      `This session's max time (${meta.max_time}) is longer than the sandbox provider's continuous runtime limit `
+      + `(${Math.round(limitMs / 60_000)} minutes on the E2B Hobby plan). The session may be cut off at that limit.`,
+  });
 }
 
 export function initializeSandboxConnection(
@@ -260,6 +290,8 @@ export async function dispatchSandboxSocketMessage(
           cancelOpenQuestions(host, activeRunId, "session failed");
         }
         host.appendAndBroadcast({ type: "error", message: parsed.message });
+        // The Session is over: a leased/paused provider sandbox must not outlive it.
+        if (host.meta.sandbox_ref) await host.terminateSandbox("agent error");
       }
       return;
     case "status":

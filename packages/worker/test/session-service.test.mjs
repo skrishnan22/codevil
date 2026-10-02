@@ -11,6 +11,7 @@ test("createSession inserts a session, initializes the orchestrator, and returns
   let initCall = null;
   const env = {
     DB: db,
+    E2B_API_KEY: "e2b-test-key",
     ORCHESTRATOR: {
       idFromName(name) {
         capturedId = name;
@@ -91,6 +92,7 @@ test("createSession marks the session failed when orchestrator init throws", asy
   const db = createFakeDb();
   const env = {
     DB: db,
+    E2B_API_KEY: "e2b-test-key",
     ORCHESTRATOR: {
       idFromName(name) {
         return name;
@@ -173,6 +175,76 @@ test("handleCreateSession fails on a bad SANDBOX_PROVIDER without touching D1 wr
   assert.deepEqual(writes, []);
 });
 
+test("createSession rejects a missing E2B_API_KEY before writing a Session row", async () => {
+  const db = createFakeDb();
+  const env = {
+    DB: db,
+    ORCHESTRATOR: {
+      idFromName: () => assert.fail("must not reach the orchestrator"),
+      get: () => assert.fail("must not reach the orchestrator"),
+    },
+  };
+
+  await assert.rejects(
+    () => createSession(
+      env,
+      "https://codevil.example.workers.dev",
+      { repo: "github.com/acme/app" },
+      { id: "usr_123", name: "Alice" },
+    ),
+    /E2B_API_KEY is not configured/,
+  );
+
+  assert.equal(db.rows.size, 0);
+});
+
+test("createSession needs no E2B key on the Cloudflare provider", async () => {
+  const db = createFakeDb();
+  const env = {
+    DB: db,
+    SANDBOX_PROVIDER: "cloudflare",
+    ORCHESTRATOR: { idFromName: (name) => name, get: () => ({ init: async () => {} }) },
+  };
+  const result = await createSession(
+    env,
+    "https://codevil.example.workers.dev",
+    { repo: "github.com/acme/app" },
+    { id: "usr_123", name: "Alice" },
+  );
+  assert.equal(db.rows.size, 1);
+  assert.ok(result.session_id);
+});
+
+test("handleCreateSession names the missing E2B_API_KEY and writes nothing", async () => {
+  const writes = [];
+  const env = {
+    DB: {
+      prepare: (sql) => ({ bind: () => { writes.push(sql); return { run: async () => ({}) }; } }),
+      batch: async () => { writes.push("batch"); },
+    },
+    ORCHESTRATOR: {
+      idFromName: () => assert.fail("must not reach the orchestrator"),
+      get: () => assert.fail("must not reach the orchestrator"),
+    },
+  };
+
+  const response = await handleCreateSession(
+    new Request("https://codevil.example/sessions", {
+      method: "POST",
+      body: JSON.stringify({ repo: "github.com/acme/app" }),
+    }),
+    env,
+    { userId: "usr_123", email: "owner@example.com", name: "Owner", role: "owner" },
+  );
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    error: "Sandbox provider is not configured",
+    detail: "E2B_API_KEY is not configured",
+  });
+  assert.deepEqual(writes, []);
+});
+
 test("handleCreateSession forwards a provided max_idle_time to the orchestrator", async () => {
   const { response, initCall } = await createViaHandler({ repo: "github.com/acme/app", max_idle_time: "45m" });
 
@@ -191,6 +263,7 @@ test("handleCreateSession forwards the default max_idle_time when none is provid
 async function createViaHandler(body) {
   let initCall = null;
   const env = {
+    E2B_API_KEY: "e2b-test-key",
     DB: {
       prepare: () => ({ bind: () => ({ run: async () => ({}) }) }),
       batch: async () => [],

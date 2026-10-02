@@ -8,7 +8,7 @@ import {
   type NormalizedCreateSession,
   type SessionDirectoryRow,
 } from "./session-directory.js";
-import { configuredSandboxProviderName } from "./sandbox-provider/index.js";
+import { configuredSandboxProviderName, resolveSandboxProvider } from "./sandbox-provider/index.js";
 import type { Env } from "./worker-env.js";
 
 export interface SessionCreator {
@@ -36,6 +36,8 @@ export async function createSession(
     : normalizeCreateSessionBody(input);
   // Resolve before touching D1 so a bad deployment setting leaves no Session row behind.
   const sandboxProvider = configuredSandboxProviderName(env);
+  // A missing E2B key or similar fails here, clearly, instead of as an opaque provisioning error later.
+  resolveSandboxProvider(env, sandboxProvider);
   const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;
   const now = new Date().toISOString();
   const origin = new URL(requestUrlOrOrigin).origin;

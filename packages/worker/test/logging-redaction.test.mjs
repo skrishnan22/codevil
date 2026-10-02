@@ -72,6 +72,7 @@ test("session initialization failure logging redacts Worker deployment secrets",
   try {
     const env = {
       CODEVIL_API_KEY: "worker-deployment-secret",
+      E2B_API_KEY: "e2b-test-key",
       DB: {
         prepare: () => ({
           bind: () => ({

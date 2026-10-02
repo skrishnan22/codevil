@@ -300,3 +300,31 @@ Run 2 (`network: { allowPublicTraffic: false }`; sandbox `ipv0doc3yywqgunnnhbva`
 ```
 
 A final `Sandbox.list` for the key returned 0 running sandboxes.
+
+## Verification Results
+
+Date: 2026-10-02. Commit tested: `4892a9f`. Command: `pnpm verify` from the repo root (`pnpm typecheck && pnpm test`), exit code 0.
+
+**Typecheck/build:** all packages built and typechecked cleanly (shared, site, admin-cli, sandbox-image, cli, web, worker).
+
+| Package | Runner | Result |
+| --- | --- | --- |
+| `@codevil/shared` | node:test | tests 212, pass 212, fail 0 |
+| `@codevil/site` | vitest | Test Files 1 passed (1); Tests 7 passed (7) |
+| `@codevil/admin-cli` | node:test | tests 34, pass 34, fail 0 |
+| `@codevil/cli` | node:test | tests 28, pass 28, fail 0 |
+| `@codevil/sandbox-image` | node:test | tests 131, pass 131, fail 0 |
+| `@codevil/web` | vitest | Test Files 25 passed (25); Tests 291 passed (291) |
+| `@codevil/worker` | node:test | tests 656, pass 656, fail 0 |
+
+Total: 1359 tests, 0 failures. Expected noise only: structured `wide_event` log lines (including intentional ERROR/WARN lines emitted by failure-path tests) and a Vite chunk-size warning for the web bundle.
+
+### Manual E2E
+
+Manual E2E: not run yet — pending user setup (Docker, registry, template publish approval, worker secrets). It was not claimed as passing.
+
+- [ ] 1. Create a Session on a real repo; clone and `npm install` complete — not run
+- [ ] 2. Start preview; hot reload works through the Codevil preview URL — not run
+- [ ] 3. Idle past `max_idle_time` (use `2m`); the sandbox pauses — not run
+- [ ] 4. Resume once with a prompt and once by opening the preview; dev server still running and agent continues — not run
+- [ ] 5. Stop the Session; the sandbox is destroyed in the E2B dashboard — not run

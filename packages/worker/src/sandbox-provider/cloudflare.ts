@@ -57,7 +57,7 @@ export function createCloudflareSandboxProvider(
 
   return {
     name: "cloudflare",
-    capabilities: { pauseResume: false, workspaceCache: true },
+    capabilities: { pauseResume: false, workspaceCache: true, leaseRenewal: false },
     async create({ sessionId }) {
       const sandbox = await lookup(sessionId);
       await retrySandboxOperation(() =>

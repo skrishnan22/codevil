@@ -9,7 +9,8 @@ export type SandboxLifecycleView = SandboxLifecycleSnapshot;
 
 export interface SandboxProvider {
   readonly name: SandboxProviderName;
-  readonly capabilities: { pauseResume: boolean; workspaceCache: boolean };
+  /** `leaseRenewal`: the Orchestrator must periodically extend a timed lease (Cloudflare uses keepalive instead). */
+  readonly capabilities: { pauseResume: boolean; workspaceCache: boolean; leaseRenewal: boolean };
   create(options: { sessionId: string; leaseMs: number }): Promise<SandboxHandle>;
   /** `secret` is the opaque value returned as `handle.secret` at create time. */
   connect(ref: SandboxRef, options?: { leaseMs?: number; secret?: string }): Promise<SandboxHandle>;

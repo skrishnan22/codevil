@@ -37,7 +37,7 @@ test("cloudflare create enables keepalive and uses the session id as the ref", a
   assert.deepEqual(handle.ref, { provider: "cloudflare", id: "ses_1" });
   assert.deepEqual(seen, [["ses_1", { keepAlive: true }]]);
   assert.deepEqual(sandbox.calls, [["setKeepAlive", true], ["setCodevilKeepAlive", true, "session provisioning"]]);
-  assert.deepEqual(provider.capabilities, { pauseResume: false, workspaceCache: true });
+  assert.deepEqual(provider.capabilities, { pauseResume: false, workspaceCache: true, leaseRenewal: false });
   assert.equal(handle.pause, undefined);
   assert.equal(handle.workspaceCache, sandbox);
 });

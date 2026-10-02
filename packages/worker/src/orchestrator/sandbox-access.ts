@@ -47,7 +47,7 @@ export function sandboxRefForMeta(
 }
 
 export async function connectSandboxHandle(options: {
-  meta: { session_id: string; sandbox_ref?: SandboxRef } | null;
+  meta: { session_id: string; sandbox_ref?: SandboxRef; sandbox_paused_at?: string } | null;
   provider: SandboxProvider;
   readSecret: () => Promise<string | undefined>;
   /** Live redaction list; any secret the handle ends up using is added to it. */
@@ -55,6 +55,9 @@ export async function connectSandboxHandle(options: {
   /** Persist a secret the provider supplied because none was stored. */
   storeSecret?: (secret: string) => Promise<void>;
 }): Promise<SandboxHandle | null> {
+  // Connecting would silently resume a paused VM (no token write, lease or marker
+  // update). Only the resume path may wake it, and it calls `provider.connect` itself.
+  if (options.meta?.sandbox_paused_at) return null;
   const ref = sandboxRefForMeta(options.meta, options.provider);
   if (!ref) return null;
   const secret = await options.readSecret();
@@ -76,6 +79,14 @@ export async function destroySandbox(
   } catch (error) {
     onError(error);
   }
+}
+
+/** Body for log and diagnostics reads of a paused sandbox, which must not wake the VM. */
+export function pausedSandboxResponse(): Response {
+  return Response.json(
+    { paused: true, message: "Sandbox is paused. Send an Agent Request or open the preview to resume it." },
+    { status: 200 },
+  );
 }
 
 /** Agent process logs, redacted; null when the sandbox cannot be read. */
@@ -112,7 +123,9 @@ export async function collectAgentDiagnostics(
 export async function sandboxLogsResponse(
   resolveHandle: SandboxHandleResolver,
   secrets: readonly string[],
+  options: { paused?: boolean } = {},
 ): Promise<Response> {
+  if (options.paused) return pausedSandboxResponse();
   try {
     const handle = await resolveHandle();
     if (!handle) throw new Error("Sandbox not found");
@@ -127,7 +140,9 @@ export async function sandboxLogsResponse(
 export async function sandboxDiagnosticsResponse(
   resolveHandle: SandboxHandleResolver,
   secrets: readonly string[],
+  options: { paused?: boolean } = {},
 ): Promise<Response> {
+  if (options.paused) return pausedSandboxResponse();
   try {
     const diagnostics = await collectAgentDiagnostics(resolveHandle, secrets);
     return Response.json(redactEvent(diagnostics, secrets), { status: 200 });

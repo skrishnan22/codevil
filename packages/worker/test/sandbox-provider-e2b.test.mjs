@@ -71,7 +71,7 @@ test("create locks public traffic, caps the lease, and returns the traffic token
     network: { allowPublicTraffic: false },
     metadata: { codevil_session_id: "ses_1" },
   }]);
-  assert.deepEqual(p.capabilities, { pauseResume: true, workspaceCache: false });
+  assert.deepEqual(p.capabilities, { pauseResume: true, workspaceCache: false, leaseRenewal: true });
 });
 
 test("create keeps a lease below the cap", async () => {

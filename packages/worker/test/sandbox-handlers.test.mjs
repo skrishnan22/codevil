@@ -490,7 +490,7 @@ test("provisionSessionSandbox creates through the provider, records the ref, res
     startProcess: async (command, options) => calls.push(["startProcess", options.processId, options.cwd]),
   });
   const provider = createFakeSandboxProvider({
-    create: async (options) => { calls.push(["create", options]); return handle; },
+    create: async (options) => { calls.push(["create", options.sessionId]); return handle; },
   });
   const { host } = createFakeHost(
     { state: "initializing", max_time: "30m", created_at: new Date().toISOString() },
@@ -501,18 +501,43 @@ test("provisionSessionSandbox creates through the provider, records the ref, res
 
   assert.equal(host.meta.state, "provisioning_sandbox");
   assert.deepEqual(host.meta.sandbox_ref, { provider: "cloudflare", id: "ses_test" });
-  assert.ok(host.meta.sandbox_lease_renewed_at);
-  // The lease is the time left until max_time, measured from Session creation.
-  const [, createOptions] = calls[0];
-  assert.ok(createOptions.leaseMs <= 30 * 60_000 && createOptions.leaseMs > 30 * 60_000 - 5_000);
-  calls[0][1] = { sessionId: createOptions.sessionId };
+  // Cloudflare uses keepalive, not a timed lease: no renewal bookkeeping.
+  assert.equal(host.meta.sandbox_lease_renewed_at, undefined);
   assert.equal(host.meta.workspace_cache_restored, false);
   assert.equal(await host.ctx.storage.get("codevil:sandbox_secret"), "handle-secret");
   assert.ok(host.redactionSecrets.includes("handle-secret"));
   assert.deepEqual(calls, [
-    ["create", { sessionId: "ses_test" }],
+    ["create", "ses_test"],
     ["startProcess", "codevil-agent", "/workspace"],
   ]);
+});
+
+test("provisionSessionSandbox gives a lease-based provider the time left until max_time and records the renewal clock", async () => {
+  const leases = [];
+  const handle = createFakeSandboxHandle({ ref: { provider: "e2b", id: "sbx_1" } });
+  const provider = createFakeSandboxProvider({
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create: async (options) => { leases.push(options.leaseMs); return handle; },
+  });
+  const tenMinutesAgo = Date.now() - 10 * 60_000;
+  const fresh = createFakeHost(
+    { state: "initializing", max_time: "30m", created_at: new Date(Date.now()).toISOString() },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
+  );
+  const older = createFakeHost(
+    { state: "initializing", max_time: "2h", created_at: new Date(tenMinutesAgo).toISOString() },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: { ...provisioningEnv(), E2B_MAX_SANDBOX_SECONDS: "600" } },
+  );
+
+  await provisionSessionSandbox(fresh.host);
+  await provisionSessionSandbox(older.host);
+
+  // Remaining max_time (about 30m), and a 2h session clamped to the provider's cap.
+  assert.ok(leases[0] <= 30 * 60_000 && leases[0] > 30 * 60_000 - 5_000);
+  assert.equal(leases[1], 600_000);
+  assert.ok(fresh.host.meta.sandbox_lease_renewed_at);
+  assert.ok(older.host.meta.sandbox_lease_renewed_at);
 });
 
 test("provisionSessionSandbox through the Cloudflare adapter keeps keepalive, then restore, then agent start", async () => {
@@ -559,7 +584,7 @@ test("provisionSessionSandbox skips the workspace cache when the provider has no
     workspaceCache: { restoreBackup: async () => { restored = true; }, createBackup: async () => ({}) },
   });
   const provider = createFakeSandboxProvider({
-    capabilities: { pauseResume: false, workspaceCache: false },
+    capabilities: { pauseResume: false, workspaceCache: false, leaseRenewal: false },
     create: async () => handle,
   });
   const { host } = createFakeHost(
@@ -581,7 +606,7 @@ test("handleSandboxCloneComplete does not enqueue cache work for a provider with
     {
       sql,
       sandboxProvider: createFakeSandboxProvider({
-        capabilities: { pauseResume: false, workspaceCache: false },
+        capabilities: { pauseResume: false, workspaceCache: false, leaseRenewal: false },
       }),
     },
   );

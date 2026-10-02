@@ -35,7 +35,12 @@ import {
   ensureAnnotatableRevision,
   lockPlanRevision,
 } from "./plan-revision-actions.js";
-import { sandboxSocketAttached } from "./sandbox-resume.js";
+import {
+  buildPreviewStartMessage,
+  cancelDeferredPreviewStart,
+  deferPreviewStartWhilePaused,
+  sandboxSocketAttached,
+} from "./sandbox-session-lifecycle.js";
 
 export function handleApprove(
   host: OrchestratorHost,
@@ -498,16 +503,13 @@ export function cancelOpenQuestions(host: OrchestratorHost, runId: string, reaso
 
 export async function handlePreviewStart(host: OrchestratorHost, appKey?: string): Promise<void> {
   if (!host.meta) return;
+  if (deferPreviewStartWhilePaused(host, appKey)) return;
 
-  host.sendToSandbox({
-    type: "preview_start",
-    model: host.meta.plan_model,
-    provider: host.meta.provider,
-    task_prompt: host.meta.prompt,
-    app_key: appKey,
-  });
+  host.sendToSandbox(buildPreviewStartMessage(host.meta, appKey));
 }
 
 export async function handlePreviewStop(host: OrchestratorHost): Promise<void> {
+  // A deferred start never reached the sandbox and a paused sandbox has no preview to stop.
+  if (cancelDeferredPreviewStart(host)) return;
   host.sendToSandbox({ type: "preview_stop" });
 }

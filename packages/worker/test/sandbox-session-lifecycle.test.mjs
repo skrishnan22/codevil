@@ -3,8 +3,13 @@ import test from "node:test";
 import { handleAgentRequest } from "../dist/orchestrator/cli-handlers.js";
 import { hashPreviewToken, proxyPreviewRequest } from "../dist/orchestrator/preview.js";
 import { drainQueuedAgentWorkIfReady } from "../dist/orchestrator/sandbox-handlers.js";
+import { connectSandboxHandle, sandboxDiagnosticsResponse, sandboxLogsResponse } from "../dist/orchestrator/sandbox-access.js";
+import { handlePreviewStart, handlePreviewStop } from "../dist/orchestrator/cli-handlers.js";
 import {
   clearStalePausedMarker,
+  flushPendingPreviewStart,
+  idlePauseInput,
+  recordSessionActivity,
   expireSessionAtMaxTime,
   isSandboxPausing,
   pauseIdleSandbox,
@@ -14,11 +19,24 @@ import {
   sandboxAlarmDeadlines,
   sandboxSocketAttached,
   terminateSandbox,
-} from "../dist/orchestrator/sandbox-resume.js";
-import { isUnexpectedSandboxDisconnect, sandboxConnectionMode } from "../dist/sandbox-connection.js";
+} from "../dist/orchestrator/sandbox-session-lifecycle.js";
+import {
+  closeSandboxSockets,
+  isLiveSandboxSocket,
+  isUnexpectedSandboxDisconnect,
+  liveSandboxSockets,
+  sandboxConnectionMode,
+} from "../dist/sandbox-connection.js";
 import { SandboxNotFoundError } from "../dist/sandbox-provider/types.js";
 import { sandboxProviderMaxLeaseMs } from "../dist/sandbox-provider/index.js";
-import { actor, createFakeHost, createRecordingTracer } from "./helpers/fake-host.mjs";
+import {
+  actor,
+  createFakeHost,
+  createFakeSandboxSocket,
+  createFakeSandboxProvider,
+  createFakeSql,
+  createRecordingTracer,
+} from "./helpers/fake-host.mjs";
 
 const T0 = Date.parse("2026-10-01T00:00:00.000Z");
 const idleMeta = {
@@ -293,13 +311,16 @@ test("a session stopped mid-resume stays failed and is not resurrected", async (
 
   const resuming = resumeSandbox(host);
   await new Promise((resolve) => setImmediate(resolve));
-  host.meta.state = "failed";
-  host.meta.sandbox_paused_at = undefined;
+  // Stop the session the way the Orchestrator does: fail it, then tear the sandbox down.
+  host.transition("failed");
+  await terminateSandbox(host, "stopped by user");
   release();
   await resuming;
 
   assert.equal(host.meta.state, "failed");
+  assert.equal(host.meta.sandbox_paused_at, undefined);
   assert.equal(host.meta.expected_close, true);
+  assert.ok(!callNames(handle).includes("writeFile"), "no token is written for a resume that lost the race");
 });
 
 test("after resume the queued run starts exactly once when the agent reconnects", async () => {
@@ -330,14 +351,37 @@ test("a paused sandbox reconnects in resume mode", () => {
   assert.equal(sandboxConnectionMode("ready", undefined, 1), "reject");
 });
 
-test("a late close of a pause-closed socket is not an interruption", () => {
-  const base = { state: "ready", otherSandboxSocketsAttached: false };
-  assert.equal(isUnexpectedSandboxDisconnect({ ...base }), true);
-  // Closed by the DO (pause or teardown).
-  assert.equal(isUnexpectedSandboxDisconnect({ ...base, expectedClose: true }), false);
-  // The agent already reconnected on a newer socket; this is the old socket's late close.
-  assert.equal(isUnexpectedSandboxDisconnect({ ...base, otherSandboxSocketsAttached: true }), false);
-  assert.equal(isUnexpectedSandboxDisconnect({ ...base, state: "failed" }), false);
+test("a late close of the old socket is ignored only when a newer LIVE socket exists", () => {
+  const oldSocket = createFakeSandboxSocket();
+  const base = { state: "ready", closedSocket: oldSocket };
+
+  // The agent dropped and nothing replaced it: a real interruption (current socket's close is handled).
+  assert.equal(isUnexpectedSandboxDisconnect({ ...base, sandboxSockets: [oldSocket] }), true);
+  // The agent already reconnected on a newer live socket: the old socket's late close is stale.
+  assert.equal(isUnexpectedSandboxDisconnect({ ...base, sandboxSockets: [oldSocket, createFakeSandboxSocket()] }), false);
+  // A newer socket the DO already closed, or one that is not OPEN, is not a live replacement.
+  const closing = createFakeSandboxSocket({ closing: true });
+  const closed = Object.assign(createFakeSandboxSocket(), { readyState: 3 });
+  assert.equal(isUnexpectedSandboxDisconnect({ ...base, sandboxSockets: [oldSocket, closing, closed] }), true);
+  // Closes the DO initiated, and closes after the session ended, are never interruptions.
+  assert.equal(isUnexpectedSandboxDisconnect({ ...base, sandboxSockets: [oldSocket], expectedClose: true }), false);
+  assert.equal(isUnexpectedSandboxDisconnect({ ...base, sandboxSockets: [oldSocket], state: "failed" }), false);
+});
+
+test("live sandbox sockets exclude sockets the DO closed or that are not OPEN", () => {
+  const live = createFakeSandboxSocket();
+  const closing = createFakeSandboxSocket();
+  const notOpen = Object.assign(createFakeSandboxSocket(), { readyState: 2 });
+  const bare = {};
+  const ctx = { getWebSockets: (tag) => (tag === "sandbox" ? [live, closing, notOpen, bare] : []) };
+
+  closeSandboxSockets({ getWebSockets: () => [closing] }, "sandbox paused");
+
+  assert.deepEqual(closing.closeCalls, [[1000, "sandbox paused"]]);
+  // The closing flag merges into the existing attachment instead of replacing it.
+  assert.deepEqual(closing.deserializeAttachment(), { sandbox: { aud: "sandbox_ws", role: "sandbox" }, closing: true });
+  assert.equal(isLiveSandboxSocket(closing), false);
+  assert.deepEqual(liveSandboxSockets(ctx), [live, bare]);
 });
 
 test("a stale paused marker with a live agent socket is cleared; a real pause is not", () => {
@@ -576,6 +620,17 @@ test("an authenticated preview request resumes a paused sandbox, records activit
   assert.equal(fake.activity.count, 1);
 });
 
+test("the preview resume path writes a fresh ws token before the agent reconnects", async () => {
+  const fake = await previewHost({});
+  await proxy(fake, PREVIEW_TOKEN);
+  assert.deepEqual(fake.handle.calls.find(([name]) => name === "writeFile"), [
+    "writeFile",
+    "/run/codevil/ws-token",
+    "fresh_token",
+    { mode: 0o600, owner: "codevil" },
+  ]);
+});
+
 test("an authenticated preview request on a running sandbox records activity without resuming", async () => {
   const fake = await previewHost({ sandbox_paused_at: undefined, expected_close: false });
   const response = await proxy(fake, PREVIEW_TOKEN);
@@ -626,4 +681,293 @@ test("a preview request on a session whose resume failed answers 410, not a prox
   const response = await proxy(fake, PREVIEW_TOKEN);
   assert.equal(response.status, 410);
   assert.equal(fake.host.meta.state, "failed");
+});
+
+// --- live sockets: a DO-closed socket may linger while its paused peer is frozen ---
+
+for (const linger of [false, true]) {
+  const mode = linger ? "closed sockets linger in getWebSockets" : "closed sockets are removed";
+
+  test(`pause, request, resume, reconnect (${mode})`, async () => {
+    const { host, sandboxSockets, sandboxMessages, resumeRequests } = createFakeHost(idleMeta, {
+      e2b: true,
+      sandboxConnected: true,
+      lingerClosedSockets: linger,
+    });
+
+    assert.equal(await pauseIdleSandbox(host, T0 + 600_000), true);
+    assert.equal(host.ctx.getWebSockets("sandbox").length, linger ? 1 : 0);
+    assert.equal(liveSandboxSockets(host.ctx).length, 0);
+    assert.equal(sandboxSocketAttached(host), false);
+
+    handleAgentRequest(host, "wake up", actor, false);
+    assert.equal(host.meta.queued_runs.length, 1);
+    assert.equal(resumeRequests.count, 1);
+    drainQueuedAgentWorkIfReady(host);
+    assert.deepEqual(sandboxMessages, []);
+
+    await resumeSandbox(host);
+    // The lingering socket must not suppress the reconnect grace.
+    assert.ok(host.meta.sandbox_disconnected_at);
+    // The agent's reconnect is judged by live sockets only, so it is accepted in resume mode.
+    assert.equal(
+      sandboxConnectionMode(host.meta.state, host.meta.sandbox_disconnected_at, liveSandboxSockets(host.ctx).length),
+      "resume",
+    );
+    assert.equal(
+      sandboxConnectionMode(host.meta.state, undefined, liveSandboxSockets(host.ctx).length),
+      "resume",
+    );
+    drainQueuedAgentWorkIfReady(host);
+    assert.deepEqual(sandboxMessages, []);
+
+    sandboxSockets.push(createFakeSandboxSocket());
+    drainQueuedAgentWorkIfReady(host);
+    drainQueuedAgentWorkIfReady(host);
+    assert.deepEqual(sandboxMessages.map((message) => message.type), ["agent_turn"]);
+    assert.equal(host.meta.queued_runs.length, 0);
+    assert.ok(host.meta.active_run);
+  });
+}
+
+// --- the paused VM is never woken by a plain handle lookup ---
+
+test("a handle lookup on a paused session returns null without connecting", async () => {
+  let connects = 0;
+  const provider = createFakeSandboxProvider({ name: "e2b", connect: async () => { connects += 1; return {}; } });
+  const meta = { session_id: "ses_test", sandbox_ref: { provider: "e2b", id: "sbx_1" } };
+  const paused = await connectSandboxHandle({
+    meta: { ...meta, sandbox_paused_at: "2026-10-01T00:10:00.000Z" },
+    provider,
+    readSecret: async () => undefined,
+  });
+  assert.equal(paused, null);
+  assert.equal(connects, 0);
+
+  await connectSandboxHandle({ meta, provider, readSecret: async () => undefined });
+  assert.equal(connects, 1);
+});
+
+test("logs and diagnostics of a paused sandbox answer paused without waking the VM", async () => {
+  const resolve = async () => assert.fail("must not resolve the sandbox");
+  for (const respond of [sandboxLogsResponse, sandboxDiagnosticsResponse]) {
+    const response = await respond(resolve, [], { paused: true });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).paused, true);
+  }
+});
+
+// --- teardown races ---
+
+test("stop during an in-flight pause waits for it and then destroys the sandbox", async () => {
+  const { host, handle } = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+  let release;
+  handle.pause = () => new Promise((resolve) => { release = resolve; handle.calls.push(["pause"]); });
+
+  const pausing = pauseIdleSandbox(host, T0 + 600_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  host.transition("failed");
+  const terminating = terminateSandbox(host, "stopped by user");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(!callNames(handle).includes("destroy"), "destroy must wait for the pause to settle");
+
+  release();
+  assert.equal(await pausing, false);
+  await terminating;
+  assert.deepEqual(callNames(handle), ["pause", "destroy"]);
+  assert.equal(host.meta.sandbox_paused_at, undefined);
+});
+
+// --- failed pause recovery ---
+
+test("a failed pause releases a run that queued during it and re-arms the alarm", async () => {
+  const fake = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+  const { host, handle, sandboxMessages } = fake;
+  let fail;
+  handle.pause = () => new Promise((_, reject) => { fail = reject; });
+
+  const pausing = pauseIdleSandbox(host, T0 + 600_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  handleAgentRequest(host, "queued mid-pause", actor, false);
+  assert.equal(host.meta.queued_runs.length, 1);
+  assert.deepEqual(sandboxMessages, []);
+  const armsBefore = fake.armCalls;
+
+  fail(new Error("pause rejected"));
+  assert.equal(await pausing, false);
+
+  assert.equal(host.meta.expected_close, false);
+  assert.equal(host.meta.queued_runs.length, 0);
+  assert.deepEqual(sandboxMessages.map((message) => message.type), ["agent_turn"]);
+  assert.ok(fake.armCalls > armsBefore);
+});
+
+test("a failed pause with no live socket left starts the reconnect grace", async () => {
+  const fake = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+  const { host, handle, sandboxSockets, broadcasts } = fake;
+  // The agent dropped while expected_close was set, so the drop was ignored.
+  handle.pause = async () => {
+    sandboxSockets.length = 0;
+    throw new Error("pause rejected");
+  };
+  const armsBefore = fake.armCalls;
+
+  assert.equal(await pauseIdleSandbox(host, T0 + 600_000), false);
+
+  assert.equal(host.meta.expected_close, false);
+  assert.ok(host.meta.sandbox_disconnected_at);
+  assert.ok(broadcasts.some((event) => event.type === "status" && /interrupted/.test(event.message)));
+  assert.ok(fake.armCalls > armsBefore);
+});
+
+test("a failed pause with a live socket does not start the reconnect grace", async () => {
+  const { host } = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true, pauseError: new Error("boom") });
+  await pauseIdleSandbox(host, T0 + 600_000);
+  assert.equal(host.meta.sandbox_disconnected_at, undefined);
+});
+
+// --- preview_start / preview_stop while paused ---
+
+test("preview_start on a paused session resumes, defers, and sends once the agent reconnects", async () => {
+  const { host, resumeRequests, activity, broadcasts, sandboxMessages, sandboxSockets } = createFakeHost(pausedMeta, {
+    e2b: true,
+    sandboxConnected: false,
+  });
+
+  await handlePreviewStart(host, "web");
+
+  assert.equal(resumeRequests.count, 1);
+  assert.equal(activity.count, 1);
+  assert.deepEqual(host.meta.pending_preview_start, { app_key: "web" });
+  assert.deepEqual(sandboxMessages, []);
+  assert.ok(broadcasts.some((event) => event.type === "status" && event.message === "Sandbox is resuming; the preview will start when it reconnects."));
+  assert.ok(!broadcasts.some((event) => event.type === "error"));
+
+  await resumeSandbox(host);
+  // Resumed, but the agent has not reconnected yet.
+  assert.equal(flushPendingPreviewStart(host), false);
+  sandboxSockets.push(createFakeSandboxSocket());
+  assert.equal(flushPendingPreviewStart(host), true);
+  assert.equal(flushPendingPreviewStart(host), false);
+  assert.deepEqual(sandboxMessages.map((message) => [message.type, message.app_key]), [["preview_start", "web"]]);
+  assert.equal(host.meta.pending_preview_start, undefined);
+});
+
+test("preview_start on a running session is sent straight away", async () => {
+  const { host, sandboxMessages, resumeRequests } = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+  await handlePreviewStart(host, "web");
+  assert.deepEqual(sandboxMessages.map((message) => message.type), ["preview_start"]);
+  assert.equal(resumeRequests.count, 0);
+  assert.equal(host.meta.pending_preview_start, undefined);
+});
+
+test("preview_start during an in-flight pause is sent after the pause fails", async () => {
+  const { host, handle, sandboxMessages } = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+  let fail;
+  handle.pause = () => new Promise((_, reject) => { fail = reject; });
+
+  const pausing = pauseIdleSandbox(host, T0 + 600_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  await handlePreviewStart(host);
+  assert.ok(host.meta.pending_preview_start);
+  assert.deepEqual(sandboxMessages, []);
+
+  fail(new Error("pause rejected"));
+  await pausing;
+  assert.deepEqual(sandboxMessages.map((message) => message.type), ["preview_start"]);
+  assert.equal(host.meta.pending_preview_start, undefined);
+});
+
+test("preview_stop on a paused session clears the deferred start and does not error", async () => {
+  const { host, broadcasts, sandboxMessages } = createFakeHost(pausedMeta, { e2b: true, sandboxConnected: false });
+  await handlePreviewStart(host, "web");
+  await handlePreviewStop(host);
+  assert.equal(host.meta.pending_preview_start, undefined);
+  assert.deepEqual(sandboxMessages, []);
+  assert.ok(!broadcasts.some((event) => event.type === "error"));
+});
+
+test("a deferred preview start is dropped when the session fails", async () => {
+  const { host } = createFakeHost(pausedMeta, { e2b: true, sandboxConnected: false, connectError: new SandboxNotFoundError() });
+  await handlePreviewStart(host, "web");
+  await resumeSandbox(host);
+  assert.equal(host.meta.state, "failed");
+  assert.equal(host.meta.pending_preview_start, undefined);
+});
+
+// --- activity ---
+
+test("recordSessionActivity throttles only the write, never the alarm re-arm", () => {
+  const fake = createFakeHost(
+    { ...idleMeta, last_activity_at: "2026-10-01T00:00:00.000Z" },
+    { e2b: true, sandboxConnected: true },
+  );
+  const { host } = fake;
+
+  recordSessionActivity(host, T0 + 5_000);
+  assert.equal(host.meta.last_activity_at, new Date(T0 + 5_000).toISOString());
+  const writes = fake.saveMetaCalls;
+  const arms = fake.armCalls;
+
+  // Within the throttle window: no write, but the idle alarm is still re-armed.
+  recordSessionActivity(host, T0 + 5_400);
+  assert.equal(host.meta.last_activity_at, new Date(T0 + 5_000).toISOString());
+  assert.equal(fake.saveMetaCalls, writes);
+  assert.equal(fake.armCalls, arms + 1);
+});
+
+test("recordSessionActivity does not re-arm when no idle deadline applies", () => {
+  const fake = createFakeHost(
+    { ...idleMeta, active_run: { id: "run_1", state: "thinking" } },
+    { e2b: true, sandboxConnected: true },
+  );
+  recordSessionActivity(fake.host, T0 + 5_000);
+  assert.equal(fake.armCalls, 0);
+});
+
+test("recordSessionActivity leaves a Cloudflare session untouched", () => {
+  const fake = createFakeHost(
+    { state: "ready", last_activity_at: "2026-10-01T00:00:00.000Z" },
+    { sandboxConnected: true },
+  );
+  recordSessionActivity(fake.host, T0 + 60_000);
+  assert.equal(fake.host.meta.last_activity_at, "2026-10-01T00:00:00.000Z");
+  assert.equal(fake.saveMetaCalls, 0);
+  assert.equal(fake.armCalls, 0);
+});
+
+test("an open question blocks the pause", () => {
+  const sql = createFakeSql({ questions: [{ request_id: "q1", run_id: "run_1", status: "open" }] });
+  const withRun = createFakeHost(
+    { ...idleMeta, active_run: { id: "run_1", state: "thinking" } },
+    { e2b: true, sandboxConnected: true, sql },
+  );
+  assert.equal(idlePauseInput(withRun.host, T0 + 3_600_000).openQuestions, 1);
+
+  // Questions only exist for a run; with no active run nothing counts.
+  const noRun = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true, sql });
+  assert.equal(idlePauseInput(noRun.host, T0 + 3_600_000).openQuestions, 0);
+});
+
+// --- lease renewal is its own capability ---
+
+test("lease renewal follows the leaseRenewal capability, not pauseResume", async () => {
+  const withCapabilities = (capabilities) => {
+    const fake = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+    const provider = fake.provider;
+    fake.host.sandboxProvider = () => ({ ...provider, capabilities: { workspaceCache: false, ...capabilities } });
+    return fake;
+  };
+
+  const pauseOnly = withCapabilities({ pauseResume: true, leaseRenewal: false });
+  await renewSandboxLeaseIfDue(pauseOnly.host, T0 + 60 * 60_000);
+  assert.equal(pauseOnly.handle.calls.length, 0);
+  assert.equal(pauseOnly.host.meta.sandbox_lease_renewed_at, undefined);
+  assert.equal(sandboxAlarmDeadlines(pauseOnly.host).leaseRenewAt, null);
+  assert.equal(sandboxAlarmDeadlines(pauseOnly.host).idlePauseAt, T0 + 600_000);
+
+  const leaseOnly = withCapabilities({ pauseResume: false, leaseRenewal: true });
+  await renewSandboxLeaseIfDue(leaseOnly.host, T0 + 5 * 60_000);
+  assert.deepEqual(callNames(leaseOnly.handle), ["renewLease"]);
+  assert.equal(sandboxAlarmDeadlines(leaseOnly.host).idlePauseAt, null);
 });

@@ -22,7 +22,7 @@ function recordingProvider(name) {
     connects,
     provider: {
       name,
-      capabilities: { pauseResume: false, workspaceCache: false },
+      capabilities: { pauseResume: false, workspaceCache: false, leaseRenewal: false },
       create: async () => assert.fail("create must not be called"),
       connect: async (ref, options) => {
         connects.push([ref, options]);

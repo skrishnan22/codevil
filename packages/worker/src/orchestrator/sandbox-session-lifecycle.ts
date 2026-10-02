@@ -1,7 +1,9 @@
 import { isTerminalState, safeExceptionAttributes } from "@codevil/shared";
 import { redactEvent } from "../redaction.js";
+import { liveSandboxSockets } from "../sandbox-connection.js";
 import { SandboxNotFoundError } from "../sandbox-provider/types.js";
 import { sandboxProviderMaxLeaseMs } from "../sandbox-provider/index.js";
+import { finishRunAndDrainQueue } from "./agent-run-coordinator.js";
 import type { OrchestratorHost } from "./host.js";
 import { validatePreviewAccess } from "./preview.js";
 import { listOpenQuestionIds } from "./questions-store.js";
@@ -37,7 +39,24 @@ export function isSandboxPausing(host: OrchestratorHost): boolean {
 
 /** A sandbox socket is attached and the sandbox is not about to be paused. */
 export function sandboxSocketAttached(host: OrchestratorHost): boolean {
-  return host.ctx.getWebSockets("sandbox").length > 0 && !pausing.has(host);
+  return liveSandboxSockets(host.ctx).length > 0 && !pausing.has(host);
+}
+
+/**
+ * Drains queued agent work once the session is usable; the cache job no longer
+ * gates agent work (snapshots are best-effort and validated on restore, so runs
+ * and backups may overlap). Lives here, not in sandbox-handlers, so pause
+ * recovery can drain without an import cycle.
+ */
+export function drainQueuedAgentWorkIfReady(host: OrchestratorHost): void {
+  if (
+    host.meta?.state === "ready"
+    && !host.meta.active_run
+    && host.meta.queued_runs.length > 0
+    && sandboxSocketAttached(host)
+  ) {
+    finishRunAndDrainQueue(host, "completed");
+  }
 }
 
 function logFailure(host: OrchestratorHost, event: string, error: unknown, extra: Record<string, unknown> = {}): void {
@@ -47,15 +66,39 @@ function logFailure(host: OrchestratorHost, event: string, error: unknown, extra
   });
 }
 
-function providerSupportsPause(host: OrchestratorHost): boolean {
+function providerCapabilities(host: OrchestratorHost): { pauseResume: boolean; leaseRenewal: boolean } {
   try {
-    return host.sandboxProvider().capabilities.pauseResume;
+    const { pauseResume, leaseRenewal } = host.sandboxProvider().capabilities;
+    return { pauseResume, leaseRenewal };
   } catch {
-    return false;
+    return { pauseResume: false, leaseRenewal: false };
   }
 }
 
-function idlePauseInput(host: OrchestratorHost, now: number): IdlePauseInput | null {
+function providerSupportsPause(host: OrchestratorHost): boolean {
+  return providerCapabilities(host).pauseResume;
+}
+
+const ACTIVITY_WRITE_INTERVAL_MS = 1_000;
+
+/**
+ * Counts a user-visible action toward the idle-pause clock. A no-op for
+ * providers that cannot pause (their meta stays untouched). Only the meta write
+ * is throttled; the alarm is always re-armed while an idle deadline exists so a
+ * run that finishes right after a request still gets its idle alarm.
+ */
+export function recordSessionActivity(host: OrchestratorHost, now: number = Date.now()): void {
+  const meta = host.meta;
+  if (!meta || !providerSupportsPause(host)) return;
+  const lastMs = meta.last_activity_at ? Date.parse(meta.last_activity_at) : Number.NaN;
+  if (!(Number.isFinite(lastMs) && now - lastMs >= 0 && now - lastMs < ACTIVITY_WRITE_INTERVAL_MS)) {
+    meta.last_activity_at = new Date(now).toISOString();
+    host.saveMeta();
+  }
+  if (sandboxAlarmDeadlines(host).idlePauseAt !== null) void armAlarmSafely(host);
+}
+
+export function idlePauseInput(host: OrchestratorHost, now: number): IdlePauseInput | null {
   const meta = host.meta;
   if (!meta) return null;
   const activeRunId = meta.active_run?.id;
@@ -83,14 +126,14 @@ export function sandboxAlarmDeadlines(host: OrchestratorHost): {
   leaseRenewAt: number | null;
 } {
   const meta = host.meta;
-  if (!meta || isTerminalState(meta.state) || meta.sandbox_paused_at || !providerSupportsPause(host)) {
+  if (!meta || isTerminalState(meta.state) || meta.sandbox_paused_at) {
     return { idlePauseAt: null, leaseRenewAt: null };
   }
 
   // Every pause condition except the clock: an infinite `now` passes the time check.
   const input = idlePauseInput(host, Number.POSITIVE_INFINITY);
   const idlePauseAt = input && shouldPauseSandbox(input) ? idlePauseDeadline(input) : null;
-  const leaseRenewAt = meta.sandbox_ref
+  const leaseRenewAt = meta.sandbox_ref && providerCapabilities(host).leaseRenewal
     ? leaseRenewDeadline({ renewedAt: meta.sandbox_lease_renewed_at, createdAt: meta.created_at })
     : null;
   return { idlePauseAt, leaseRenewAt };
@@ -104,7 +147,13 @@ export function pauseIdleSandbox(host: OrchestratorHost, now: number): Promise<b
 
   // `pausing` is set synchronously (before any await) so requests arriving
   // while the sandbox is being paused queue instead of reaching a freezing agent.
-  const run = doPause(host, now).finally(() => pausing.delete(host));
+  // Recovery runs after the marker is cleared so a drained run can reach the sandbox again.
+  const run = doPause(host, now)
+    .finally(() => pausing.delete(host))
+    .then(async (paused) => {
+      if (!paused) await recoverAfterFailedPause(host);
+      return paused;
+    });
   pausing.set(host, run);
   return run;
 }
@@ -143,6 +192,26 @@ async function doPause(host: OrchestratorHost, now: number): Promise<boolean> {
   // A request that queued while the pause was in flight is still waiting.
   if (meta.queued_runs.length > 0) host.requestSandboxResume();
   return true;
+}
+
+/**
+ * A failed pause leaves the sandbox running. While `expected_close` was set, a
+ * dropped socket was ignored, so if no live socket remains start the reconnect
+ * grace; then release work that queued during the pause and re-arm the alarm
+ * (which retries the pause) instead of waiting for the next tick.
+ */
+async function recoverAfterFailedPause(host: OrchestratorHost): Promise<void> {
+  const meta = host.meta;
+  if (!meta || isTerminalState(meta.state) || meta.sandbox_paused_at) return;
+  if (liveSandboxSockets(host.ctx).length === 0 && !meta.sandbox_disconnected_at) {
+    meta.sandbox_disconnected_at = new Date().toISOString();
+    host.saveMeta();
+    host.appendAndBroadcast({ type: "status", message: "Sandbox connection interrupted. Reconnecting…" });
+    host.updateDirectory({});
+  }
+  drainQueuedAgentWorkIfReady(host);
+  flushPendingPreviewStart(host);
+  await armAlarmSafely(host);
 }
 
 /** Resumes a paused sandbox. Concurrent callers share one in-flight resume. */
@@ -191,6 +260,8 @@ async function doResume(host: OrchestratorHost, retryDelaysMs: readonly number[]
         ...(secret ? { secret } : {}),
       });
       registerSandboxSecret(host.redactionSecrets, handle.secret);
+      // Teardown may have run while connect was in flight; do not touch a sandbox that is going away.
+      if (!meta.sandbox_paused_at || isTerminalState(meta.state)) return;
       // The agent adopts a changed token file on its next reconnect; the
       // in-memory token it holds may have expired while paused.
       await handle.writeFile(SANDBOX_WS_TOKEN_FILE, await host.issueSandboxWebSocketToken(), {
@@ -218,11 +289,12 @@ async function completeResume(host: OrchestratorHost, now: number): Promise<void
 
   meta.sandbox_paused_at = undefined;
   meta.expected_close = false;
-  meta.sandbox_lease_renewed_at = new Date(now).toISOString();
+  if (providerCapabilities(host).leaseRenewal) meta.sandbox_lease_renewed_at = new Date(now).toISOString();
   // The agent reconnects on its own; start the reconnect grace so a resumed
   // sandbox whose agent never returns fails instead of stranding queued runs.
   // Skip when the agent already reconnected while the resume was in flight.
-  if (host.ctx.getWebSockets("sandbox").length === 0) {
+  // Closed-but-lingering sockets do not count: only a live agent socket does.
+  if (liveSandboxSockets(host.ctx).length === 0) {
     meta.sandbox_disconnected_at = new Date().toISOString();
   }
   host.saveMeta();
@@ -262,7 +334,7 @@ export async function renewSandboxLeaseIfDue(host: OrchestratorHost, now: number
     || meta.sandbox_paused_at
     || isTerminalState(meta.state)
     || pausing.has(host)
-    || !providerSupportsPause(host)
+    || !providerCapabilities(host).leaseRenewal
     || now < leaseRenewDeadline({ renewedAt: meta.sandbox_lease_renewed_at, createdAt: meta.created_at })
   ) {
     return;
@@ -316,6 +388,7 @@ async function failSession(
   if (!meta || isTerminalState(meta.state)) return false;
   if (!host.transition("failed")) return false;
   meta.sandbox_paused_at = undefined;
+  meta.pending_preview_start = undefined;
   const activeRunId = failOutstandingRuns(host, message, questionReason);
   host.appendAndBroadcast({ type: "error", message });
   host.updateDirectory({
@@ -344,8 +417,12 @@ async function failSandboxResume(host: OrchestratorHost): Promise<void> {
  */
 export async function terminateSandbox(host: OrchestratorHost, reason: string): Promise<void> {
   if (!host.meta) return;
+  // A pause still in flight would otherwise land after the destroy and leave a
+  // paused sandbox that never expires.
+  await pausing.get(host)?.catch(() => false);
   host.meta.expected_close = true;
   host.meta.sandbox_paused_at = undefined;
+  host.meta.pending_preview_start = undefined;
   host.saveMeta();
   await destroySandbox(() => host.sandboxHandle(), reason, (error) => {
     logFailure(host, "sandbox.stop.failed", error);
@@ -365,6 +442,67 @@ export async function expireSessionAtMaxTime(host: OrchestratorHost, now: number
   if (activeRunId) host.cancelOpenQuestions(activeRunId, "session timed out");
   host.appendAndBroadcast({ type: "error", message: `Session timed out after ${meta.max_time}.` });
   await host.terminateSandbox("timed out");
+  return true;
+}
+
+export function buildPreviewStartMessage(
+  meta: { plan_model: string; provider: string; prompt: string },
+  appKey?: string,
+) {
+  return {
+    type: "preview_start" as const,
+    model: meta.plan_model,
+    provider: meta.provider,
+    task_prompt: meta.prompt,
+    app_key: appKey,
+  };
+}
+
+/**
+ * A preview start requested while the sandbox is paused (or about to be)
+ * resumes it and is remembered; it is sent when the agent reconnects.
+ */
+export function deferPreviewStartWhilePaused(host: OrchestratorHost, appKey?: string): boolean {
+  const meta = host.meta;
+  if (!meta || (!meta.sandbox_paused_at && !pausing.has(host))) return false;
+  meta.pending_preview_start = appKey !== undefined ? { app_key: appKey } : {};
+  host.saveMeta();
+  host.recordActivity();
+  host.requestSandboxResume();
+  host.appendAndBroadcast({
+    type: "status",
+    message: "Sandbox is resuming; the preview will start when it reconnects.",
+  });
+  return true;
+}
+
+/** True when there was nothing live to stop: a deferred start was cancelled or the sandbox is paused. */
+export function cancelDeferredPreviewStart(host: OrchestratorHost): boolean {
+  const meta = host.meta;
+  if (!meta) return false;
+  const hadPending = meta.pending_preview_start !== undefined;
+  if (hadPending) {
+    meta.pending_preview_start = undefined;
+    host.saveMeta();
+  }
+  return hadPending || Boolean(meta.sandbox_paused_at) || pausing.has(host);
+}
+
+/** Sends a deferred preview start once a live agent socket exists. */
+export function flushPendingPreviewStart(host: OrchestratorHost): boolean {
+  const meta = host.meta;
+  if (
+    !meta?.pending_preview_start
+    || meta.sandbox_paused_at
+    || isTerminalState(meta.state)
+    || !sandboxSocketAttached(host)
+  ) {
+    return false;
+  }
+  const { app_key: appKey } = meta.pending_preview_start;
+  meta.pending_preview_start = undefined;
+  host.saveMeta();
+  host.sendToSandbox(buildPreviewStartMessage(meta, appKey));
   return true;
 }
 

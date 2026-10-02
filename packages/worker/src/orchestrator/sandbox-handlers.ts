@@ -41,7 +41,8 @@ import {
   finishRunAndDrainQueue,
   setActiveRunState,
 } from "./agent-run-coordinator.js";
-import { sandboxSocketAttached } from "./sandbox-resume.js";
+import { drainQueuedAgentWorkIfReady } from "./sandbox-session-lifecycle.js";
+export { drainQueuedAgentWorkIfReady } from "./sandbox-session-lifecycle.js";
 import { freezePlanRevision } from "./plan-revision-actions.js";
 import {
   cancelOpenQuestions,
@@ -86,7 +87,7 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
           }),
         });
         meta.sandbox_ref = handle.ref;
-        meta.sandbox_lease_renewed_at = new Date().toISOString();
+        if (provider.capabilities.leaseRenewal) meta.sandbox_lease_renewed_at = new Date().toISOString();
         host.saveMeta();
         if (handle.secret) {
           // Redact before anything can log it, then persist for cold starts.
@@ -363,20 +364,6 @@ export function handleSandboxCloneComplete(
     // without this they would wait for the alarm, which claims the backup
     // first and only drains queued work after the upload finishes.
     drainQueuedAgentWorkIfReady(host);
-  }
-}
-
-/** Drains queued agent work once the session is usable; the cache job no
- *  longer gates agent work — snapshots are best-effort and validated on
- *  restore, so runs and backups may overlap. */
-export function drainQueuedAgentWorkIfReady(host: OrchestratorHost): void {
-  if (
-    host.meta?.state === "ready"
-    && !host.meta.active_run
-    && host.meta.queued_runs.length > 0
-    && sandboxSocketAttached(host)
-  ) {
-    finishRunAndDrainQueue(host, "completed");
   }
 }
 

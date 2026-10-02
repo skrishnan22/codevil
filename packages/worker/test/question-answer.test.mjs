@@ -43,7 +43,10 @@ function question(overrides = {}) {
 function fixture(row = question(), options = {}) {
   const broadcasts = [];
   const sandboxMessages = [];
-  const sandboxSockets = options.sandboxConnected === false ? [] : [{}];
+  // `closingSocket`: the DO closed the agent's socket (pause) but it still lingers in getWebSockets.
+  const sandboxSockets = options.closingSocket
+    ? [{ deserializeAttachment: () => ({ sandbox: {}, closing: true }) }]
+    : options.sandboxConnected === false ? [] : [{}];
   const host = {
     meta: { session_id: "ses_123", created_by: { id: "creator", name: "Creator" } },
     ctx: {
@@ -184,6 +187,17 @@ test("Slack answer validation rejects invalid ordinals and cardinality", async (
     assert.equal(state.row.status, "open");
     assert.equal(state.broadcasts.length, 0);
   }
+});
+
+test("a lingering DO-closed sandbox socket does not count as an attached sandbox", async () => {
+  const state = fixture(question(), { closingSocket: true });
+  const result = await answer(state.host, {
+    requestId: "question_1",
+    optionIndexes: [0],
+    actor: slackActor,
+  });
+  assert.equal(result.status, "sandbox_unavailable");
+  assert.equal(state.row.status, "open");
 });
 
 test("Slack answer fails without consuming the question when the sandbox is unavailable", async () => {

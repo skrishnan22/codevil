@@ -1,6 +1,10 @@
 import { isValidTransition } from "../../../shared/dist/index.js";
 import { createAgentRun } from "../../dist/agent-runs.js";
-import { terminateSandbox as terminateSandboxForHost } from "../../dist/orchestrator/sandbox-resume.js";
+import {
+  recordSessionActivity,
+  terminateSandbox as terminateSandboxForHost,
+} from "../../dist/orchestrator/sandbox-session-lifecycle.js";
+import { closeSandboxSockets as closeSandboxSocketsOnCtx } from "../../dist/sandbox-connection.js";
 
 const actor = { id: "usr_test", name: "Tester" };
 
@@ -84,7 +88,7 @@ export function createFakeSandboxHandle(overrides = {}) {
 export function createFakeSandboxProvider(overrides = {}) {
   return {
     name: "cloudflare",
-    capabilities: { pauseResume: false, workspaceCache: true },
+    capabilities: { pauseResume: false, workspaceCache: true, leaseRenewal: false },
     create: async () => createFakeSandboxHandle(),
     connect: async () => createFakeSandboxHandle(),
     ...overrides,
@@ -96,6 +100,22 @@ export function createFakeTracer() {
     trace_id: "trace_test",
     span: async (_name, _opts, fn) => fn(),
     log: () => {},
+  };
+}
+
+/**
+ * A Durable Object sandbox socket double. `close()` deliberately leaves
+ * `readyState` OPEN (the worst case for a socket whose paused peer has not yet
+ * answered the close handshake) so only the `closing` attachment marks it dead.
+ */
+export function createFakeSandboxSocket(attachment = { sandbox: { aud: "sandbox_ws", role: "sandbox" } }) {
+  let current = attachment;
+  return {
+    readyState: 1,
+    closeCalls: [],
+    serializeAttachment(value) { current = value; },
+    deserializeAttachment() { return current; },
+    close(code, reason) { this.closeCalls.push([code, reason]); },
   };
 }
 
@@ -140,7 +160,7 @@ export function createFakeE2BHandle(options = {}) {
 export function createFakeE2BProvider(handle, options = {}) {
   const provider = {
     name: "e2b",
-    capabilities: { pauseResume: true, workspaceCache: false },
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
     connectCalls: 0,
     connectOptions: [],
     create: async () => handle,
@@ -167,7 +187,8 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
   // `e2b: true` swaps in an E2B-like provider and a call-recording handle.
   const e2bHandle = options.e2b ? createFakeE2BHandle(options) : undefined;
   const e2bProvider = options.e2b ? createFakeE2BProvider(e2bHandle, options) : undefined;
-  const sandboxSockets = options.sandboxConnected === false ? [] : [{}];
+  const sandboxSockets = options.sandboxConnected === false ? [] : [createFakeSandboxSocket()];
+  let armCalls = 0;
   const closedSandboxSockets = [];
   const activity = { count: 0 };
   const resumeRequests = { count: 0 };
@@ -261,20 +282,22 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     decisionRejection(_host, _action, fallbackMessage) {
       return { type: "error", message: fallbackMessage };
     },
-    armNextAlarm: async () => {},
+    armNextAlarm: async () => { armCalls += 1; },
     sandboxProvider() {
       return options.sandboxProvider ?? e2bProvider ?? createFakeSandboxProvider();
     },
     recordActivity() {
       activity.count += 1;
-      meta.last_activity_at = new Date().toISOString();
+      recordSessionActivity(host);
     },
     requestSandboxResume() {
       resumeRequests.count += 1;
     },
     closeSandboxSockets(reason) {
       closedSandboxSockets.push(reason);
-      sandboxSockets.length = 0;
+      // `lingerClosedSockets`: closed sockets stay in getWebSockets, marked only by the closing attachment.
+      if (options.lingerClosedSockets) closeSandboxSocketsOnCtx(host.ctx, reason);
+      else sandboxSockets.length = 0;
     },
     async issueSandboxWebSocketToken() {
       return "fresh_token";
@@ -283,6 +306,8 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
       return terminateSandboxForHost(host, reason);
     },
     async sandboxHandle() {
+      // Mirrors connectSandboxHandle: a paused sandbox is never woken by a plain handle lookup.
+      if (meta.sandbox_paused_at) return null;
       if (options.sandboxHandle !== undefined) return options.sandboxHandle;
       if (e2bHandle) return e2bHandle;
       return createFakeSandboxHandle({
@@ -305,6 +330,9 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     closedSandboxSockets,
     activity,
     resumeRequests,
+    get armCalls() {
+      return armCalls;
+    },
     get saveMetaCalls() {
       return saveMetaCalls;
     },

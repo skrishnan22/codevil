@@ -70,7 +70,7 @@ export function createE2BSandboxProvider(options: E2BSandboxProviderOptions): Sa
 
   return {
     name: "e2b",
-    capabilities: { pauseResume: true, workspaceCache: false },
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
     async create({ sessionId, leaseMs }) {
       // `secure` is ignored in e2b 2.x and a top-level `allowPublicTraffic`
       // is not honored: only `network.allowPublicTraffic` locks the sandbox.

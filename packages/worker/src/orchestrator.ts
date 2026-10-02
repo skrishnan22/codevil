@@ -39,7 +39,9 @@ import {
   SANDBOX_RECONNECT_GRACE_MS,
   sandboxConnectionMode,
   completeSandboxReconnect,
+  closeSandboxSockets as closeSandboxSocketsFn,
   isUnexpectedSandboxDisconnect,
+  liveSandboxSockets,
   sandboxReconnectExpired,
 } from "./sandbox-connection.js";
 import { redactEvent } from "./redaction.js";
@@ -127,9 +129,11 @@ import {
   prepareAuthenticatedPreview,
   renewSandboxLeaseIfDue,
   resumeSandbox,
+  recordSessionActivity,
+  flushPendingPreviewStart,
   sandboxAlarmDeadlines,
   terminateSandbox as terminateSandboxFn,
-} from "./orchestrator/sandbox-resume.js";
+} from "./orchestrator/sandbox-session-lifecycle.js";
 import {
   nextSessionDirectoryTimestamp,
   runSessionDirectoryUpdateWithRetry,
@@ -152,8 +156,6 @@ import {
 import { armNextAlarm as armNextAlarmAt } from "./orchestrator/alarm.js";
 
 export type { InitOptions } from "./orchestrator/types.js";
-
-const ACTIVITY_WRITE_INTERVAL_MS = 1_000;
 
 export class Orchestrator extends DurableObject<Env> implements OrchestratorHost {
   readonly ctx: DurableObjectState<{}>;
@@ -427,7 +429,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     );
     if (!capability) return new Response("Unauthorized", { status: 401 });
 
-    const attachedSandboxCount = this.ctx.getWebSockets("sandbox").length;
+    // Sockets the DO closed (pause, teardown) can linger until the peer answers; only live ones are attached.
+    const attachedSandboxCount = liveSandboxSockets(this.ctx).length;
     const mode = sandboxConnectionMode(this.meta.state, this.meta.sandbox_disconnected_at, attachedSandboxCount);
     if (mode === "reject") {
       this.getTracer()?.log("WARN", "sandbox.ws.rejected", {
@@ -455,6 +458,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       completeSandboxReconnect(this);
       this.armNextAlarmSafe();
     }
+    // A preview requested while the sandbox was paused starts now that the agent is back.
+    flushPendingPreviewStart(this);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -575,7 +580,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       if (isUnexpectedSandboxDisconnect({
         expectedClose: this.meta.expected_close,
         state: this.meta.state,
-        otherSandboxSocketsAttached: this.ctx.getWebSockets("sandbox").some((socket) => socket !== ws),
+        closedSocket: ws,
+        sandboxSockets: this.ctx.getWebSockets("sandbox"),
       })) {
         const state = this.meta.state;
         if (!this.meta.sandbox_disconnected_at) {
@@ -766,13 +772,13 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   /** RPC for `GET /sessions/:id/logs`. */
   async readSandboxLogs(): Promise<Response> {
     this.loadMeta();
-    return sandboxLogsResponse(this.sandboxResolver, this.redactionSecrets);
+    return sandboxLogsResponse(this.sandboxResolver, this.redactionSecrets, { paused: Boolean(this.meta?.sandbox_paused_at) });
   }
 
   /** RPC for `GET /sessions/:id/diagnostics`. */
   async readSandboxDiagnosticsResponse(): Promise<Response> {
     this.loadMeta();
-    return sandboxDiagnosticsResponse(this.sandboxResolver, this.redactionSecrets);
+    return sandboxDiagnosticsResponse(this.sandboxResolver, this.redactionSecrets, { paused: Boolean(this.meta?.sandbox_paused_at) });
   }
 
   async terminateSandbox(reason: string): Promise<void> {
@@ -780,15 +786,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   recordActivity(): void {
-    if (!this.meta) return;
-    const lastMs = this.meta.last_activity_at ? Date.parse(this.meta.last_activity_at) : Number.NaN;
-    const nowMs = Date.now();
-    // Preview traffic can arrive many times a second; the idle clock only needs second resolution.
-    if (Number.isFinite(lastMs) && nowMs - lastMs < ACTIVITY_WRITE_INTERVAL_MS) return;
-    this.meta.last_activity_at = new Date(nowMs).toISOString();
-    this.saveMeta();
-    // The idle-pause deadline moved; re-arm so the alarm tracks it (only providers that pause have one).
-    if (sandboxAlarmDeadlines(this).idlePauseAt !== null) void this.armNextAlarmSafe();
+    recordSessionActivity(this);
   }
 
   requestSandboxResume(): void {
@@ -843,7 +841,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   sendToSandbox(message: DOToSandboxMessage): void {
-    const sandboxes = this.ctx.getWebSockets("sandbox");
+    const sandboxes = liveSandboxSockets(this.ctx);
     if (sandboxes.length === 0) {
       this.appendAndBroadcast({ type: "error", message: "Sandbox is not connected." });
       return;
@@ -1071,9 +1069,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   closeSandboxSockets(reason: string): void {
-    for (const sandbox of this.ctx.getWebSockets("sandbox")) {
-      sandbox.close(1000, reason);
-    }
+    closeSandboxSocketsFn(this.ctx, reason);
   }
 
   private async logSandboxDisconnectDiagnostics(options: {

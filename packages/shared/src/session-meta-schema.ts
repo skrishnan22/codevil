@@ -43,6 +43,8 @@ export const SessionMetaSchema = z.object({
   last_activity_at: z.string().optional(),
   sandbox_paused_at: z.string().optional(),
   sandbox_lease_renewed_at: z.string().optional(),
+  /** A preview start requested while the sandbox was paused; sent once the agent reconnects. */
+  pending_preview_start: z.object({ app_key: z.string().optional() }).optional(),
   last_decision: LastDecisionSchema.optional(),
 });
 

@@ -56,11 +56,11 @@ Open the Worker URL, sign in with Google, claim the first owner account using `C
 
 ## Sandbox provider
 
-Codevil runs each session in either an E2B sandbox or a Cloudflare Sandbox container. The shipped `wrangler.toml` pins `SANDBOX_PROVIDER = "cloudflare"` so a deploy never switches to E2B before it is ready. To move to E2B: (1) add `E2B_API_KEY` both as a Worker secret and as a GitHub Actions secret in the `production` environment, (2) pass the manual end-to-end check, (3) set `SANDBOX_PROVIDER = "e2b"` and merge to `main`. CI then publishes the template on every deploy (see below). The Worker's code default (no var set) is `e2b`. Configure the provider with Worker vars in `packages/worker/wrangler.toml` (or an untracked `wrangler.operator.toml` overlay):
+Codevil runs each session in either an E2B sandbox or a Cloudflare Sandbox container. The shipped `wrangler.toml` sets `SANDBOX_PROVIDER = "e2b"`, which needs `E2B_API_KEY` both as a Worker secret and as a GitHub Actions secret in the `production` environment. CI publishes the template on every deploy (see below). To run sessions on Cloudflare containers instead, set `SANDBOX_PROVIDER = "cloudflare"`; existing sessions keep the provider they started on. The Worker's code default (no var set) is `e2b`. Configure the provider with Worker vars in `packages/worker/wrangler.toml` (or an untracked `wrangler.operator.toml` overlay):
 
 | Name | Kind | Default | Purpose |
 | --- | --- | --- | --- |
-| `SANDBOX_PROVIDER` | var | `e2b` in code; `cloudflare` in the shipped `wrangler.toml` | `e2b` or `cloudflare`. |
+| `SANDBOX_PROVIDER` | var | `e2b` | `e2b` or `cloudflare`. Deploys require it to be set explicitly. |
 | `E2B_API_KEY` | secret | none | Required when `SANDBOX_PROVIDER=e2b`. Upload with `pnpm exec wrangler secret put E2B_API_KEY`; never put it in `wrangler.toml`. |
 | `E2B_TEMPLATE_ID` | var | `codevil-sandbox` | E2B template the sandboxes start from, without a tag. CI deploys pin it to `<template>:<commit sha>`. |
 | `E2B_MAX_SANDBOX_SECONDS` | var | `3600` | Maximum continuous sandbox runtime; the default matches the E2B Hobby limit. |

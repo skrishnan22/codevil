@@ -28,17 +28,18 @@ test("checked-in Worker config is portable and defaults to workers.dev", async (
   assert.match(config, /binding = "BACKUP_BUCKET"/);
 });
 
-test("checked-in Worker config keeps production on the Cloudflare sandbox until E2B is ready", async () => {
+test("checked-in Worker config runs production sessions on E2B", async () => {
   const [config, envExample] = await Promise.all([
     readFile(resolve(workerRoot, "wrangler.toml"), "utf8"),
     readFile(resolve(workerRoot, ".env.example"), "utf8"),
   ]);
-  assert.match(config, /^SANDBOX_PROVIDER = "cloudflare"$/m);
+  assert.match(config, /^SANDBOX_PROVIDER = "e2b"$/m);
   // The deploy pipeline must read the same answer, or every deploy fails.
-  assert.deepEqual(sandboxDeploymentSettings(config), { provider: "cloudflare" });
+  assert.deepEqual(sandboxDeploymentSettings(config), { provider: "e2b", templateId: "codevil-sandbox" });
+  // Rolling back is a one-line change the pipeline must also accept.
   assert.deepEqual(
-    sandboxDeploymentSettings(config.replace(/^SANDBOX_PROVIDER = "cloudflare"$/m, 'SANDBOX_PROVIDER = "e2b"')),
-    { provider: "e2b", templateId: "codevil-sandbox" },
+    sandboxDeploymentSettings(config.replace(/^SANDBOX_PROVIDER = "e2b"$/m, 'SANDBOX_PROVIDER = "cloudflare"')),
+    { provider: "cloudflare" },
   );
   assert.doesNotMatch(config, /^E2B_API_KEY\s*=/m);
   assert.match(envExample, /^E2B_API_KEY=/m);
@@ -253,7 +254,7 @@ test("sandbox-deploy-settings writes the provider outputs for the CI publish job
       encoding: "utf8",
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(await readFile(outputFile, "utf8"), "sandbox_provider=cloudflare\n");
+    assert.equal(await readFile(outputFile, "utf8"), "sandbox_provider=e2b\ne2b_template_id=codevil-sandbox\n");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

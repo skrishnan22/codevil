@@ -24,6 +24,7 @@ import { buildSandboxDisconnectLogPayload } from "./sandbox.js";
 import {
   collectAgentDiagnostics,
   connectSandboxHandle,
+  createSandboxHandleCache,
   loadStoredSandboxSecret,
   readRedactedAgentLogs,
   SANDBOX_SECRET_KEY,
@@ -123,6 +124,7 @@ import {
   provisionSessionSandbox,
 } from "./orchestrator/sandbox-handlers.js";
 import {
+  assumeSandboxPausedAfterEviction,
   clearStalePausedMarker,
   expireSessionAtMaxTime,
   pauseIdleSandbox,
@@ -345,6 +347,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
 
     clearStalePausedMarker(this);
+    assumeSandboxPausedAfterEviction(this, now);
     await renewSandboxLeaseIfDue(this, now);
     await pauseIdleSandbox(this, now);
 
@@ -764,7 +767,14 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       readSecret: () => this.ctx.storage.get<string>(SANDBOX_SECRET_KEY),
       secrets: this.redactionSecrets,
       storeSecret: (secret) => this.ctx.storage.put(SANDBOX_SECRET_KEY, secret),
+      cache: this.sandboxHandleCache,
     });
+  }
+
+  private readonly sandboxHandleCache = createSandboxHandleCache();
+
+  invalidateSandboxHandle(): void {
+    this.sandboxHandleCache.invalidate();
   }
 
   private readonly sandboxResolver = (): Promise<SandboxHandle | null> => this.sandboxHandle();
@@ -781,8 +791,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     return sandboxDiagnosticsResponse(this.sandboxResolver, this.redactionSecrets, { paused: Boolean(this.meta?.sandbox_paused_at) });
   }
 
-  async terminateSandbox(reason: string): Promise<void> {
-    await terminateSandboxFn(this, reason);
+  async terminateSandbox(reason: string, options?: { assumePaused?: boolean }): Promise<void> {
+    await terminateSandboxFn(this, reason, options);
   }
 
   recordActivity(source?: "event" | "preview"): void {

@@ -60,7 +60,9 @@ export interface OrchestratorHost {
   /** Fresh sandbox WebSocket capability, for the token file written on resume. */
   issueSandboxWebSocketToken(): Promise<string>;
   /** Destroys the provider sandbox (running or paused) and closes its sockets. Failures are logged, never thrown. */
-  terminateSandbox(reason: string): Promise<void>;
+  terminateSandbox(reason: string, options?: { assumePaused?: boolean }): Promise<void>;
   /** Null when the Session has no sandbox yet (`meta.sandbox_ref` unset). */
   sandboxHandle(): Promise<SandboxHandle | null>;
+  /** Drops the cached provider handle (pause, resume, terminate, loss) so the next lookup reconnects. */
+  invalidateSandboxHandle(): void;
 }

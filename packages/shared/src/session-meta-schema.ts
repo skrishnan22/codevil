@@ -48,8 +48,6 @@ export const SessionMetaSchema = z.object({
     type: z.enum(["start", "stop"]),
     app_key: z.string().optional(),
   }).optional(),
-  /** @deprecated Legacy start-only flag; migrated to `pending_preview_action` when meta is loaded. */
-  pending_preview_start: z.union([z.literal(true), z.object({ app_key: z.string().optional() })]).optional(),
   last_decision: LastDecisionSchema.optional(),
 });
 

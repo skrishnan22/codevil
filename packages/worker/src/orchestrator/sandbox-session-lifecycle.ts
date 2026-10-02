@@ -179,7 +179,12 @@ async function doPause(host: OrchestratorHost, now: number): Promise<boolean> {
   try {
     const handle = await host.sandboxHandle();
     if (!handle?.pause) throw new Error("Sandbox provider cannot pause");
-    await handle.pause();
+    try {
+      await handle.pause();
+    } finally {
+      // Paused or in an unknown state either way: never reuse this connection.
+      host.invalidateSandboxHandle();
+    }
   } catch (error) {
     if (error instanceof SandboxNotFoundError) {
       await failLostSandbox(host);
@@ -302,6 +307,8 @@ async function completeResume(host: OrchestratorHost, now: number): Promise<void
 
   meta.sandbox_paused_at = undefined;
   meta.expected_close = false;
+  // The VM was woken by the resume's own connection; later calls get a fresh one.
+  host.invalidateSandboxHandle();
   if (providerCapabilities(host).leaseRenewal) meta.sandbox_lease_renewed_at = new Date(now).toISOString();
   // The agent reconnects on its own; start the reconnect grace so a resumed
   // sandbox whose agent never returns fails instead of stranding queued runs.
@@ -419,33 +426,83 @@ async function failSession(
 
 /** The provider no longer has the sandbox. Never recreate silently. */
 export async function failLostSandbox(host: OrchestratorHost): Promise<void> {
+  host.invalidateSandboxHandle();
   if (!(await failSession(host, "Sandbox expired.", "sandbox expired"))) return;
   await armAlarmSafely(host, Date.now() - 1);
 }
 
 async function failSandboxResume(host: OrchestratorHost): Promise<void> {
   if (!(await failSession(host, "Sandbox failed to resume.", "sandbox failed to resume"))) return;
-  await host.terminateSandbox("resume failed");
+  // The sandbox is paused or half-resumed: kill it by reference rather than waking it first.
+  await host.terminateSandbox("resume failed", { assumePaused: true });
   await armAlarmSafely(host, Date.now() - 1);
 }
 
 /**
  * Destroys the Session's sandbox whether it is running or paused (a paused
- * E2B sandbox never expires, so this is its only cleanup).
+ * E2B sandbox never expires, so this is its only cleanup). A paused sandbox,
+ * or one that cannot be connected to, is killed by reference when the provider
+ * supports it so teardown never depends on waking the VM first.
  */
-export async function terminateSandbox(host: OrchestratorHost, reason: string): Promise<void> {
+export async function terminateSandbox(
+  host: OrchestratorHost,
+  reason: string,
+  options: { assumePaused?: boolean } = {},
+): Promise<void> {
   if (!host.meta) return;
   // A pause still in flight would otherwise land after the destroy and leave a
   // paused sandbox that never expires.
   await pausing.get(host)?.catch(() => false);
+  const paused = options.assumePaused === true || Boolean(host.meta.sandbox_paused_at);
   host.meta.expected_close = true;
   host.meta.sandbox_paused_at = undefined;
   host.meta.pending_preview_action = undefined;
   host.saveMeta();
   await destroySandbox(() => host.sandboxHandle(), reason, (error) => {
     logFailure(host, "sandbox.stop.failed", error);
-  });
+  }, { paused, destroyByRef: destroyByRefFor(host) });
+  host.invalidateSandboxHandle();
   host.closeSandboxSockets(reason);
+}
+
+function destroyByRefFor(host: OrchestratorHost): (() => Promise<void>) | undefined {
+  try {
+    const provider = host.sandboxProvider();
+    const ref = sandboxRefForMeta(host.meta, provider);
+    if (!provider.destroyByRef || !ref) return undefined;
+    return () => provider.destroyByRef!(ref);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The Durable Object may be evicted between asking the provider to pause and
+ * recording `sandbox_paused_at`. A ready Session that set `expected_close`,
+ * has no paused marker, no pause in flight, no live agent socket and no
+ * reconnect grace running is in exactly that state: record it as paused so the
+ * next trigger resumes it (connect wakes a paused sandbox and is a no-op on a
+ * running one).
+ */
+export function assumeSandboxPausedAfterEviction(host: OrchestratorHost, now: number): boolean {
+  const meta = host.meta;
+  if (
+    !meta
+    || !providerSupportsPause(host)
+    || meta.state !== "ready"
+    || !meta.expected_close
+    || meta.sandbox_paused_at
+    || pausing.has(host)
+    || resuming.has(host)
+    || liveSandboxSockets(host.ctx).length > 0
+    || meta.sandbox_disconnected_at
+  ) {
+    return false;
+  }
+  meta.sandbox_paused_at = new Date(now).toISOString();
+  host.saveMeta();
+  host.updateDirectory({ sandbox_state: "paused" });
+  return true;
 }
 
 /** Alarm branch: end the Session at `max_time`, destroying its sandbox even when paused. */

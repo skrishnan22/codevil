@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   connectSandboxHandle,
+  createSandboxHandleCache,
   destroySandbox,
   loadStoredSandboxSecret,
   readRedactedAgentLogs,
@@ -12,6 +13,7 @@ import {
   sandboxLogsResponse,
   sandboxRefForMeta,
 } from "../dist/orchestrator/sandbox-access.js";
+import { SandboxNotFoundError } from "../dist/sandbox-provider/types.js";
 import { createFakeSandboxHandle } from "./helpers/fake-host.mjs";
 
 const secret = "diagnostics-response-secret";
@@ -201,4 +203,173 @@ test("connectSandboxHandle registers and persists a provider-supplied secret whe
   });
   assert.deepEqual(secrets, ["fallback_tat"]);
   assert.deepEqual(stored, ["fallback_tat"]);
+});
+
+const e2bMeta = { session_id: "ses_1", sandbox_ref: { provider: "e2b", id: "sbx_1" } };
+
+function lookup(provider, cache, meta = e2bMeta, extra = {}) {
+  return connectSandboxHandle({ meta, provider, readSecret: async () => "tok", cache, ...extra });
+}
+
+test("a cached lookup connects once and returns the same handle", async () => {
+  const { provider, connects } = recordingProvider("e2b");
+  const cache = createSandboxHandleCache();
+  const first = await lookup(provider, cache);
+  const second = await lookup(provider, cache);
+  assert.equal(connects.length, 1);
+  assert.equal(first.ref.id, second.ref.id);
+});
+
+test("concurrent lookups share a single connect", async () => {
+  const { provider, connects } = recordingProvider("e2b");
+  const cache = createSandboxHandleCache();
+  await Promise.all([lookup(provider, cache), lookup(provider, cache), lookup(provider, cache)]);
+  assert.equal(connects.length, 1);
+});
+
+test("without a cache every lookup connects", async () => {
+  const { provider, connects } = recordingProvider("e2b");
+  await lookup(provider, undefined);
+  await lookup(provider, undefined);
+  assert.equal(connects.length, 2);
+});
+
+test("invalidation and a changed sandbox ref both reconnect", async () => {
+  const { provider, connects } = recordingProvider("e2b");
+  const cache = createSandboxHandleCache();
+  await lookup(provider, cache);
+  cache.invalidate();
+  await lookup(provider, cache);
+  assert.equal(connects.length, 2);
+  await lookup(provider, cache, { ...e2bMeta, sandbox_ref: { provider: "e2b", id: "sbx_2" } });
+  assert.equal(connects.length, 3);
+  await lookup(provider, cache, { ...e2bMeta, sandbox_ref: { provider: "e2b", id: "sbx_2" } });
+  assert.equal(connects.length, 3);
+});
+
+test("a failed connect and a missing sandbox are never cached", async () => {
+  let attempts = 0;
+  const provider = {
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create: async () => assert.fail("create must not be called"),
+    connect: async (ref) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("connect failed");
+      return createFakeSandboxHandle({ ref });
+    },
+  };
+  const cache = createSandboxHandleCache();
+  await assert.rejects(lookup(provider, cache), /connect failed/);
+  assert.ok(await lookup(provider, cache));
+  assert.equal(attempts, 2);
+  assert.equal(await lookup(provider, cache, { session_id: "ses_1" }), null);
+});
+
+test("a SandboxNotFoundError from any handle call evicts the cached handle", async () => {
+  const members = [
+    ["exec", (h) => h.exec("x")],
+    ["writeFile", (h) => h.writeFile("/x", "y")],
+    ["startProcess", (h) => h.startProcess("x", { processId: "p", cwd: "/", env: {} })],
+    ["readProcessLogs", (h) => h.readProcessLogs("p")],
+    ["fetchPort", (h) => h.fetchPort(1, new Request("http://x/"))],
+    ["renewLease", (h) => h.renewLease(1)],
+    ["pause", (h) => h.pause()],
+    ["destroy", (h) => h.destroy("r")],
+    ["readLifecycle", (h) => h.readLifecycle()],
+  ];
+  for (const [name, call] of members) {
+    let connects = 0;
+    const provider = {
+      name: "e2b",
+      capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+      create: async () => assert.fail("create must not be called"),
+      connect: async (ref) => {
+        connects += 1;
+        return createFakeSandboxHandle({
+          ref,
+          [name]: async () => { throw new SandboxNotFoundError(); },
+          ...(name === "pause" ? {} : { pause: async () => {} }),
+          readLifecycle: name === "readLifecycle" ? async () => { throw new SandboxNotFoundError(); } : async () => null,
+        });
+      },
+    };
+    const cache = createSandboxHandleCache();
+    const handle = await lookup(provider, cache);
+    await assert.rejects(call(handle), SandboxNotFoundError, name);
+    await lookup(provider, cache);
+    assert.equal(connects, 2, `${name} should evict`);
+  }
+});
+
+test("other handle errors keep the cached handle", async () => {
+  let connects = 0;
+  const provider = {
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create: async () => assert.fail("create must not be called"),
+    connect: async (ref) => {
+      connects += 1;
+      return createFakeSandboxHandle({ ref, exec: async () => { throw new Error("boom"); } });
+    },
+  };
+  const cache = createSandboxHandleCache();
+  await assert.rejects((await lookup(provider, cache)).exec("x"), /boom/);
+  await lookup(provider, cache);
+  assert.equal(connects, 1);
+});
+
+test("a cached handle still registers and persists its secret on first connect only", async () => {
+  const secrets = [];
+  const stored = [];
+  const provider = {
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create: async () => assert.fail("create must not be called"),
+    connect: async (ref) => createFakeSandboxHandle({ ref, secret: "traffic-secret" }),
+  };
+  const cache = createSandboxHandleCache();
+  const options = { secrets, storeSecret: async (value) => { stored.push(value); } };
+  for (let i = 0; i < 2; i++) {
+    await connectSandboxHandle({ meta: e2bMeta, provider, readSecret: async () => undefined, cache, ...options });
+  }
+  assert.deepEqual(secrets, ["traffic-secret"]);
+  assert.deepEqual(stored, ["traffic-secret"]);
+});
+
+test("destroySandbox kills a paused sandbox by reference without resolving a handle", async () => {
+  const killed = [];
+  await destroySandbox(
+    async () => assert.fail("must not connect to a paused sandbox"),
+    "stopped",
+    () => assert.fail("no error expected"),
+    { paused: true, destroyByRef: async () => { killed.push("ref"); } },
+  );
+  assert.deepEqual(killed, ["ref"]);
+});
+
+test("destroySandbox falls back to a kill by reference when connecting fails, and treats not-found as gone", async () => {
+  const killed = [];
+  const destroyByRef = async () => { killed.push("ref"); };
+  await destroySandbox(async () => { throw new Error("connect failed"); }, "x", () => assert.fail("handled"), { destroyByRef });
+  assert.deepEqual(killed, ["ref"]);
+
+  await destroySandbox(async () => { throw new SandboxNotFoundError(); }, "x", () => assert.fail("already gone"), { destroyByRef });
+  assert.deepEqual(killed, ["ref"]);
+
+  const errors = [];
+  await destroySandbox(
+    async () => { throw new Error("connect failed"); },
+    "x",
+    (error) => errors.push(error.message),
+    { destroyByRef: async () => { throw new Error("kill failed"); } },
+  );
+  assert.deepEqual(errors, ["kill failed"]);
+});
+
+test("a paused sandbox without a by-reference kill is destroyed through its handle", async () => {
+  const reasons = [];
+  const handle = createFakeSandboxHandle({ destroy: async (reason) => { reasons.push(reason); } });
+  await destroySandbox(async () => handle, "x", () => assert.fail("no error"), { paused: true });
+  assert.deepEqual(reasons, ["x"]);
 });

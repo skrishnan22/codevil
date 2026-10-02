@@ -163,6 +163,7 @@ export function createFakeE2BProvider(handle, options = {}) {
     capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
     connectCalls: 0,
     connectOptions: [],
+    destroyedByRef: [],
     create: async () => handle,
     connect: async (_ref, connectOptions) => {
       provider.connectCalls += 1;
@@ -171,6 +172,13 @@ export function createFakeE2BProvider(handle, options = {}) {
       return handle;
     },
   };
+  // `destroyByRef: true` adds the optional static kill; `destroyByRefError` makes it reject.
+  if (options.destroyByRef) {
+    provider.destroyByRef = async (ref) => {
+      provider.destroyedByRef.push(ref);
+      if (options.destroyByRefError) throw options.destroyByRefError;
+    };
+  }
   return provider;
 }
 
@@ -192,6 +200,8 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
   const closedSandboxSockets = [];
   const activity = { count: 0 };
   const resumeRequests = { count: 0 };
+  const handleInvalidations = { count: 0 };
+  const terminations = [];
 
   const host = {
     meta,
@@ -302,8 +312,12 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     async issueSandboxWebSocketToken() {
       return "fresh_token";
     },
-    terminateSandbox(reason) {
-      return terminateSandboxForHost(host, reason);
+    terminateSandbox(reason, terminateOptions) {
+      terminations.push({ reason, options: terminateOptions });
+      return terminateSandboxForHost(host, reason, terminateOptions);
+    },
+    invalidateSandboxHandle() {
+      handleInvalidations.count += 1;
     },
     async sandboxHandle() {
       // Mirrors connectSandboxHandle: a paused sandbox is never woken by a plain handle lookup.
@@ -330,6 +344,8 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     closedSandboxSockets,
     activity,
     resumeRequests,
+    handleInvalidations,
+    terminations,
     get armCalls() {
       return armCalls;
     },

@@ -3,9 +3,10 @@ import test from "node:test";
 import { handleAgentRequest } from "../dist/orchestrator/cli-handlers.js";
 import { hashPreviewToken, proxyPreviewRequest } from "../dist/orchestrator/preview.js";
 import { drainQueuedAgentWorkIfReady } from "../dist/orchestrator/sandbox-handlers.js";
-import { connectSandboxHandle, sandboxDiagnosticsResponse, sandboxLogsResponse } from "../dist/orchestrator/sandbox-access.js";
+import { connectSandboxHandle, createSandboxHandleCache, sandboxDiagnosticsResponse, sandboxLogsResponse } from "../dist/orchestrator/sandbox-access.js";
 import { handlePreviewStart, handlePreviewStop } from "../dist/orchestrator/cli-handlers.js";
 import {
+  assumeSandboxPausedAfterEviction,
   clearStalePausedMarker,
   flushPendingPreviewAction,
   idlePauseInput,
@@ -29,7 +30,6 @@ import {
 } from "../dist/sandbox-connection.js";
 import { SandboxNotFoundError } from "../dist/sandbox-provider/types.js";
 import { sandboxProviderMaxLeaseMs } from "../dist/sandbox-provider/index.js";
-import { loadSessionMeta } from "../dist/orchestrator/session-meta.js";
 import {
   actor,
   createDefaultMeta,
@@ -941,23 +941,6 @@ test("a stale paused marker cleared by the alarm replays a deferred preview stop
   assert.deepEqual(sandboxMessages, [{ type: "preview_stop" }]);
 });
 
-test("legacy pending_preview_start meta loads as a start action", () => {
-  const load = (legacy, extra = {}) => {
-    const meta = createDefaultMeta({ pending_preview_start: legacy, ...extra });
-    const store = { meta: null, eventLog: { hydrateFromSql() {} } };
-    loadSessionMeta({ exec: () => [{ value: JSON.stringify(meta) }] }, store);
-    return store.meta;
-  };
-
-  const flag = load(true);
-  assert.deepEqual(flag.pending_preview_action, { type: "start" });
-  assert.equal(flag.pending_preview_start, undefined);
-
-  assert.deepEqual(load({ app_key: "web" }).pending_preview_action, { type: "start", app_key: "web" });
-  // An explicit action is never overwritten by the legacy flag.
-  assert.deepEqual(load(true, { pending_preview_action: { type: "stop" } }).pending_preview_action, { type: "stop" });
-});
-
 test("a deferred preview start is dropped when the session fails", async () => {
   const { host } = createFakeHost(pausedMeta, { e2b: true, sandboxConnected: false, connectError: new SandboxNotFoundError() });
   await handlePreviewStart(host, "web");
@@ -1169,4 +1152,176 @@ test("authenticated preview requests in a burst do not re-arm the alarm each tim
   for (let i = 0; i < 5; i += 1) assert.equal((await proxy(fake, PREVIEW_TOKEN)).status, 200);
   assert.equal(fake.activity.count, 5);
   assert.equal(fake.armCalls, 1);
+});
+
+// --- provider handle cache and teardown ---
+
+test("pause, completed resume, teardown and a vanished sandbox each drop the cached handle", async () => {
+  const paused = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+  assert.equal(await pauseIdleSandbox(paused.host, T0 + 600_000), true);
+  assert.equal(paused.handleInvalidations.count >= 1, true);
+
+  const resumed = createFakeHost(pausedMeta, { e2b: true });
+  await resumeSandbox(resumed.host);
+  assert.equal(resumed.handleInvalidations.count, 1);
+
+  const stopped = createFakeHost(idleMeta, { e2b: true });
+  await terminateSandbox(stopped.host, "stopped by user");
+  assert.equal(stopped.handleInvalidations.count, 1);
+
+  const lost = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+  lost.handle.pause = async () => { throw new SandboxNotFoundError(); };
+  await pauseIdleSandbox(lost.host, T0 + 600_000);
+  assert.ok(lost.handleInvalidations.count >= 1);
+});
+
+function cachedPreviewLookup(provider, meta, cache) {
+  return () => connectSandboxHandle({ meta, provider, readSecret: async () => "tok", cache });
+}
+
+test("repeated preview requests connect to the provider once and reconnect after each invalidation", async () => {
+  const handle = createFakeHost(idleMeta, { e2b: true }).handle;
+  handle.fetchPort = async () => new Response("preview body");
+  let connects = 0;
+  const provider = createFakeSandboxProvider({
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    connect: async () => { connects += 1; return handle; },
+  });
+  const meta = {
+    ...createDefaultMeta(idleMeta),
+    preview_active: true,
+    preview_port: 5173,
+    preview_token_hash: await hashPreviewToken(PREVIEW_TOKEN),
+  };
+  const cache = createSandboxHandleCache();
+  const lookup = cachedPreviewLookup(provider, meta, cache);
+  const request = () => proxyPreviewRequest(previewRequest(PREVIEW_TOKEN), meta, PREVIEW_TOKEN, lookup);
+
+  for (let i = 0; i < 5; i++) assert.equal((await request()).status, 200);
+  assert.equal(connects, 1);
+
+  cache.invalidate(); // pause, resume completion, teardown
+  assert.equal((await request()).status, 200);
+  assert.equal(connects, 2);
+});
+
+test("a paused session never uses a cached handle, and the next lookup after resume reconnects", async () => {
+  const handle = createFakeHost(idleMeta, { e2b: true }).handle;
+  let connects = 0;
+  const provider = createFakeSandboxProvider({ name: "e2b", connect: async () => { connects += 1; return handle; } });
+  const cache = createSandboxHandleCache();
+  const meta = createDefaultMeta(idleMeta);
+  const lookup = (current) => connectSandboxHandle({ meta: current, provider, readSecret: async () => undefined, cache });
+
+  await lookup(meta);
+  assert.equal(await lookup({ ...meta, sandbox_paused_at: "2026-10-01T00:10:00.000Z" }), null);
+  assert.ok(await lookup(meta));
+  assert.equal(connects, 2);
+});
+
+test("terminating a paused session kills it by reference without waking it", async () => {
+  const { host, handle, provider } = createFakeHost(pausedMeta, { e2b: true, sandboxConnected: false, destroyByRef: true });
+  await terminateSandbox(host, "stopped by user");
+  assert.deepEqual(provider.destroyedByRef, [{ provider: "e2b", id: "sbx_1" }]);
+  assert.equal(provider.connectCalls, 0);
+  assert.equal(handle.calls.some(([name]) => name === "destroy"), false);
+  assert.equal(host.meta.sandbox_paused_at, undefined);
+});
+
+test("terminating a running session destroys through the handle, not by reference", async () => {
+  const { host, handle, provider } = createFakeHost(idleMeta, { e2b: true, destroyByRef: true });
+  await terminateSandbox(host, "stopped by user");
+  assert.deepEqual(handle.calls.find(([name]) => name === "destroy"), ["destroy", "stopped by user"]);
+  assert.deepEqual(provider.destroyedByRef, []);
+});
+
+test("teardown falls back to a kill by reference when the sandbox cannot be connected", async () => {
+  const { host, provider } = createFakeHost(idleMeta, {
+    e2b: true,
+    destroyByRef: true,
+    sandboxHandle: undefined,
+  });
+  host.sandboxHandle = async () => { throw new Error("connect failed"); };
+  await terminateSandbox(host, "timed out");
+  assert.deepEqual(provider.destroyedByRef, [{ provider: "e2b", id: "sbx_1" }]);
+});
+
+test("a failed resume kills the paused sandbox by reference even if a connect would now succeed", async () => {
+  const { host, handle, provider } = createFakeHost(
+    { ...idleMeta, sandbox_paused_at: "x" },
+    { e2b: true, connectError: new Error("503"), destroyByRef: true },
+  );
+  await resumeSandbox(host, NO_DELAY);
+  assert.equal(host.meta.state, "failed");
+  assert.deepEqual(provider.destroyedByRef, [{ provider: "e2b", id: "sbx_1" }]);
+  assert.equal(handle.calls.some(([name]) => name === "destroy"), false);
+});
+
+test("a by-reference kill failure at teardown is logged redacted and not thrown", async () => {
+  const tracer = createRecordingTracer();
+  const { host } = createFakeHost(pausedMeta, {
+    e2b: true,
+    tracer,
+    sandboxConnected: false,
+    destroyByRef: true,
+    destroyByRefError: new Error("kill failed sekret-traffic-token"),
+  });
+  host.redactionSecrets.push("sekret-traffic-token");
+  await terminateSandbox(host, "stopped by user");
+  assert.ok(tracer.logs.some((log) => log.name === "sandbox.stop.failed"));
+  assert.ok(!JSON.stringify(tracer.logs).includes("sekret-traffic-token"));
+});
+
+// --- DO eviction mid-pause ---
+
+test("a ready session left with expected_close but no paused marker is assumed paused after eviction", () => {
+  const { host, directoryPatches, saveMetaCalls } = createFakeHost(
+    { ...idleMeta, expected_close: true },
+    { e2b: true, sandboxConnected: false },
+  );
+  assert.equal(assumeSandboxPausedAfterEviction(host, T0 + 700_000), true);
+  assert.equal(host.meta.sandbox_paused_at, new Date(T0 + 700_000).toISOString());
+  assert.deepEqual(directoryPatches.at(-1), { sandbox_state: "paused" });
+});
+
+test("the eviction guess is skipped whenever the sandbox may still be in use", () => {
+  const cases = [
+    ["a live agent socket", { ...idleMeta, expected_close: true }, { sandboxConnected: true }],
+    ["no expected_close", { ...idleMeta }, { sandboxConnected: false }],
+    ["already marked paused", { ...idleMeta, expected_close: true, sandbox_paused_at: "x" }, { sandboxConnected: false }],
+    ["a reconnect grace running", { ...idleMeta, expected_close: true, sandbox_disconnected_at: "2026-10-01T00:00:00.000Z" }, { sandboxConnected: false }],
+    ["a session that is not ready", { ...idleMeta, expected_close: true, state: "failed" }, { sandboxConnected: false }],
+  ];
+  for (const [name, meta, options] of cases) {
+    const { host } = createFakeHost(meta, { e2b: true, ...options });
+    assert.equal(assumeSandboxPausedAfterEviction(host, T0), false, name);
+  }
+  const cloudflare = createFakeHost({ ...idleMeta, expected_close: true }, { sandboxConnected: false });
+  assert.equal(assumeSandboxPausedAfterEviction(cloudflare.host, T0), false, "provider that cannot pause");
+});
+
+test("the eviction guess is skipped while a pause is in flight", async () => {
+  const { host, handle } = createFakeHost(idleMeta, { e2b: true, sandboxConnected: true });
+  let release;
+  handle.pause = () => new Promise((resolve) => { release = resolve; });
+  const pausing = pauseIdleSandbox(host, T0 + 600_000);
+  await Promise.resolve();
+  assert.equal(host.meta.expected_close, true);
+  host.closeSandboxSockets("x");
+  assert.equal(assumeSandboxPausedAfterEviction(host, T0 + 600_001), false);
+  release();
+  assert.equal(await pausing, true);
+});
+
+test("after an eviction guess, the next agent request resumes through connect", async () => {
+  const { host, provider, handle } = createFakeHost(
+    { ...idleMeta, expected_close: true },
+    { e2b: true, sandboxConnected: false },
+  );
+  assumeSandboxPausedAfterEviction(host, T0 + 700_000);
+  await resumeSandbox(host, NO_DELAY);
+  assert.equal(provider.connectCalls, 1);
+  assert.equal(host.meta.sandbox_paused_at, undefined);
+  assert.ok(handle.calls.some(([name]) => name === "writeFile"));
 });

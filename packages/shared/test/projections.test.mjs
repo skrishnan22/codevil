@@ -185,6 +185,88 @@ test("mapEventToChat: maps verification_failed to a verification_failed message"
   assert.equal(messages[0].meta?.last_error, "test failed");
 });
 
+test("mapEventToChat: maps agent request queue events to room status messages", () => {
+  const ctx = makeCtx();
+  const requested = mapEventToChat({
+    type: "agent_request",
+    run_id: "run_123",
+    actor: { id: "usr_123", name: "Alice" },
+    text: "fix the bug",
+    created_at: "2026-06-03T00:00:00.000Z",
+  }, ctx);
+  const queued = mapEventToChat({
+    type: "agent_request_queued",
+    run_id: "run_124",
+    position: 2,
+  }, ctx);
+  const started = mapEventToChat({
+    type: "agent_run_started",
+    run_id: "run_123",
+    actor: { id: "usr_123", name: "Alice" },
+    text: "fix the bug",
+  }, ctx);
+
+  assert.equal(requested[0].role, "user");
+  assert.equal(requested[0].actor, "Alice");
+  assert.equal(requested[0].meta?.actor_id, "usr_123");
+  assert.equal(requested[0].content, "@codevil fix the bug");
+  assert.equal(queued[0].content, "Queued agent request #2.");
+  assert.deepEqual(started, []);
+});
+
+test("mapEventToChat: keeps run completion out of chat and maps failures", () => {
+  const ctx = makeCtx();
+  const completed = mapEventToChat({
+    type: "agent_run_completed",
+    run_id: "run_123",
+    pr_url: "https://github.com/user/repo/pull/1",
+  }, ctx);
+  const failed = mapEventToChat({
+    type: "agent_run_failed",
+    run_id: "run_123",
+    message: "tests failed",
+  }, ctx);
+
+  assert.deepEqual(completed, []);
+  assert.equal(failed[0].variant, "error");
+  assert.equal(failed[0].content, "tests failed");
+});
+
+test("mapEventToChat: maps the final agent response to one assistant message", () => {
+  const messages = mapEventToChat({
+    type: "agent_response",
+    run_id: "run_123",
+    text: "Rate limits are configured in src/rate-limit.ts.",
+  }, makeCtx());
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, "assistant");
+  assert.equal(messages[0].variant, "text");
+  assert.equal(messages[0].content, "Rate limits are configured in src/rate-limit.ts.");
+  assert.equal(messages[0].meta?.run_id, "run_123");
+});
+
+test("mapEventToChat: does not put low-signal read-only tools in the durable timeline", () => {
+  const event = {
+    type: "agent_event",
+    event: { type: "tool_execution_end", toolName: "find", args: { path: ".", pattern: "README.md" }, isError: false },
+  };
+  assert.equal(mapEventToChat(event, makeCtx()).length, 0);
+});
+
+test("mapEventToChat: keeps agent message_update events out of the durable timeline", () => {
+  const event = {
+    type: "agent_event",
+    event: { type: "message_update", content: "Let me look at" },
+  };
+  assert.equal(mapEventToChat(event, makeCtx()).length, 0);
+});
+
+test("mapEventToChat: keeps clone_progress line noise out of the durable timeline", () => {
+  const event = { type: "clone_progress", line: "Receiving objects: 50%" };
+  assert.equal(mapEventToChat(event, makeCtx()).length, 0);
+});
+
 // ---------------------------------------------------------------------------
 // applyToChatActivity
 // ---------------------------------------------------------------------------
@@ -205,6 +287,152 @@ test("applyToChatActivity: coalesces streamed message updates into one thinking 
   assert.equal(second.activityLog.length, 1);
   assert.equal(second.activityLog[0].kind, "thinking");
   assert.equal(second.activityLog[0].thinking?.text, "Analyzing the repo.");
+});
+
+test("applyToChatActivity: coalesces Pi assistant text deltas into one thinking entry", () => {
+  const ctx = makeCtx();
+  const first = applyToChatActivity(
+    { messages: [], activityLog: [] },
+    {
+      type: "agent_event",
+      event: {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "Reading " },
+      },
+    },
+    ctx,
+  );
+  const second = applyToChatActivity(
+    first,
+    {
+      type: "agent_event",
+      event: {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "files." },
+      },
+    },
+    ctx,
+  );
+
+  assert.equal(second.activityLog.length, 1);
+  assert.equal(second.activityLog[0].thinking?.text, "Reading files.");
+});
+
+test("applyToChatActivity: keeps markdown heading deltas out of durable conversation messages", () => {
+  const projected = applyToChatActivity(
+    { messages: [], activityLog: [] },
+    {
+      type: "agent_event",
+      event: {
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: "**Inspecting package.json**\n\nI need to check the scripts.",
+        },
+      },
+    },
+    makeCtx(),
+  );
+
+  assert.equal(projected.messages.length, 0);
+  assert.equal(projected.activityLog.length, 1);
+  assert.equal(projected.activityLog[0].kind, "thinking");
+});
+
+test("applyToChatActivity: keeps agent_end final assistant text in activity only", () => {
+  const projected = applyToChatActivity(
+    { messages: [], activityLog: [] },
+    {
+      type: "agent_event",
+      event: {
+        type: "agent_end",
+        messages: [
+          { role: "assistant", content: "I updated the checkout page and verified the tests." },
+        ],
+      },
+    },
+    makeCtx(),
+  );
+
+  assert.equal(projected.messages.length, 0);
+  assert.equal(projected.activityLog.at(-1)?.event?.label, "Agent finished");
+});
+
+test("applyToChatActivity: does not promote agent_end text when a plan message exists", () => {
+  const projected = applyToChatActivity(
+    {
+      messages: [
+        {
+          id: "plan_1",
+          role: "assistant",
+          variant: "plan",
+          content: "## Plan\n\n1. Update checkout.",
+          timestamp: 1,
+        },
+      ],
+      activityLog: [],
+    },
+    {
+      type: "agent_event",
+      event: {
+        type: "agent_end",
+        messages: [
+          { role: "assistant", content: "## Plan\n\n1. Update checkout." },
+        ],
+      },
+    },
+    makeCtx(),
+  );
+
+  assert.equal(projected.messages.length, 1);
+});
+
+test("applyToChatActivity: updates Pi tool events using toolCallId", () => {
+  const ctx = makeCtx();
+  const started = applyToChatActivity(
+    { messages: [], activityLog: [] },
+    {
+      type: "agent_event",
+      event: {
+        type: "tool_execution_start",
+        toolCallId: "call_1",
+        toolName: "read",
+        args: { path: "src/index.ts" },
+      },
+    },
+    ctx,
+  );
+  const ended = applyToChatActivity(
+    started,
+    {
+      type: "agent_event",
+      event: {
+        type: "tool_execution_end",
+        toolCallId: "call_1",
+        toolName: "read",
+        result: "file contents",
+        isError: false,
+      },
+    },
+    ctx,
+  );
+
+  assert.equal(ended.activityLog.length, 1);
+  assert.equal(ended.activityLog[0].status, "success");
+  assert.equal(ended.activityLog[0].tool?.name, "read");
+  assert.equal(ended.activityLog[0].tool?.result, "file contents");
+});
+
+test("applyToChatActivity: renders generic Pi lifecycle events in the activity pane", () => {
+  const projected = applyToChatActivity(
+    { messages: [], activityLog: [] },
+    { type: "agent_event", event: { type: "agent_start" } },
+    makeCtx(),
+  );
+
+  assert.equal(projected.activityLog.length, 1);
+  assert.equal(projected.activityLog[0].kind, "event");
+  assert.equal(projected.activityLog[0].event?.label, "Agent started");
 });
 
 test("applyToChatActivity: updates a running tool entry when the matching tool ends", () => {
@@ -260,6 +488,57 @@ test("mapEventToActivity: maps phase event to a phase_divider entry", () => {
   assert.equal(entries.length, 1);
   assert.equal(entries[0].kind, "phase_divider");
   assert.ok(entries[0].phase?.label.includes("Agent turn"));
+});
+
+test("mapEventToActivity: maps agent_event message_update to a thinking entry", () => {
+  const event = {
+    type: "agent_event",
+    event: { type: "message_update", content: "Analyzing the code..." },
+  };
+  const entries = mapEventToActivity(event, makeCtx());
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].kind, "thinking");
+  assert.equal(entries[0].thinking?.text, "Analyzing the code...");
+});
+
+test("mapEventToActivity: maps agent run start to activity instead of conversation", () => {
+  const event = {
+    type: "agent_run_started",
+    run_id: "run_123",
+    actor: { id: "usr_123", name: "Alice" },
+    text: "fix the test",
+  };
+
+  assert.deepEqual(mapEventToChat(event, makeCtx()), []);
+  assert.equal(mapEventToActivity(event, makeCtx())[0].event?.label, "Agent run started");
+  assert.equal(mapEventToActivity(event, makeCtx())[0].event?.detail, "fix the test");
+});
+
+test("mapEventToActivity: maps room lifecycle events to activity entries for the right pane", () => {
+  const events = [
+    { type: "session_created", session_id: "ses_abc" },
+    { type: "status", message: "Provisioning sandbox..." },
+    { type: "room_ready", repo: "github.com/acme/app" },
+  ];
+
+  const labels = events.flatMap((event) =>
+    mapEventToActivity(event, makeCtx()).map((entry) => entry.event?.label),
+  );
+
+  assert.deepEqual(labels, [
+    "Session created",
+    "Provisioning sandbox",
+    "Session ready",
+  ]);
+});
+
+test("mapEventToActivity: keeps clone progress line noise out of activity", () => {
+  const entries = mapEventToActivity({
+    type: "clone_progress",
+    line: "Receiving objects: 50%",
+  }, makeCtx());
+
+  assert.deepEqual(entries, []);
 });
 
 // ---------------------------------------------------------------------------

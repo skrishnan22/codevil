@@ -56,18 +56,10 @@ export type ProviderPublicConfigKey = "CLOUDFLARE_ACCOUNT_ID" | "CLOUDFLARE_GATE
  */
 export type ProviderPublicConfig = Partial<Record<ProviderPublicConfigKey, string>>;
 
-/** Pi providers deliberately deferred until their non-API-key credential flow is implemented. */
-export const DEFERRED_PROVIDER_IDS = [
-  "azure-openai-responses",
-  "google-vertex",
-  "amazon-bedrock",
-  "openai-codex",
-  "github-copilot",
-  "anthropic-oauth",
-  "custom",
-] as const;
-
-export type DeferredProviderId = (typeof DEFERRED_PROVIDER_IDS)[number];
+// Pi providers deliberately deferred until their non-API-key credential flow is
+// implemented (asserted against KnownProviderSchema in providers.test.mjs):
+// azure-openai-responses, google-vertex, amazon-bedrock, openai-codex,
+// github-copilot, anthropic-oauth, custom.
 
 type ProviderCapabilityShape = {
   readonly id: string;

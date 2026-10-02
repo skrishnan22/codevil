@@ -48,7 +48,6 @@ export {
 
 export type {
   LLMProviderId,
-  DeferredProviderId,
   LLMProviderCapability,
   LLMProviderDefinition,
   ProviderApi,
@@ -59,7 +58,6 @@ export type {
 } from "./providers.js";
 
 export {
-  DEFERRED_PROVIDER_IDS,
   LLM_PROVIDER_CAPABILITIES,
   LLM_PROVIDERS,
   LLM_PROVIDER_IDS,
@@ -316,17 +314,8 @@ export {
   can,
 } from "./auth.js";
 
-export type {
-  Config,
-  ConfigDefaults,
-  ConfigParsed,
-  ConfigDefaultsParsed,
-} from "./config.js";
-export {
-  DEFAULT_CONFIG,
-  ConfigSchema,
-  ConfigDefaultsSchema,
-} from "./config.js";
+export type { Config, ConfigDefaults } from "./config.js";
+export { DEFAULT_CONFIG } from "./config.js";
 
 export type {
   RoomState,

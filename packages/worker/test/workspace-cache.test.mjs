@@ -196,3 +196,18 @@ test("isRetryableRestoreError classifies permanent vs transient failures", () =>
   assert.equal(isRetryableRestoreError(new Error("Session '__sandbox_backup_1' shell exited (exit code: 1)")), true);
   assert.equal(isRetryableRestoreError(new Error("SandboxError: HTTP error! status: 500")), true);
 });
+
+test("workspace cache treats container blips and HTTP 5xx as retryable", () => {
+  assert.equal(isRetryableWorkspaceCacheError(new Error("SandboxError: HTTP error! status: 500")), true);
+  assert.equal(
+    isRetryableWorkspaceCacheError(new Error("Container failed to become ready: Failed after 8 attempts over 135s")),
+    true,
+  );
+  assert.equal(isRetryableWorkspaceCacheError(new Error("Network connection lost.")), true);
+  assert.equal(isRetryableWorkspaceCacheError(new Error("Session shell exited (exit code: 1)")), true);
+});
+
+test("workspace cache does not treat client errors as retryable", () => {
+  assert.equal(isRetryableWorkspaceCacheError(new Error("SandboxError: HTTP error! status: 400")), false);
+  assert.equal(isRetryableWorkspaceCacheError(new Error("backup expired")), false);
+});

@@ -56,9 +56,20 @@ test("dry run defaults the template id and skips docker login without registry c
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /template "codevil-sandbox"/);
+  assert.doesNotMatch(result.stdout, /tags:/);
   assert.doesNotMatch(result.stdout, /docker login/);
   assert.match(result.stdout, /docker push ghcr\.io\/acme\/codevil-sandbox:latest/);
   assert.ok(!result.stdout.includes(FAKE_API_KEY));
+});
+
+test("dry run tags the template build and moves the default tag when E2B_TEMPLATE_TAG is set", () => {
+  const result = run(["--dry-run"], {
+    E2B_API_KEY: FAKE_API_KEY,
+    CODEVIL_SANDBOX_IMAGE: "ghcr.io/acme/codevil-sandbox:abc123",
+    E2B_TEMPLATE_TAG: "0123456789abcdef0123456789abcdef01234567",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /template "codevil-sandbox", \{ tags: \["0123456789abcdef0123456789abcdef01234567", "default"\], cpuCount: 2/);
 });
 
 test("missing required variables fail with a clear message that lists them", () => {
@@ -194,6 +205,19 @@ test("real run executes build, login, push through docker with the password only
     assert.ok(!output.includes(secret), "no secret may appear in output");
   }
 });
+
+for (const tag of ["-latest", "v1:2", "a b", "../x"]) {
+  test(`rejects template tag ${JSON.stringify(tag)}`, () => {
+    const result = run(["--dry-run"], {
+      E2B_API_KEY: FAKE_API_KEY,
+      CODEVIL_SANDBOX_IMAGE: "ghcr.io/acme/codevil-sandbox:latest",
+      E2B_TEMPLATE_TAG: tag,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /E2B_TEMPLATE_TAG may contain only/);
+    assert.doesNotMatch(result.stdout, /dry run/);
+  });
+}
 
 test("real run without registry credentials skips docker login", () => {
   const { result, calls } = runWithDockerShim({

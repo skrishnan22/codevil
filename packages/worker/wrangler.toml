@@ -8,9 +8,10 @@ upload_source_maps = true
 [vars]
 EMAIL_PROVIDER = "none"
 # Production stays on Cloudflare until E2B is ready. Switch to "e2b" only after
-# publishing the template (`pnpm --filter @codevil/sandbox-image e2b:template`),
-# setting the E2B_API_KEY secret, and passing the manual E2B end-to-end check.
-# (Code default with no var at all is "e2b"; keep this explicit.)
+# setting E2B_API_KEY as a Worker secret and a GitHub Actions secret and passing
+# the manual E2B end-to-end check. With "e2b", the CI deploy publishes this
+# commit's template and pins E2B_TEMPLATE_ID to "<id>:<commit sha>".
+# (Code default with no var at all is "e2b"; deploys require this to be explicit.)
 SANDBOX_PROVIDER = "cloudflare"
 E2B_TEMPLATE_ID = "codevil-sandbox"
 CODEVIL_WEB_ORIGIN = "http://localhost:5173,http://localhost:8787"

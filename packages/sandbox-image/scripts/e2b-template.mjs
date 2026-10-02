@@ -11,6 +11,10 @@
 //   E2B_API_KEY                 required
 //   CODEVIL_SANDBOX_IMAGE       required, full registry ref to build/push
 //   E2B_TEMPLATE_ID             optional, default "codevil-sandbox"
+//   E2B_TEMPLATE_TAG            optional, extra tag for this build (CI uses the
+//                               commit SHA so the Worker can pin "<id>:<tag>");
+//                               "default" is moved too, so the bare id follows
+//                               the latest publish
 //   CODEVIL_REGISTRY_USERNAME   optional, private registry login (with password)
 //   CODEVIL_REGISTRY_PASSWORD   optional, private registry login (with username)
 //
@@ -58,6 +62,12 @@ function assertSafeValue(name, value) {
   }
 }
 
+const TEMPLATE_TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// E2B resolves an untagged template id to its "default" tag.
+const DEFAULT_TEMPLATE_TAG = "default";
+
+const templateTags = (config) => (config.templateTag ? [config.templateTag, DEFAULT_TEMPLATE_TAG] : undefined);
+
 function loadConfig() {
   const apiKey = readEnv("E2B_API_KEY");
   const image = readEnv("CODEVIL_SANDBOX_IMAGE");
@@ -77,12 +87,17 @@ function loadConfig() {
     );
   }
   const templateId = readEnv("E2B_TEMPLATE_ID") ?? DEFAULT_TEMPLATE_ID;
+  const templateTag = readEnv("E2B_TEMPLATE_TAG");
   assertSafeValue("CODEVIL_SANDBOX_IMAGE", image);
   assertSafeValue("E2B_TEMPLATE_ID", templateId);
+  if (templateTag !== undefined && !TEMPLATE_TAG_PATTERN.test(templateTag)) {
+    fail("E2B_TEMPLATE_TAG may contain only letters, digits, \".\", \"_\" and \"-\"");
+  }
   return {
     apiKey,
     image,
     templateId,
+    templateTag,
     credentials: username && password ? { username, password } : undefined,
   };
 }
@@ -115,7 +130,9 @@ const displayOf = (step) => step.display ?? step.argv.join(" ");
 function templateDisplay(config) {
   return `E2B Template.build(Template().fromImage("${config.image}"${
     config.credentials ? ", { username: $CODEVIL_REGISTRY_USERNAME, password: $CODEVIL_REGISTRY_PASSWORD }" : ""
-  }), template "${config.templateId}", { cpuCount: ${CPU_COUNT}, memoryMB: ${MEMORY_MB} })  # authenticated with $E2B_API_KEY`;
+  }), template "${config.templateId}", { ${
+    templateTags(config) ? `tags: ${JSON.stringify(templateTags(config)).replaceAll(",", ", ")}, ` : ""
+  }cpuCount: ${CPU_COUNT}, memoryMB: ${MEMORY_MB} })  # authenticated with $E2B_API_KEY`;
 }
 
 /** Docker never needs the E2B key or registry secrets in its environment. */
@@ -173,11 +190,12 @@ async function main() {
   const template = Template().fromImage(config.image, config.credentials);
   await Template.build(template, config.templateId, {
     apiKey: config.apiKey,
+    ...(templateTags(config) ? { tags: templateTags(config) } : {}),
     cpuCount: CPU_COUNT,
     memoryMB: MEMORY_MB,
     onBuildLogs: defaultBuildLogger(),
   });
-  console.log(`E2B template ready: ${config.templateId}`);
+  console.log(`E2B template ready: ${config.templateId}${config.templateTag ? ` (tag ${config.templateTag})` : ""}`);
 }
 
 main().catch((error) => {

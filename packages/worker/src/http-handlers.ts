@@ -49,12 +49,7 @@ import {
 import { configuredWebOrigins, missingAuthConfigKeys } from "./auth-config.js";
 import { createEmailProvider } from "./email.js";
 import { can, type AuthAction, CreateInvitationRequestSchema, SetupClaimRequestSchema } from "@codevil/shared";
-import {
-  getCodevilSandbox,
-  readSandboxDiagnostics,
-} from "./sandbox.js";
-import { redactEvent } from "./redaction.js";
-import { collectWorkerSecretValues } from "./worker-env.js";
+import { configuredSandboxProviderName, resolveSandboxProvider } from "./sandbox-provider/index.js";
 import type { Env } from "./worker-env.js";
 import type { SocketAuthContext } from "./ws-authorization.js";
 import { createSocketAuthToken } from "./ws-token.js";
@@ -526,6 +521,23 @@ export async function handleCreateSession(
     }, 400);
   }
 
+  // Resolve before touching D1 so a bad deployment setting leaves no Session row behind.
+  let sandboxProvider: ReturnType<typeof configuredSandboxProviderName>;
+  try {
+    sandboxProvider = configuredSandboxProviderName(env);
+  } catch {
+    return json({ error: "Sandbox provider is not configured" }, 500);
+  }
+  try {
+    // Fails on a missing credential such as E2B_API_KEY; the message is a fixed, non-secret string.
+    resolveSandboxProvider(env, sandboxProvider);
+  } catch (error) {
+    return json({
+      error: "Sandbox provider is not configured",
+      detail: error instanceof Error ? error.message : "Sandbox provider is unavailable",
+    }, 500);
+  }
+
   const sessionId = `ses_${crypto.randomUUID().replace(/-/g, "")}`;
   const now = new Date().toISOString();
   const legacyGuards = legacyDirectoryGuardColumns();
@@ -598,6 +610,8 @@ export async function handleCreateSession(
       exec_model: normalized.exec_model,
       max_time: normalized.max_session_time,
       created_by: { id: auth.userId, name: auth.name },
+      sandbox_provider: sandboxProvider,
+      max_idle_time: normalized.max_idle_time,
     });
   } catch (error) {
     const failedAt = new Date().toISOString();
@@ -724,14 +738,7 @@ export async function handleSessionPreview(
 
 export async function handleLogs(env: Env, sessionId: string): Promise<Response> {
   try {
-    const { getSandbox } = await import("@cloudflare/sandbox");
-    const sandbox = getCodevilSandbox(
-      getSandbox,
-      env.Sandbox as unknown as Parameters<typeof getSandbox>[0],
-      sessionId,
-    );
-    const logs = await sandbox.getProcessLogs("codevil-agent");
-    return json(redactSandboxDiagnosticResponse(logs, env), 200);
+    return await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).readSandboxLogs();
   } catch {
     return json({ error: "Failed to read sandbox logs" }, 500);
   }
@@ -739,23 +746,10 @@ export async function handleLogs(env: Env, sessionId: string): Promise<Response>
 
 export async function handleDiagnostics(env: Env, sessionId: string): Promise<Response> {
   try {
-    return json(redactSandboxDiagnosticResponse(
-      await readSandboxDiagnostics(
-        env.Sandbox,
-        sessionId,
-        "codevil-agent",
-        collectWorkerSecretValues(env),
-      ),
-      env,
-    ), 200);
+    return await env.ORCHESTRATOR.get(env.ORCHESTRATOR.idFromName(sessionId)).readSandboxDiagnosticsResponse();
   } catch {
     return json({ error: "Failed to read sandbox diagnostics" }, 500);
   }
-}
-
-/** Final HTTP boundary for sandbox-controlled diagnostic text. */
-export function redactSandboxDiagnosticResponse(data: unknown, env: Env): unknown {
-  return redactEvent(data, collectWorkerSecretValues(env));
 }
 
 export function json(data: unknown, status: number): Response {

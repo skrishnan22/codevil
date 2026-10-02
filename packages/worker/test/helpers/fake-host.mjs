@@ -1,5 +1,10 @@
 import { isValidTransition } from "../../../shared/dist/index.js";
 import { createAgentRun } from "../../dist/agent-runs.js";
+import {
+  recordSessionActivity,
+  terminateSandbox as terminateSandboxForHost,
+} from "../../dist/orchestrator/sandbox-session-lifecycle.js";
+import { closeSandboxSockets as closeSandboxSocketsOnCtx } from "../../dist/sandbox-connection.js";
 
 const actor = { id: "usr_test", name: "Tester" };
 
@@ -61,12 +66,120 @@ export function createFakeSql(initial = {}) {
   };
 }
 
+/** A Cloudflare-like fake sandbox handle; override any member per test. */
+export function createFakeSandboxHandle(overrides = {}) {
+  return {
+    ref: { provider: "cloudflare", id: "ses_test" },
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    writeFile: async () => {},
+    startProcess: async () => {},
+    readProcessLogs: async () => ({ stdout: "", stderr: "" }),
+    fetchPort: async () => new Response("ok"),
+    renewLease: async () => {},
+    destroy: async () => {},
+    workspaceCache: {
+      restoreBackup: async () => ({}),
+      createBackup: async () => ({ id: "backup_test", dir: "/workspace" }),
+    },
+    ...overrides,
+  };
+}
+
+export function createFakeSandboxProvider(overrides = {}) {
+  return {
+    name: "cloudflare",
+    capabilities: { pauseResume: false, workspaceCache: true, leaseRenewal: false },
+    create: async () => createFakeSandboxHandle(),
+    connect: async () => createFakeSandboxHandle(),
+    ...overrides,
+  };
+}
+
 export function createFakeTracer() {
   return {
     trace_id: "trace_test",
     span: async (_name, _opts, fn) => fn(),
     log: () => {},
   };
+}
+
+/**
+ * A Durable Object sandbox socket double. `close()` deliberately leaves
+ * `readyState` OPEN (the worst case for a socket whose paused peer has not yet
+ * answered the close handshake) so only the `closing` attachment marks it dead.
+ */
+export function createFakeSandboxSocket(attachment = { sandbox: { aud: "sandbox_ws", role: "sandbox" } }) {
+  let current = attachment;
+  return {
+    readyState: 1,
+    closeCalls: [],
+    serializeAttachment(value) { current = value; },
+    deserializeAttachment() { return current; },
+    close(code, reason) { this.closeCalls.push([code, reason]); },
+  };
+}
+
+/** A tracer that records `log` calls so tests can assert on (redacted) log output. */
+export function createRecordingTracer() {
+  const logs = [];
+  return {
+    ...createFakeTracer(),
+    logs,
+    log: (level, name, attributes) => logs.push({ level, name, attributes }),
+  };
+}
+
+/**
+ * An E2B-like handle that records its calls as `[name, ...args]`.
+ * `pauseError` makes `pause` reject.
+ */
+export function createFakeE2BHandle(options = {}) {
+  const calls = [];
+  return {
+    calls,
+    ref: { provider: "e2b", id: "sbx_1" },
+    secret: options.secret,
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    writeFile: async (...args) => { calls.push(["writeFile", ...args]); },
+    startProcess: async () => {},
+    readProcessLogs: async () => ({ stdout: "", stderr: "" }),
+    fetchPort: async () => new Response("ok"),
+    renewLease: async (...args) => {
+      calls.push(["renewLease", ...args]);
+      if (options.renewError) throw options.renewError;
+    },
+    pause: async () => {
+      calls.push(["pause"]);
+      if (options.pauseError) throw options.pauseError;
+    },
+    destroy: async (...args) => { calls.push(["destroy", ...args]); },
+  };
+}
+
+/** An E2B-like provider whose `connect` counts calls and resolves `handle` (or throws `connectError`). */
+export function createFakeE2BProvider(handle, options = {}) {
+  const provider = {
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    connectCalls: 0,
+    connectOptions: [],
+    destroyedByRef: [],
+    create: async () => handle,
+    connect: async (_ref, connectOptions) => {
+      provider.connectCalls += 1;
+      provider.connectOptions.push(connectOptions);
+      if (options.connectError) throw options.connectError;
+      return handle;
+    },
+  };
+  // `destroyByRef: true` adds the optional static kill; `destroyByRefError` makes it reject.
+  if (options.destroyByRef) {
+    provider.destroyByRef = async (ref) => {
+      provider.destroyedByRef.push(ref);
+      if (options.destroyByRefError) throw options.destroyByRefError;
+    };
+  }
+  return provider;
 }
 
 export function createFakeHost(metaOverrides = {}, options = {}) {
@@ -78,6 +191,17 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
   const backgroundWork = [];
   let saveMetaCalls = 0;
   let previewRevoked = false;
+  const storage = new Map();
+  // `e2b: true` swaps in an E2B-like provider and a call-recording handle.
+  const e2bHandle = options.e2b ? createFakeE2BHandle(options) : undefined;
+  const e2bProvider = options.e2b ? createFakeE2BProvider(e2bHandle, options) : undefined;
+  const sandboxSockets = options.sandboxConnected === false ? [] : [createFakeSandboxSocket()];
+  let armCalls = 0;
+  const closedSandboxSockets = [];
+  const activity = { count: 0 };
+  const resumeRequests = { count: 0 };
+  const handleInvalidations = { count: 0 };
+  const terminations = [];
 
   const host = {
     meta,
@@ -88,12 +212,16 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
       DB: {},
     },
     ctx: {
+      storage: {
+        put: async (key, value) => { storage.set(key, value); },
+        get: async (key) => storage.get(key),
+      },
       waitUntil(promise) {
         backgroundWork.push(Promise.resolve(promise).catch(() => {}));
       },
       getWebSockets(tag) {
         if (tag !== "sandbox") return [];
-        return options.sandboxConnected === false ? [] : [{}];
+        return [...sandboxSockets];
       },
     },
     redactionSecrets: [],
@@ -164,7 +292,42 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     decisionRejection(_host, _action, fallbackMessage) {
       return { type: "error", message: fallbackMessage };
     },
-    armNextAlarm: async () => {},
+    armNextAlarm: async () => { armCalls += 1; },
+    sandboxProvider() {
+      return options.sandboxProvider ?? e2bProvider ?? createFakeSandboxProvider();
+    },
+    recordActivity(source) {
+      activity.count += 1;
+      recordSessionActivity(host, Date.now(), source);
+    },
+    requestSandboxResume() {
+      resumeRequests.count += 1;
+    },
+    closeSandboxSockets(reason) {
+      closedSandboxSockets.push(reason);
+      // `lingerClosedSockets`: closed sockets stay in getWebSockets, marked only by the closing attachment.
+      if (options.lingerClosedSockets) closeSandboxSocketsOnCtx(host.ctx, reason);
+      else sandboxSockets.length = 0;
+    },
+    async issueSandboxWebSocketToken() {
+      return "fresh_token";
+    },
+    terminateSandbox(reason, terminateOptions) {
+      terminations.push({ reason, options: terminateOptions });
+      return terminateSandboxForHost(host, reason, terminateOptions);
+    },
+    invalidateSandboxHandle() {
+      handleInvalidations.count += 1;
+    },
+    async sandboxHandle() {
+      // Mirrors connectSandboxHandle: a paused sandbox is never woken by a plain handle lookup.
+      if (meta.sandbox_paused_at) return null;
+      if (options.sandboxHandle !== undefined) return options.sandboxHandle;
+      if (e2bHandle) return e2bHandle;
+      return createFakeSandboxHandle({
+        ref: meta.sandbox_ref ?? { provider: "cloudflare", id: meta.session_id },
+      });
+    },
   };
 
   return {
@@ -174,6 +337,18 @@ export function createFakeHost(metaOverrides = {}, options = {}) {
     transitions,
     sandboxMessages,
     directoryPatches,
+    storage,
+    handle: e2bHandle,
+    provider: e2bProvider,
+    sandboxSockets,
+    closedSandboxSockets,
+    activity,
+    resumeRequests,
+    handleInvalidations,
+    terminations,
+    get armCalls() {
+      return armCalls;
+    },
     get saveMetaCalls() {
       return saveMetaCalls;
     },

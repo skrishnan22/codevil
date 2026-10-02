@@ -7,7 +7,7 @@ import { SandboxToDOMessageSchema, clientValidationErrorMessage, getProviderDefi
 import { redactEvent } from "../redaction.js";
 import {
   buildSandboxWebSocketUrl,
-  provisionSandbox,
+  startAgentOnHandle,
 } from "../sandbox.js";
 import {
   restoreLatestWorkspaceCache,
@@ -25,12 +25,15 @@ import { getProvisioningCredentialContext, requireProviderPublicConfig } from ".
 import { createSandboxGitProxyToken, createSandboxProxyToken } from "../sandbox-proxy.js";
 import { createSandboxWebSocketToken } from "../sandbox-ws-token.js";
 import { traceSandboxProvisioning } from "./provisioning.js";
+import { sandboxProviderMaxLeaseMs } from "../sandbox-provider/index.js";
+import { sandboxLeaseMs } from "./sandbox-lifecycle.js";
+import { registerSandboxSecret, SANDBOX_SECRET_KEY } from "./sandbox-access.js";
 import {
   buildPreviewUrl,
   createPreviewToken,
   hashPreviewToken,
 } from "./preview.js";
-import { slugify } from "./session-guards.js";
+import { parseMaxTimeMs, slugify } from "./session-guards.js";
 import type { OrchestratorHost } from "./host.js";
 import {
   completeActiveRun,
@@ -38,6 +41,8 @@ import {
   finishRunAndDrainQueue,
   setActiveRunState,
 } from "./agent-run-coordinator.js";
+import { drainQueuedAgentWorkIfReady } from "./sandbox-session-lifecycle.js";
+export { drainQueuedAgentWorkIfReady } from "./sandbox-session-lifecycle.js";
 import { freezePlanRevision } from "./plan-revision-actions.js";
 import {
   cancelOpenQuestions,
@@ -53,6 +58,7 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
 
   const tracer = host.getTracer();
   try {
+    warnWhenSessionOutlivesProviderLimit(host);
     const wsUrl = buildSandboxWebSocketUrl(host.meta.worker_url, host.meta.session_id);
     // Validate the actual key at provisioning time, but never transfer it into the container.
     const provisioningContext = getProvisioningCredentialContext(host.workerEnv, host.meta.provider);
@@ -69,34 +75,82 @@ export async function provisionSessionSandbox(host: OrchestratorHost): Promise<v
         plan_model: host.meta.plan_model,
         has_llm_key: provisioningContext.hasLlmKey,
       },
-      provision: () =>
-        provisionSandbox({
-          binding: host.workerEnv.Sandbox,
-          sessionId: host.meta!.session_id,
+      provision: async () => {
+        const meta = host.meta!;
+        const provider = host.sandboxProvider();
+        const handle = await provider.create({
+          sessionId: meta.session_id,
+          leaseMs: sandboxLeaseMs({
+            now: Date.now(),
+            createdAt: Date.parse(meta.created_at),
+            maxTimeMs: parseMaxTimeMs(meta.max_time),
+            providerMaxMs: sandboxProviderMaxLeaseMs(host.workerEnv, provider.name),
+          }),
+        });
+        meta.sandbox_ref = handle.ref;
+        if (provider.capabilities.leaseRenewal) meta.sandbox_lease_renewed_at = new Date().toISOString();
+        host.saveMeta();
+        if (handle.secret) {
+          // Redact before anything can log it, then persist for cold starts.
+          registerSandboxSecret(host.redactionSecrets, handle.secret);
+          await host.ctx.storage.put(SANDBOX_SECRET_KEY, handle.secret);
+        }
+        if (provider.capabilities.workspaceCache && handle.workspaceCache) {
+          const restored = await restoreWorkspaceCacheBeforeStart(host, handle.workspaceCache);
+          if (host.meta) {
+            host.meta.workspace_cache_restored = restored;
+            host.saveMeta();
+          }
+        }
+        await startAgentOnHandle(handle, {
           wsUrl,
           wsToken,
-          provider: host.meta!.provider,
+          provider: meta.provider,
+          sandboxProvider: provider.name,
           providerConfig,
-          proxyBase: host.meta!.worker_url,
+          proxyBase: meta.worker_url,
           proxyTokens,
-          beforeStart: async (sandbox) => {
-            const restored = await restoreWorkspaceCacheBeforeStart(host, sandbox as WorkspaceCacheSandbox);
-            if (host.meta) {
-              host.meta.workspace_cache_restored = restored;
-              host.saveMeta();
-            }
-          },
-        }),
+        });
+      },
     });
     host.appendAndBroadcast({ type: "status", message: "Sandbox process started." });
   } catch (error) {
     host.transition("failed");
     host.updateDirectory({ room_state: "failed", sandbox_state: "failed" });
+    const reason = provisioningFailureReason(error, host.redactionSecrets);
     host.appendAndBroadcast({
       type: "error",
-      message: "Sandbox provisioning failed. Check session diagnostics.",
+      message: `Sandbox provisioning failed${reason ? `: ${reason}` : ""}. Check session diagnostics.`,
     });
+    // A sandbox created before the failure (e.g. the agent never started) must not be left running.
+    if (host.meta?.sandbox_ref) await host.terminateSandbox("provisioning failed");
   }
+}
+
+const MAX_FAILURE_REASON_LENGTH = 200;
+
+/** One-line, secret-redacted reason for a provisioning failure, safe to show to Session participants. */
+function provisioningFailureReason(error: unknown, secrets: readonly string[]): string {
+  const attributes = redactEvent(safeExceptionAttributes(error), secrets) as { error?: unknown };
+  const text = typeof attributes.error === "string" ? attributes.error.replace(/\s+/g, " ").trim() : "";
+  return text.length > MAX_FAILURE_REASON_LENGTH ? `${text.slice(0, MAX_FAILURE_REASON_LENGTH)}...` : text;
+}
+
+/** E2B caps continuous runtime (Hobby: 1h); a longer Session may be cut off by the provider. */
+function warnWhenSessionOutlivesProviderLimit(host: OrchestratorHost): void {
+  const meta = host.meta;
+  if (!meta) return;
+  const provider = host.sandboxProvider();
+  if (provider.name !== "e2b") return;
+  const maxTimeMs = parseMaxTimeMs(meta.max_time);
+  const limitMs = sandboxProviderMaxLeaseMs(host.workerEnv, provider.name);
+  if (maxTimeMs === null || maxTimeMs <= limitMs) return;
+  host.appendAndBroadcast({
+    type: "status",
+    message:
+      `This session's max time (${meta.max_time}) is longer than the sandbox provider's continuous runtime limit `
+      + `(${Math.round(limitMs / 60_000)} minutes on the E2B Hobby plan). The session may be cut off at that limit.`,
+  });
 }
 
 export function initializeSandboxConnection(
@@ -236,6 +290,8 @@ export async function dispatchSandboxSocketMessage(
           cancelOpenQuestions(host, activeRunId, "session failed");
         }
         host.appendAndBroadcast({ type: "error", message: parsed.message });
+        // The Session is over: a leased/paused provider sandbox must not outlive it.
+        if (host.meta.sandbox_ref) await host.terminateSandbox("agent error");
       }
       return;
     case "status":
@@ -331,29 +387,16 @@ export function handleSandboxCloneComplete(
 
   if (host.transition("ready")) {
     host.updateDirectory({ room_state: "ready", sandbox_state: "ready" });
+    host.recordActivity();
     host.appendAndBroadcast({ type: "status", message: "Repository cloned. Session is ready." });
     host.appendAndBroadcast({ type: "room_ready", repo: host.meta.repo });
     // Backups can outlive the socket message invocation. Leave the work in
     // durable job state and let the alarm run it so a DO restart can resume it.
-    enqueueWorkspaceCacheJob(host);
+    if (host.sandboxProvider().capabilities.workspaceCache) enqueueWorkspaceCacheJob(host);
     // Requests queued while cloning (e.g. Slack messages) must start now —
     // without this they would wait for the alarm, which claims the backup
     // first and only drains queued work after the upload finishes.
     drainQueuedAgentWorkIfReady(host);
-  }
-}
-
-/** Drains queued agent work once the session is usable; the cache job no
- *  longer gates agent work — snapshots are best-effort and validated on
- *  restore, so runs and backups may overlap. */
-export function drainQueuedAgentWorkIfReady(host: OrchestratorHost): void {
-  if (
-    host.meta?.state === "ready"
-    && !host.meta.active_run
-    && host.meta.queued_runs.length > 0
-    && host.ctx.getWebSockets("sandbox").length > 0
-  ) {
-    finishRunAndDrainQueue(host, "completed");
   }
 }
 

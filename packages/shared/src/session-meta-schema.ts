@@ -37,6 +37,17 @@ export const SessionMetaSchema = z.object({
   expected_close: z.boolean().optional(),
   sandbox_disconnected_at: z.string().optional(),
   workspace_cache_restored: z.boolean().optional(),
+  sandbox_provider: z.enum(["e2b", "cloudflare"]).optional(),
+  sandbox_ref: z.object({ provider: z.enum(["e2b", "cloudflare"]), id: z.string() }).optional(),
+  max_idle_time: z.string().optional(),
+  last_activity_at: z.string().optional(),
+  sandbox_paused_at: z.string().optional(),
+  sandbox_lease_renewed_at: z.string().optional(),
+  /** The latest preview command requested while the sandbox was paused or reconnecting; replayed once the agent reconnects. */
+  pending_preview_action: z.object({
+    type: z.enum(["start", "stop"]),
+    app_key: z.string().optional(),
+  }).optional(),
   last_decision: LastDecisionSchema.optional(),
 });
 

@@ -8,7 +8,6 @@ import type {
   AgentRunState,
 } from "@codevil/shared";
 import {
-  DEFAULT_CONFIG,
   isValidTransition,
   isTerminalState,
   CLIToDOMessageSchema,
@@ -21,17 +20,29 @@ import {
   type Span,
   type Tracer,
 } from "@codevil/shared";
-import type { Sandbox } from "@cloudflare/sandbox";
+import { buildSandboxDisconnectLogPayload } from "./sandbox.js";
 import {
-  buildSandboxDisconnectLogPayload,
-  readProcessLogs,
-  readSandboxDiagnostics,
-  setCodevilSandboxKeepAlive,
-} from "./sandbox.js";
+  collectAgentDiagnostics,
+  connectSandboxHandle,
+  createSandboxHandleCache,
+  loadStoredSandboxSecret,
+  readRedactedAgentLogs,
+  SANDBOX_SECRET_KEY,
+  sandboxDiagnosticsResponse,
+  sandboxLogsResponse,
+} from "./orchestrator/sandbox-access.js";
+import {
+  sandboxProviderForMeta,
+  type SandboxHandle,
+  type SandboxProvider,
+} from "./sandbox-provider/index.js";
 import {
   SANDBOX_RECONNECT_GRACE_MS,
   sandboxConnectionMode,
   completeSandboxReconnect,
+  closeSandboxSockets as closeSandboxSocketsFn,
+  isUnexpectedSandboxDisconnect,
+  liveSandboxSockets,
   sandboxReconnectExpired,
 } from "./sandbox-connection.js";
 import { redactEvent } from "./redaction.js";
@@ -72,6 +83,7 @@ import type { OrchestratorHost } from "./orchestrator/host.js";
 import { SessionEventLog } from "./orchestrator/event-log.js";
 import { notifyExternalConversation } from "./integrations/notify-external-conversation.js";
 import { loadSessionMeta, saveSessionMeta } from "./orchestrator/session-meta.js";
+import { buildInitialSessionMeta } from "./orchestrator/initial-meta.js";
 import { sessionWideEventGroup } from "./orchestrator/session-telemetry.js";
 import {
   completeActiveRun as completeActiveRunFn,
@@ -108,8 +120,22 @@ import {
   drainQueuedAgentWorkIfReady,
   dispatchSandboxSocketMessage,
   initializeSandboxConnection,
+  issueSandboxWebSocketCapability,
   provisionSessionSandbox,
 } from "./orchestrator/sandbox-handlers.js";
+import {
+  assumeSandboxPausedAfterEviction,
+  clearStalePausedMarker,
+  expireSessionAtMaxTime,
+  pauseIdleSandbox,
+  prepareAuthenticatedPreview,
+  renewSandboxLeaseIfDue,
+  resumeSandbox,
+  recordSessionActivity,
+  flushPendingPreviewAction,
+  sandboxAlarmDeadlines,
+  terminateSandbox as terminateSandboxFn,
+} from "./orchestrator/sandbox-session-lifecycle.js";
 import {
   nextSessionDirectoryTimestamp,
   runSessionDirectoryUpdateWithRetry,
@@ -156,6 +182,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.ctx = ctx as DurableObjectState<{}>;
     this.workerEnv = env;
     this.redactionSecrets = collectWorkerSecretValues(env);
+    // Gate every request on the stored provider secret being redactable.
+    ctx.blockConcurrencyWhile(() => loadStoredSandboxSecret(ctx.storage, this.redactionSecrets));
     this.sql = ctx.storage.sql;
     this.eventLog = new SessionEventLog(
       this.sql,
@@ -244,24 +272,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   async init(sessionId: string, prompt: string, repo: string, options: InitOptions): Promise<void> {
-    this.meta = {
-      session_id: sessionId,
-      prompt,
-      repo,
-      worker_url: options.worker_url,
-      provider: options.provider ?? DEFAULT_CONFIG.provider,
-      plan_model: options.plan_model ?? DEFAULT_CONFIG.plan_model,
-      exec_model: options.exec_model ?? DEFAULT_CONFIG.exec_model,
-      max_time: options.max_time ?? DEFAULT_CONFIG.max_time,
-      state: "initializing",
-      refinement_round: 0,
-      verification_attempts: 0,
-      cost_total_usd: 0,
-      active_run: null,
-      queued_runs: [],
-      created_by: options.created_by,
-      created_at: new Date().toISOString(),
-    };
+    this.meta = buildInitialSessionMeta(sessionId, prompt, repo, options, new Date());
     this.saveMeta();
 
     this.appendAndBroadcast({ type: "session_created", session_id: sessionId });
@@ -298,18 +309,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
 
     const createdAt = Date.parse(this.meta.created_at);
-    const maxTimeMs = parseMaxTimeMs(this.meta.max_time);
-    if (maxTimeMs !== null && now >= createdAt + maxTimeMs) {
-      const activeRunId = this.meta.active_run?.id;
-      this.transition("timed_out");
-      if (activeRunId) {
-        this.cancelOpenQuestions(activeRunId, "session timed out");
-      }
-      this.appendAndBroadcast({
-        type: "error",
-        message: `Session timed out after ${this.meta.max_time}.`,
-      });
-      await this.terminateSandbox("timed out");
+    if (await expireSessionAtMaxTime(this, now)) {
       await this.armNextAlarm(Date.now() - 1);
       return;
     }
@@ -323,12 +323,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     }
 
     if (this.meta.state === "provisioning_sandbox" && now >= createdAt + 60_000) {
-      const logs = await readProcessLogs(
-        this.workerEnv.Sandbox,
-        this.meta.session_id,
-        "codevil-agent",
-        this.redactionSecrets,
-      );
+      const logs = await readRedactedAgentLogs(this.sandboxResolver, this.redactionSecrets);
       this.getTracer()?.log("ERROR", "sandbox.timeout", {
         stdout: logs?.stdout ?? "(none)",
         stderr: logs?.stderr ?? "(none)",
@@ -350,6 +345,11 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       await this.armNextAlarm(Date.now() - 1);
       return;
     }
+
+    clearStalePausedMarker(this);
+    assumeSandboxPausedAfterEviction(this, now);
+    await renewSandboxLeaseIfDue(this, now);
+    await pauseIdleSandbox(this, now);
 
     drainQueuedAgentWorkIfReady(this);
     await this.armNextAlarm(now);
@@ -432,7 +432,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     );
     if (!capability) return new Response("Unauthorized", { status: 401 });
 
-    const attachedSandboxCount = this.ctx.getWebSockets("sandbox").length;
+    // Sockets the DO closed (pause, teardown) can linger until the peer answers; only live ones are attached.
+    const attachedSandboxCount = liveSandboxSockets(this.ctx).length;
     const mode = sandboxConnectionMode(this.meta.state, this.meta.sandbox_disconnected_at, attachedSandboxCount);
     if (mode === "reject") {
       this.getTracer()?.log("WARN", "sandbox.ws.rejected", {
@@ -460,6 +461,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       completeSandboxReconnect(this);
       this.armNextAlarmSafe();
     }
+    // A preview requested while the sandbox was paused starts now that the agent is back.
+    flushPendingPreviewAction(this);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -577,10 +580,12 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     });
 
     if (isSandbox && this.meta) {
-      if (
-        !this.meta.expected_close
-        && !isTerminalState(this.meta.state)
-      ) {
+      if (isUnexpectedSandboxDisconnect({
+        expectedClose: this.meta.expected_close,
+        state: this.meta.state,
+        closedSocket: ws,
+        sandboxSockets: this.ctx.getWebSockets("sandbox"),
+      })) {
         const state = this.meta.state;
         if (!this.meta.sandbox_disconnected_at) {
           this.meta.sandbox_disconnected_at = new Date().toISOString();
@@ -751,21 +756,59 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     this.armNextAlarmSafe(Date.now() - 1);
   }
 
-  private async terminateSandbox(reason: string): Promise<void> {
-    if (!this.meta) return;
-    this.meta.expected_close = true;
-    this.saveMeta();
-    try {
-      const { getSandbox } = await import("@cloudflare/sandbox");
-      const sandbox = getSandbox(this.workerEnv.Sandbox, this.meta.session_id);
-      await setCodevilSandboxKeepAlive(sandbox, false, reason);
-      await sandbox.stop();
-    } catch (error) {
-      this.getTracer()?.log("ERROR", "sandbox.stop.failed", {
+  sandboxProvider(): SandboxProvider {
+    return sandboxProviderForMeta(this.workerEnv, this.meta ?? {});
+  }
+
+  async sandboxHandle(): Promise<SandboxHandle | null> {
+    return connectSandboxHandle({
+      meta: this.meta,
+      provider: this.sandboxProvider(),
+      readSecret: () => this.ctx.storage.get<string>(SANDBOX_SECRET_KEY),
+      secrets: this.redactionSecrets,
+      storeSecret: (secret) => this.ctx.storage.put(SANDBOX_SECRET_KEY, secret),
+      cache: this.sandboxHandleCache,
+    });
+  }
+
+  private readonly sandboxHandleCache = createSandboxHandleCache();
+
+  invalidateSandboxHandle(): void {
+    this.sandboxHandleCache.invalidate();
+  }
+
+  private readonly sandboxResolver = (): Promise<SandboxHandle | null> => this.sandboxHandle();
+
+  /** RPC for `GET /sessions/:id/logs`. */
+  async readSandboxLogs(): Promise<Response> {
+    this.loadMeta();
+    return sandboxLogsResponse(this.sandboxResolver, this.redactionSecrets, { paused: Boolean(this.meta?.sandbox_paused_at) });
+  }
+
+  /** RPC for `GET /sessions/:id/diagnostics`. */
+  async readSandboxDiagnosticsResponse(): Promise<Response> {
+    this.loadMeta();
+    return sandboxDiagnosticsResponse(this.sandboxResolver, this.redactionSecrets, { paused: Boolean(this.meta?.sandbox_paused_at) });
+  }
+
+  async terminateSandbox(reason: string, options?: { assumePaused?: boolean }): Promise<void> {
+    await terminateSandboxFn(this, reason, options);
+  }
+
+  recordActivity(source?: "event" | "preview"): void {
+    recordSessionActivity(this, Date.now(), source);
+  }
+
+  requestSandboxResume(): void {
+    this.ctx.waitUntil(resumeSandbox(this).catch((error) => {
+      this.getTracer()?.log("ERROR", "sandbox.resume.request_failed", {
         ...redactEvent(safeExceptionAttributes(error), this.redactionSecrets),
       });
-    }
-    this.closeSandboxSockets(reason);
+    }));
+  }
+
+  issueSandboxWebSocketToken(): Promise<string> {
+    return issueSandboxWebSocketCapability(this);
   }
 
   // --- OrchestratorHost delegation ---
@@ -808,7 +851,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
   }
 
   sendToSandbox(message: DOToSandboxMessage): void {
-    const sandboxes = this.ctx.getWebSockets("sandbox");
+    const sandboxes = liveSandboxSockets(this.ctx);
     if (sandboxes.length === 0) {
       this.appendAndBroadcast({ type: "error", message: "Sandbox is not connected." });
       return;
@@ -1023,6 +1066,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       sandboxDisconnectedAt: this.meta.sandbox_disconnected_at,
       presentationRetryAt: this.liveRunCards.nextRetryAt(),
       workspaceCacheRetryAt: nextWorkspaceCacheJobAt(this.sql),
+      ...sandboxAlarmDeadlines(this),
     }, (deadline) => this.ctx.storage.setAlarm(deadline));
   }
 
@@ -1034,10 +1078,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     });
   }
 
-  private closeSandboxSockets(reason: string): void {
-    for (const sandbox of this.ctx.getWebSockets("sandbox")) {
-      sandbox.close(1000, reason);
-    }
+  closeSandboxSockets(reason: string): void {
+    closeSandboxSocketsFn(this.ctx, reason);
   }
 
   private async logSandboxDisconnectDiagnostics(options: {
@@ -1047,12 +1089,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
     state: SessionState;
   }): Promise<void> {
     try {
-      const diagnostics = await readSandboxDiagnostics(
-        this.workerEnv.Sandbox,
-        options.sessionId,
-        "codevil-agent",
-        this.redactionSecrets,
-      );
+      const diagnostics = await collectAgentDiagnostics(this.sandboxResolver, this.redactionSecrets);
       const payload = buildSandboxDisconnectLogPayload({
         sessionId: options.sessionId,
         closeCode: options.closeCode,
@@ -1108,7 +1145,10 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       return new Response("Preview is not active.", { status: 404 });
     }
 
-    return proxyPreviewRequest(request, this.meta, token, this.workerEnv.Sandbox);
+    return proxyPreviewRequest(request, this.meta, token, () => this.sandboxHandle(), {
+      // Resume and activity are earned only by a request that passed the token check.
+      beforeProxy: () => prepareAuthenticatedPreview(this),
+    });
   }
 
   submitAgentRequest(args: {

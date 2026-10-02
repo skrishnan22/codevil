@@ -1,4 +1,5 @@
 import type { ParticipantIdentity } from "@codevil/shared";
+import { liveSandboxSockets } from "../sandbox-connection.js";
 import type { OrchestratorHost } from "./host.js";
 import { loadQuestionAnswerRow, type QuestionAnswerRow } from "./questions-store.js";
 
@@ -83,7 +84,7 @@ export function applyQuestionAnswer(
     return { ok: false, status: "not_open", error: "Question is no longer open" };
   }
 
-  if (host.ctx.getWebSockets("sandbox").length === 0) {
+  if (liveSandboxSockets(host.ctx).length === 0) {
     return {
       ok: false,
       status: "sandbox_unavailable",
@@ -123,6 +124,8 @@ export function applyQuestionAnswer(
     ...(selection.freeform !== undefined ? { freeform: selection.freeform } : {}),
     answered_by: input.actor,
   });
+  // Answering is user activity: it restarts the idle-pause clock.
+  host.recordActivity();
   return {
     ok: true,
     status: "answered",

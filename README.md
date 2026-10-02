@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/skrishnan22/codevil/actions/workflows/ci.yml/badge.svg)](https://github.com/skrishnan22/codevil/actions/workflows/ci.yml)
 
-Codevil is a self-hosted AI coding agent platform. Each coding session runs in an isolated Cloudflare Sandbox and streams its progress to a collaborative web UI.
+Codevil is a self-hosted AI coding agent platform. Each coding session runs in an isolated sandbox (an E2B sandbox or a Cloudflare Sandbox container, selectable per deployment) and streams its progress to a collaborative web UI.
 
 ## Self-hosting
 
-Prerequisites: Node.js 20+, pnpm 10, a Cloudflare account with Workers Containers access, a Google OAuth client, at least one supported provider API key, and a fine-grained GitHub token.
+Prerequisites: Node.js 20+, pnpm 10, a Cloudflare account (with Workers Containers access for the Cloudflare sandbox provider), an E2B account and API key if you use the E2B provider, a Google OAuth client, at least one supported provider API key, and a fine-grained GitHub token.
 
 Install dependencies, authenticate Wrangler, and prepare the auth, GitHub, and bootstrap secrets:
 
@@ -22,7 +22,7 @@ Set `GITHUB_PAT`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in `packages/wo
 openssl rand -hex 32
 ```
 
-Replace every `REPLACE_ME` placeholder before upload. Never upload the example placeholders unchanged. Once all seven values are set, upload the file through Wrangler's existing bootstrap path:
+Replace every `REPLACE_ME` placeholder before upload. Never upload the example placeholders unchanged. Add `E2B_API_KEY` to the file as well if you will run sessions on E2B (see [Sandbox provider](#sandbox-provider)); leave it out for Cloudflare-only deployments. Once all values are set, upload the file through Wrangler's existing bootstrap path:
 
 ```sh
 cd packages/worker
@@ -53,6 +53,44 @@ For the GitHub Actions production deploy, set the protected `production` environ
 In the Google OAuth client, add the deployed Worker origin as an authorized JavaScript origin and add `<worker-origin>/api/auth/callback/google` as an authorized redirect URI. Google OAuth is required even if GitHub is configured.
 
 Open the Worker URL, sign in with Google, claim the first owner account using `CODEVIL_SETUP_TOKEN`, and invite the rest of the team.
+
+## Sandbox provider
+
+Codevil runs each session in either an E2B sandbox or a Cloudflare Sandbox container. The shipped `wrangler.toml` pins `SANDBOX_PROVIDER = "cloudflare"` so a deploy never switches to E2B before it is ready. To move to E2B: (1) add `E2B_API_KEY` both as a Worker secret and as a GitHub Actions secret in the `production` environment, (2) pass the manual end-to-end check, (3) set `SANDBOX_PROVIDER = "e2b"` and merge to `main`. CI then publishes the template on every deploy (see below). The Worker's code default (no var set) is `e2b`. Configure the provider with Worker vars in `packages/worker/wrangler.toml` (or an untracked `wrangler.operator.toml` overlay):
+
+| Name | Kind | Default | Purpose |
+| --- | --- | --- | --- |
+| `SANDBOX_PROVIDER` | var | `e2b` in code; `cloudflare` in the shipped `wrangler.toml` | `e2b` or `cloudflare`. |
+| `E2B_API_KEY` | secret | none | Required when `SANDBOX_PROVIDER=e2b`. Upload with `pnpm exec wrangler secret put E2B_API_KEY`; never put it in `wrangler.toml`. |
+| `E2B_TEMPLATE_ID` | var | `codevil-sandbox` | E2B template the sandboxes start from, without a tag. CI deploys pin it to `<template>:<commit sha>`. |
+| `E2B_MAX_SANDBOX_SECONDS` | var | `3600` | Maximum continuous sandbox runtime; the default matches the E2B Hobby limit. |
+
+### Publishing the E2B template
+
+On a CI deploy this is automatic, the same way `wrangler deploy` builds the Cloudflare container image. When `wrangler.toml` sets `SANDBOX_PROVIDER = "e2b"`, the `e2b-template` job builds this commit's sandbox image, pushes it to `ghcr.io/<owner, lowercased>/codevil-sandbox:<commit sha>` with the workflow's `GITHUB_TOKEN`, and publishes it as the E2B template tagged with the commit SHA (and `default`, so the untagged name follows the latest publish). Only then does the `deploy` job ship the Worker pinned to `E2B_TEMPLATE_ID = "<template>:<commit sha>"`; a failed publish stops the deploy. With `SANDBOX_PROVIDER = "cloudflare"` the publish is skipped and E2B is never called. The deploy config must set `SANDBOX_PROVIDER` explicitly in `[vars]`.
+
+The first CI push creates the GHCR package and links it to the repository. If you already created `codevil-sandbox` by hand, CI's push is refused until you grant access: in the package settings, under **Manage Actions access**, add this repository with the **Write** role.
+
+To publish by hand (an operator deploy without CI, or a first manual test), run the script below. Both providers share `Dockerfile.sandbox`. The Cloudflare build uses its default `cloudflare/sandbox` base; the E2B template is built from the same file on a plain `node:22-slim` base. E2B's Template SDK cannot read multi-stage Dockerfiles, so the publish script builds the image with local Docker (the Dockerfile pins `linux/amd64`, which E2B runs, also on Apple Silicon), pushes it to a registry, and then registers the pushed image as an E2B template with 2 vCPU / 4096 MiB:
+
+```sh
+export E2B_API_KEY=...                                   # E2B account key
+export CODEVIL_SANDBOX_IMAGE=ghcr.io/<owner>/codevil-sandbox:<tag>
+export CODEVIL_REGISTRY_USERNAME=...                     # private registries only
+export CODEVIL_REGISTRY_PASSWORD=...                     # private registries only
+pnpm --filter @codevil/sandbox-image e2b:template -- --dry-run   # print the plan without running it
+pnpm --filter @codevil/sandbox-image e2b:template                # build -> push -> template
+```
+
+| Name | Required | Purpose |
+| --- | --- | --- |
+| `E2B_API_KEY` | yes | Authenticates the template build. |
+| `CODEVIL_SANDBOX_IMAGE` | yes | Full registry reference that is built, pushed, and used as the template base. |
+| `E2B_TEMPLATE_ID` | no | Template name to publish (default `codevil-sandbox`); keep it equal to the Worker's `E2B_TEMPLATE_ID` without the tag. |
+| `E2B_TEMPLATE_TAG` | no | Extra tag for this build, so a Worker can pin `<template>:<tag>`; the `default` tag moves with it. CI passes the commit SHA. |
+| `CODEVIL_REGISTRY_USERNAME`, `CODEVIL_REGISTRY_PASSWORD` | no | Registry credentials, needed together when the image is private. |
+
+Registry credentials come only from the environment of the person publishing the template. The password is passed to `docker login` over stdin (never as an argument), is never printed, and is never committed or stored in wrangler config. The machine running the script needs Docker, access to push to the registry, and the built image must be pullable by E2B (public, or private with the credentials above).
 
 ## Slack integration
 

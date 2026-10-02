@@ -20,6 +20,9 @@ export interface Env extends WorkerSecretEnv {
   CODEVIL_PREVIEW_ORIGIN?: string;
   CODEVIL_WEB_ORIGIN?: string;
   SLACK_BOT_TOKEN?: string;
+  SANDBOX_PROVIDER?: string;
+  E2B_TEMPLATE_ID?: string;
+  E2B_MAX_SANDBOX_SECONDS?: string;
 }
 
 export interface InitOptions {
@@ -29,6 +32,8 @@ export interface InitOptions {
   exec_model?: string;
   max_time?: string;
   created_by?: ParticipantIdentity;
+  sandbox_provider?: "e2b" | "cloudflare";
+  max_idle_time?: string;
 }
 
 export const SNAPSHOT_TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set([

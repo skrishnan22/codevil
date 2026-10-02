@@ -5,6 +5,7 @@ import {
   CreateSessionRequestSchema,
   GetSessionResponseSchema,
   ListSessionsResponseSchema,
+  SandboxStateSchema,
 } from "../dist/room.js";
 
 test("CreateSessionRequestSchema accepts repo-only session creation", () => {
@@ -84,4 +85,8 @@ test("GetSessionResponseSchema includes join websocket URL", () => {
   });
 
   assert.equal(parsed.ws_url, "https://worker.example.com/sessions/ses_123/ws");
+});
+
+test("SandboxStateSchema includes paused", () => {
+  assert.equal(SandboxStateSchema.parse("paused"), "paused");
 });

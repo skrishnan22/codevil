@@ -8,7 +8,7 @@ import type { PreviewApp, PreviewFramework } from "@codevil/shared";
 
 import { sandboxLogException, sandboxLogger } from "./logging.js";
 import { detectPackageManager } from "./package-manager.js";
-import { PreviewCommandRejectedError, resolvePreviewSpawn } from "./preview-spawn.js";
+import { PreviewCommandRejectedError, previewProcessEnv, resolvePreviewSpawn } from "./preview-spawn.js";
 
 export interface PreviewCommand {
   command: string;
@@ -115,12 +115,7 @@ export class PreviewManager {
       detached: process.platform !== "win32",
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        HOST: "0.0.0.0",
-        HOSTNAME: "0.0.0.0",
-        PORT: String(command.port),
-      },
+      env: previewProcessEnv(process.env, command.port),
     });
     this.state = { state: "starting", command, child };
     collectLines(child.stdout, recordLog);

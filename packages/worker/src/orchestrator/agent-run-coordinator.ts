@@ -123,6 +123,8 @@ export function finishRunAndDrainQueue(host: OrchestratorHost, finalState: Agent
   if (next.started) {
     startAgentRun(host, next.started);
   }
+  // A finished run restarts the idle-pause clock (after any queued run started, so the alarm sees the final state).
+  host.recordActivity();
 }
 
 export function failActiveRunAndReturnReady(host: OrchestratorHost, message: string): void {

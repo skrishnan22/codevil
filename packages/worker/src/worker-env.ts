@@ -16,6 +16,7 @@ export type WorkerSecretEnv = Partial<Record<WorkerProviderSecretName, string>> 
   CODEVIL_PROXY_SIGNING_SECRET?: string;
   SLACK_BOT_TOKEN?: string;
   SLACK_SIGNING_SECRET?: string;
+  E2B_API_KEY?: string;
 };
 
 /**
@@ -38,6 +39,7 @@ export function collectWorkerSecretValues(env: WorkerSecretEnv): string[] {
     env.CODEVIL_PROXY_SIGNING_SECRET,
     env.SLACK_BOT_TOKEN,
     env.SLACK_SIGNING_SECRET,
+    env.E2B_API_KEY,
   ].map(normalizeSecret).filter((secret): secret is string => secret !== undefined))];
 }
 
@@ -73,4 +75,7 @@ export interface Env extends WorkerSecretEnv {
   SLACK_BOT_TOKEN?: string;
   SLACK_SIGNING_SECRET?: string;
   CODEVIL_SLACK_BOT_USER_ID?: string;
+  SANDBOX_PROVIDER?: string;
+  E2B_TEMPLATE_ID?: string;
+  E2B_MAX_SANDBOX_SECONDS?: string;
 }

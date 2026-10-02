@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import WebSocket from "ws";
 
 import type { DOToSandboxMessage, SandboxToDOMessage } from "@codevil/shared";
@@ -97,6 +99,7 @@ export async function startEntrypoint(
 
   await configureDefaultGitIdentity();
 
+  const wsTokenSource = createSandboxWsTokenSource();
   let connection: ReconnectingWebSocketClient;
   let proxyCapabilityRefreshTimer: NodeJS.Timeout | undefined;
 
@@ -119,8 +122,23 @@ export async function startEntrypoint(
   });
   const dispatch = createSandboxMessageDispatcher(runtime);
 
+  watchSandboxWsToken({
+    tokenSource: wsTokenSource,
+    getUrl: () => wsUrl,
+    setUrl: (url) => { wsUrl = url; },
+    // A resumed sandbox's old socket is dead but only noticed after the heartbeat
+    // timeout; the new token is the signal to replace it now.
+    onTokenAdopted: () => {
+      sandboxLogger().log("INFO", "sandbox.ws_token_file.adopted");
+      connection.reconnectNow();
+    },
+  });
+
   connection = new ReconnectingWebSocketClient({
     createSocket: () => {
+      // A resumed sandbox may have an expired in-memory token; the Orchestrator
+      // writes a fresh one to the token file before the agent reconnects.
+      wsUrl = wsTokenSource.applyTo(wsUrl);
       sandboxLogger().log("INFO", "sandbox.ws.connecting", { target: wsUrlForLog(wsUrl) });
       return new WebSocket(wsUrl);
     },
@@ -161,7 +179,74 @@ export async function startEntrypoint(
   connection.start();
 }
 
-function withSandboxWebSocketToken(wsUrl: string, token: string | undefined): string {
+export const SANDBOX_WS_TOKEN_FILE = "/run/codevil/ws-token";
+
+export function readTokenFile(path: string = SANDBOX_WS_TOKEN_FILE): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code !== "ENOENT") {
+      sandboxLogger().log("WARN", "sandbox.ws_token_file.read_failed", { code: code ?? "unknown" });
+    }
+    return undefined;
+  }
+}
+
+export interface SandboxWsTokenSource {
+  applyTo(wsUrl: string): string;
+}
+
+/**
+ * Adopts a token from the token file only when it differs from the last file
+ * token this process consumed. An unchanged (possibly stale) file therefore
+ * never overrides a newer in-memory token delivered via proxy_capabilities.
+ */
+export function createSandboxWsTokenSource(
+  readToken: () => string | undefined = readTokenFile,
+): SandboxWsTokenSource {
+  let lastFileToken: string | undefined;
+  return {
+    applyTo(wsUrl: string): string {
+      const token = readToken()?.trim();
+      if (!token || token === lastFileToken) return wsUrl;
+      lastFileToken = token;
+      return withSandboxWebSocketToken(wsUrl, token);
+    },
+  };
+}
+
+export const WS_TOKEN_POLL_INTERVAL_MS = 2_000;
+
+/**
+ * Polls the token file and calls `onTokenAdopted` when it supplied a token the
+ * process had not used yet (an unchanged file is ignored, per the token
+ * source's rules). Returns a function that stops the polling. The timer never
+ * keeps the process alive and nothing here logs the token.
+ */
+export function watchSandboxWsToken(options: {
+  tokenSource: SandboxWsTokenSource;
+  getUrl(): string;
+  setUrl(url: string): void;
+  onTokenAdopted(): void;
+  intervalMs?: number;
+  setInterval?: (callback: () => void, delayMs: number) => { unref?: () => unknown };
+  clearInterval?: (timer: never) => void;
+}): () => void {
+  const schedule = options.setInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
+  const cancel = options.clearInterval ?? ((timer: never) => clearInterval(timer));
+  const timer = schedule(() => {
+    const current = options.getUrl();
+    const next = options.tokenSource.applyTo(current);
+    if (next === current) return;
+    options.setUrl(next);
+    options.onTokenAdopted();
+  }, options.intervalMs ?? WS_TOKEN_POLL_INTERVAL_MS);
+  timer.unref?.();
+  return () => cancel(timer as never);
+}
+
+export function withSandboxWebSocketToken(wsUrl: string, token: string | undefined): string {
   if (!token) return wsUrl;
   const url = new URL(wsUrl);
   url.searchParams.set("sandbox_ws_token", token);

@@ -1,9 +1,6 @@
-import type { DirectoryBackup, Sandbox } from "@cloudflare/sandbox";
+import type { DirectoryBackup } from "@cloudflare/sandbox";
 
-import {
-  getCodevilSandbox,
-  retrySandboxOperation,
-} from "./sandbox.js";
+import { retrySandboxOperation } from "./sandbox.js";
 import type { SqlStatement } from "./sql.js";
 
 export const WORKSPACE_CACHE_VERSION = "workspace-cache-v4";
@@ -216,17 +213,25 @@ export async function createWorkspaceCacheSnapshot(input: {
   }
 }
 
+export const WORKSPACE_CACHE_UNSUPPORTED_REASON = "workspace cache is not supported by this sandbox provider";
+
 export async function createWorkspaceCacheSnapshotForSandbox(input: {
   db: D1Database;
-  binding: DurableObjectNamespace<Sandbox>;
+  /** Absent when the Session's sandbox provider has no workspace cache. */
+  sandbox: WorkspaceCacheSandbox | undefined;
   sessionId: string;
   repo: string;
 }): Promise<WorkspaceCacheCreateResult> {
-  const { getSandbox } = await import("@cloudflare/sandbox");
-  const sandbox = getCodevilSandbox(getSandbox, input.binding, input.sessionId) as WorkspaceCacheSandbox;
+  if (!input.sandbox) {
+    return {
+      created: false,
+      phase: "backup",
+      reason: WORKSPACE_CACHE_UNSUPPORTED_REASON,
+    };
+  }
   return createWorkspaceCacheSnapshot({
     db: input.db,
-    sandbox,
+    sandbox: input.sandbox,
     repo: input.repo,
     sourceSessionId: input.sessionId,
   });

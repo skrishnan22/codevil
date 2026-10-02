@@ -132,6 +132,8 @@ function createSql() {
   };
 }
 
+const workspaceCacheSandbox = { restoreBackup: async () => ({}), createBackup: async () => ({}) };
+
 function createHost(sql, overrides = {}) {
   const logs = [];
   const alarms = [];
@@ -146,6 +148,7 @@ function createHost(sql, overrides = {}) {
     },
     workerEnv: { DB: {}, Sandbox: {} },
     redactionSecrets: [],
+    sandboxHandle: async () => ({ workspaceCache: workspaceCacheSandbox }),
     ctx: {
       storage: {
         setAlarm: async (when) => alarms.push(when),
@@ -344,4 +347,20 @@ test("terminal cache jobs arm queued-work processing after a DO restart", () => 
     assert.equal(getWorkspaceCacheJob(sql).status, status);
     assert.deepEqual(host.alarms, [2_000]);
   }
+});
+
+test("a Session sandbox without a workspace cache ends the job without a snapshot", async () => {
+  const sql = createSql();
+  const host = createHost(sql);
+  host.sandboxHandle = async () => ({});
+  enqueueWorkspaceCacheJob(host, 1_000);
+
+  const result = await processWorkspaceCacheJob(host, 1_000);
+
+  assert.equal(result, "failed");
+  assert.equal(getWorkspaceCacheJob(sql).status, "failed");
+  assert.equal(getWorkspaceCacheJob(sql).snapshot_id, null);
+  assert.match(getWorkspaceCacheJob(sql).last_error, /not supported/);
+  const skipLog = host.logs.find(([, event]) => event === "workspace_cache.create.failed");
+  assert.equal(skipLog[0], "INFO");
 });

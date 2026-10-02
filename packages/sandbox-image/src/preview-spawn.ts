@@ -121,3 +121,32 @@ function containsForbiddenOutsideQuotes(input: string): boolean {
 
   return flush();
 }
+
+const VITE_ALLOWED_HOSTS_ENV = "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS";
+const E2B_PREVIEW_HOST_SUFFIX = ".e2b.app";
+
+/**
+ * Environment for the preview dev server. On E2B the server is reached as
+ * `<port>-<id>.e2b.app`, which Vite 5.4.12+/6.0.9+ rejects with 403 unless the
+ * host is allowed; the allowed-hosts variable is merged with any existing value.
+ */
+export function previewProcessEnv(
+  base: NodeJS.ProcessEnv,
+  port: number,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...base,
+    HOST: "0.0.0.0",
+    HOSTNAME: "0.0.0.0",
+    PORT: String(port),
+  };
+  if (base.CODEVIL_SANDBOX_PROVIDER === "e2b") {
+    const existing = (base[VITE_ALLOWED_HOSTS_ENV] ?? "")
+      .split(",")
+      .map((host) => host.trim())
+      .filter(Boolean);
+    if (!existing.includes(E2B_PREVIEW_HOST_SUFFIX)) existing.push(E2B_PREVIEW_HOST_SUFFIX);
+    env[VITE_ALLOWED_HOSTS_ENV] = existing.join(",");
+  }
+  return env;
+}

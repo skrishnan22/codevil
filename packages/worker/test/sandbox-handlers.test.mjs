@@ -12,8 +12,15 @@ import {
   provisionSessionSandbox,
 } from "../dist/orchestrator/sandbox-handlers.js";
 import { processWorkspaceCacheJob } from "../dist/orchestrator/workspace-cache-job.js";
+import { createCloudflareSandboxProvider } from "../dist/sandbox-provider/cloudflare.js";
 import { handleSandboxProxy } from "../dist/sandbox-proxy.js";
-import { actor, createFakeHost, createFakeTracer } from "./helpers/fake-host.mjs";
+import {
+  actor,
+  createFakeHost,
+  createFakeSandboxHandle,
+  createFakeSandboxProvider,
+  createFakeTracer,
+} from "./helpers/fake-host.mjs";
 
 function createCacheJobSql() {
   let row = null;
@@ -462,4 +469,278 @@ test("provisionSessionSandbox failure transitions to failed and patches director
     { room_state: "failed", sandbox_state: "failed" },
   ]);
   assert.ok(broadcasts.some((e) => e.type === "error"));
+});
+
+function provisioningEnv() {
+  const cacheMiss = { prepare: () => ({ bind: () => ({ first: async () => null, run: async () => ({}) }) }) };
+  return {
+    OPENAI_API_KEY: "sk-test",
+    CODEVIL_API_KEY: "test-key",
+    CODEVIL_PROXY_SIGNING_SECRET: "test-signing-secret",
+    Sandbox: {},
+    DB: cacheMiss,
+  };
+}
+
+test("provisionSessionSandbox creates through the provider, records the ref, restores, then starts the agent", async () => {
+  const calls = [];
+  const handle = createFakeSandboxHandle({
+    ref: { provider: "cloudflare", id: "ses_test" },
+    secret: "handle-secret",
+    startProcess: async (command, options) => calls.push(["startProcess", options.processId, options.cwd]),
+  });
+  const provider = createFakeSandboxProvider({
+    create: async (options) => { calls.push(["create", options.sessionId]); return handle; },
+  });
+  const { host } = createFakeHost(
+    { state: "initializing", max_time: "30m", created_at: new Date().toISOString() },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
+  );
+
+  await provisionSessionSandbox(host);
+
+  assert.equal(host.meta.state, "provisioning_sandbox");
+  assert.deepEqual(host.meta.sandbox_ref, { provider: "cloudflare", id: "ses_test" });
+  // Cloudflare uses keepalive, not a timed lease: no renewal bookkeeping.
+  assert.equal(host.meta.sandbox_lease_renewed_at, undefined);
+  assert.equal(host.meta.workspace_cache_restored, false);
+  assert.equal(await host.ctx.storage.get("codevil:sandbox_secret"), "handle-secret");
+  assert.ok(host.redactionSecrets.includes("handle-secret"));
+  assert.deepEqual(calls, [
+    ["create", "ses_test"],
+    ["startProcess", "codevil-agent", "/workspace"],
+  ]);
+});
+
+test("provisionSessionSandbox gives a lease-based provider the time left until max_time and records the renewal clock", async () => {
+  const leases = [];
+  const handle = createFakeSandboxHandle({ ref: { provider: "e2b", id: "sbx_1" } });
+  const provider = createFakeSandboxProvider({
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create: async (options) => { leases.push(options.leaseMs); return handle; },
+  });
+  const tenMinutesAgo = Date.now() - 10 * 60_000;
+  const fresh = createFakeHost(
+    { state: "initializing", max_time: "30m", created_at: new Date(Date.now()).toISOString() },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
+  );
+  const older = createFakeHost(
+    { state: "initializing", max_time: "2h", created_at: new Date(tenMinutesAgo).toISOString() },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: { ...provisioningEnv(), E2B_MAX_SANDBOX_SECONDS: "600" } },
+  );
+
+  await provisionSessionSandbox(fresh.host);
+  await provisionSessionSandbox(older.host);
+
+  // Remaining max_time (about 30m), and a 2h session clamped to the provider's cap.
+  assert.ok(leases[0] <= 30 * 60_000 && leases[0] > 30 * 60_000 - 5_000);
+  assert.equal(leases[1], 600_000);
+  assert.ok(fresh.host.meta.sandbox_lease_renewed_at);
+  assert.ok(older.host.meta.sandbox_lease_renewed_at);
+});
+
+test("provisionSessionSandbox through the Cloudflare adapter keeps keepalive, then restore, then agent start", async () => {
+  const calls = [];
+  const sandbox = {
+    setKeepAlive: async (active) => calls.push(["setKeepAlive", active]),
+    setCodevilKeepAlive: async (active, reason) => calls.push(["setCodevilKeepAlive", active, reason]),
+    restoreBackup: async (backup) => calls.push(["restoreBackup", backup]),
+    createBackup: async () => ({}),
+    startProcess: async (_command, options) => calls.push(["startProcess", options.processId, options.autoCleanup]),
+  };
+  const provider = createCloudflareSandboxProvider({ binding: {}, getSandbox: () => sandbox });
+  const snapshotRow = {
+    id: "wsc_1",
+    backup_id: "backup_1",
+    backup_dir: "/workspace",
+    backup_local_bucket: 0,
+  };
+  const env = {
+    ...provisioningEnv(),
+    DB: { prepare: () => ({ bind: () => ({ first: async () => snapshotRow, run: async () => ({}) }) }) },
+  };
+  const { host } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: env },
+  );
+
+  await provisionSessionSandbox(host);
+
+  assert.equal(host.meta.state, "provisioning_sandbox");
+  assert.equal(host.meta.workspace_cache_restored, true);
+  assert.deepEqual(host.meta.sandbox_ref, { provider: "cloudflare", id: "ses_test" });
+  assert.deepEqual(calls, [
+    ["setKeepAlive", true],
+    ["setCodevilKeepAlive", true, "session provisioning"],
+    ["restoreBackup", { id: "backup_1", dir: "/workspace" }],
+    ["startProcess", "codevil-agent", true],
+  ]);
+});
+
+test("provisionSessionSandbox skips the workspace cache when the provider has none", async () => {
+  let restored = false;
+  const handle = createFakeSandboxHandle({
+    workspaceCache: { restoreBackup: async () => { restored = true; }, createBackup: async () => ({}) },
+  });
+  const provider = createFakeSandboxProvider({
+    capabilities: { pauseResume: false, workspaceCache: false, leaseRenewal: false },
+    create: async () => handle,
+  });
+  const { host } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
+  );
+
+  await provisionSessionSandbox(host);
+
+  assert.equal(restored, false);
+  assert.equal(host.meta.workspace_cache_restored, undefined);
+  assert.equal(await host.ctx.storage.get("codevil:sandbox_secret"), undefined);
+});
+
+test("handleSandboxCloneComplete does not enqueue cache work for a provider without a workspace cache", () => {
+  const sql = createCacheJobSql();
+  const fixture = createFakeHost(
+    { state: "cloning_repo" },
+    {
+      sql,
+      sandboxProvider: createFakeSandboxProvider({
+        capabilities: { pauseResume: false, workspaceCache: false, leaseRenewal: false },
+      }),
+    },
+  );
+
+  handleSandboxCloneComplete(fixture.host);
+
+  assert.equal(sql.row, null);
+  assert.equal(fixture.host.meta.state, "ready");
+});
+
+test("provisioning starts the agent with the sandbox provider name in its environment", async () => {
+  for (const [name, capabilities] of [
+    ["e2b", { pauseResume: true, workspaceCache: false, leaseRenewal: true }],
+    ["cloudflare", { pauseResume: false, workspaceCache: false, leaseRenewal: false }],
+  ]) {
+    let startEnv;
+    const handle = createFakeSandboxHandle({
+      ref: { provider: name, id: "sbx_1" },
+      startProcess: async (_command, options) => { startEnv = options.env; },
+    });
+    const provider = createFakeSandboxProvider({ name, capabilities, create: async () => handle });
+    const { host } = createFakeHost(
+      { state: "initializing" },
+      { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv() },
+    );
+    await provisionSessionSandbox(host);
+    assert.equal(startEnv.CODEVIL_SANDBOX_PROVIDER, name);
+  }
+});
+
+test("provisioning failure broadcasts the redacted reason and destroys a sandbox that was already created", async () => {
+  const destroyed = [];
+  const handle = createFakeSandboxHandle({
+    ref: { provider: "e2b", id: "sbx_1" },
+    startProcess: async () => { throw new Error("start failed with sekret-token and more"); },
+    destroy: async (reason) => { destroyed.push(reason); },
+  });
+  const provider = createFakeSandboxProvider({
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create: async () => handle,
+  });
+  const { host, broadcasts } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv: provisioningEnv(), sandboxHandle: handle },
+  );
+  host.redactionSecrets.push("sekret-token");
+
+  await provisionSessionSandbox(host);
+
+  assert.equal(host.meta.state, "failed");
+  const error = broadcasts.find((event) => event.type === "error");
+  assert.match(error.message, /^Sandbox provisioning failed: .*start failed with \[REDACTED\] and more/);
+  assert.doesNotMatch(JSON.stringify(broadcasts), /sekret-token/);
+  assert.deepEqual(destroyed, ["provisioning failed"]);
+  assert.equal(host.meta.expected_close, true);
+});
+
+test("provisioning failure before a sandbox exists does not try to destroy anything", async () => {
+  const { host, terminations, broadcasts } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: createFakeSandboxProvider({ create: async () => { throw new Error("no capacity"); } }), workerEnv: provisioningEnv() },
+  );
+  await provisionSessionSandbox(host);
+  assert.deepEqual(terminations, []);
+  assert.match(broadcasts.find((event) => event.type === "error").message, /^Sandbox provisioning failed: no capacity/);
+});
+
+test("a missing provider credential surfaces its reason in the failure message", async () => {
+  const { host, broadcasts } = createFakeHost(
+    { state: "initializing" },
+    { tracer: createFakeTracer(), sandboxProvider: undefined, workerEnv: provisioningEnv() },
+  );
+  host.sandboxProvider = () => { throw new Error("E2B_API_KEY is not configured"); };
+  await provisionSessionSandbox(host);
+  assert.match(broadcasts.find((event) => event.type === "error").message, /E2B_API_KEY is not configured/);
+});
+
+test("an agent error outside a run fails the session and destroys its sandbox", async () => {
+  const { host, terminations, broadcasts } = createFakeHost({
+    state: "cloning_repo",
+    sandbox_ref: { provider: "cloudflare", id: "ses_test" },
+  });
+  const { ws } = createWsRecorder();
+  await dispatchSandboxSocketMessage(host, ws, JSON.stringify({ type: "error", message: "clone failed" }));
+  assert.equal(host.meta.state, "failed");
+  assert.deepEqual(terminations.map((t) => t.reason), ["agent error"]);
+  assert.ok(broadcasts.some((e) => e.type === "error" && e.message === "clone failed"));
+});
+
+test("an agent error with no sandbox ref, or during a run, does not destroy the sandbox", async () => {
+  const noRef = createFakeHost({ state: "cloning_repo" });
+  await dispatchSandboxSocketMessage(noRef.host, createWsRecorder().ws, JSON.stringify({ type: "error", message: "x" }));
+  assert.deepEqual(noRef.terminations, []);
+
+  const inRun = createFakeHost({
+    state: "executing",
+    sandbox_ref: { provider: "cloudflare", id: "ses_test" },
+    active_run: createAgentRun({ actor, text: "t", now: "2026-06-03T00:00:00.000Z" }),
+  });
+  await dispatchSandboxSocketMessage(inRun.host, createWsRecorder().ws, JSON.stringify({ type: "error", message: "x" }));
+  assert.deepEqual(inRun.terminations, []);
+});
+
+test("an E2B session longer than the provider limit is warned at provisioning", async () => {
+  const e2bProvider = (create) => createFakeSandboxProvider({
+    name: "e2b",
+    capabilities: { pauseResume: true, workspaceCache: false, leaseRenewal: true },
+    create,
+  });
+  const make = (maxTime, workerEnv = provisioningEnv(), provider = e2bProvider(async () => createFakeSandboxHandle({ ref: { provider: "e2b", id: "sbx_1" } }))) =>
+    createFakeHost(
+      { state: "initializing", max_time: maxTime, created_at: new Date().toISOString() },
+      { tracer: createFakeTracer(), sandboxProvider: provider, workerEnv },
+    );
+  const warning = (fake) => fake.broadcasts.find((e) => e.type === "status" && /continuous runtime limit/.test(e.message));
+
+  const long = make("2h");
+  await provisionSessionSandbox(long.host);
+  assert.match(warning(long).message, /max time \(2h\).*60 minutes.*cut off/);
+
+  const exact = make("1h");
+  await provisionSessionSandbox(exact.host);
+  assert.equal(warning(exact), undefined);
+
+  const short = make("30m");
+  await provisionSessionSandbox(short.host);
+  assert.equal(warning(short), undefined);
+
+  const raised = make("2h", { ...provisioningEnv(), E2B_MAX_SANDBOX_SECONDS: "86400" });
+  await provisionSessionSandbox(raised.host);
+  assert.equal(warning(raised), undefined);
+
+  const cloudflare = make("8h", provisioningEnv(), createFakeSandboxProvider({ create: async () => createFakeSandboxHandle() }));
+  await provisionSessionSandbox(cloudflare.host);
+  assert.equal(warning(cloudflare), undefined);
 });

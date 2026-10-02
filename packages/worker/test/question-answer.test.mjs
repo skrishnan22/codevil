@@ -43,7 +43,11 @@ function question(overrides = {}) {
 function fixture(row = question(), options = {}) {
   const broadcasts = [];
   const sandboxMessages = [];
-  const sandboxSockets = options.sandboxConnected === false ? [] : [{}];
+  const activity = { count: 0 };
+  // `closingSocket`: the DO closed the agent's socket (pause) but it still lingers in getWebSockets.
+  const sandboxSockets = options.closingSocket
+    ? [{ deserializeAttachment: () => ({ sandbox: {}, closing: true }) }]
+    : options.sandboxConnected === false ? [] : [{}];
   const host = {
     meta: { session_id: "ses_123", created_by: { id: "creator", name: "Creator" } },
     ctx: {
@@ -72,8 +76,9 @@ function fixture(row = question(), options = {}) {
     },
     appendAndBroadcast(event) { broadcasts.push(event); },
     sendToSandbox(message) { sandboxMessages.push(message); },
+    recordActivity() { activity.count += 1; },
   };
-  return { host, row, broadcasts, sandboxMessages };
+  return { host, row, broadcasts, sandboxMessages, activity };
 }
 
 const slackActor = { id: "external:slack:U123", name: "krish" };
@@ -186,6 +191,17 @@ test("Slack answer validation rejects invalid ordinals and cardinality", async (
   }
 });
 
+test("a lingering DO-closed sandbox socket does not count as an attached sandbox", async () => {
+  const state = fixture(question(), { closingSocket: true });
+  const result = await answer(state.host, {
+    requestId: "question_1",
+    optionIndexes: [0],
+    actor: slackActor,
+  });
+  assert.equal(result.status, "sandbox_unavailable");
+  assert.equal(state.row.status, "open");
+});
+
 test("Slack answer fails without consuming the question when the sandbox is unavailable", async () => {
   const state = fixture(question(), { sandboxConnected: false });
   const result = await answer(state.host, {
@@ -276,4 +292,18 @@ test("Slack integration answers intentionally allow any human for every web answ
     assert.equal(result.ok, true, `Slack actor should answer ${answerableBy} questions`);
     assert.equal(result.status, "answered");
   }
+});
+
+test("answering a question records activity once; rejected or repeated answers do not", async () => {
+  const state = fixture();
+  await answer(state.host, { requestId: "question_1", optionIndexes: [0], actor: slackActor });
+  assert.equal(state.activity.count, 1);
+
+  // A retry of the accepted answer is not new activity.
+  await answer(state.host, { requestId: "question_1", optionIndexes: [1], actor: slackActor });
+  assert.equal(state.activity.count, 1);
+
+  const invalid = fixture();
+  await answer(invalid.host, { requestId: "question_1", optionIndexes: [9], actor: slackActor });
+  assert.equal(invalid.activity.count, 0);
 });

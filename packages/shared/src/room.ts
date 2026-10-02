@@ -16,6 +16,7 @@ export const SandboxStateSchema = z.enum([
   "ready",
   "stopping",
   "stopped",
+  "paused",
   "timed_out",
   "failed",
 ]);

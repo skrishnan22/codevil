@@ -8,6 +8,7 @@ import type {
 import type { Span, Tracer } from "@codevil/shared";
 import type { AgentRun } from "../agent-runs.js";
 import type { LastDecision } from "../multiplayer.js";
+import type { SandboxHandle, SandboxProvider } from "../sandbox-provider/types.js";
 import type { Env, SessionMeta } from "./types.js";
 
 export interface OrchestratorHost {
@@ -15,7 +16,8 @@ export interface OrchestratorHost {
   sql: SqlStorage;
   workerEnv: Env;
   ctx: DurableObjectState;
-  redactionSecrets: readonly string[];
+  /** Mutable: provisioning appends the provider secret so later logs redact it. */
+  redactionSecrets: string[];
 
   loadMeta(): void;
   saveMeta(): void;
@@ -48,4 +50,19 @@ export interface OrchestratorHost {
     fallbackMessage: string,
   ): { type: "error"; message: string; actor?: string };
   armNextAlarm(now?: number): Promise<void>;
+  sandboxProvider(): SandboxProvider;
+  /** Records user-visible activity (Agent Request, run finish, authenticated preview) for the idle-pause clock. */
+  recordActivity(source?: "event" | "preview"): void;
+  /** Starts a background resume of a paused sandbox; concurrent calls share one resume. */
+  requestSandboxResume(): void;
+  /** Closes the DO's own sandbox sockets (callers set `expected_close` first when the close is intentional). */
+  closeSandboxSockets(reason: string): void;
+  /** Fresh sandbox WebSocket capability, for the token file written on resume. */
+  issueSandboxWebSocketToken(): Promise<string>;
+  /** Destroys the provider sandbox (running or paused) and closes its sockets. Failures are logged, never thrown. */
+  terminateSandbox(reason: string, options?: { assumePaused?: boolean }): Promise<void>;
+  /** Null when the Session has no sandbox yet (`meta.sandbox_ref` unset). */
+  sandboxHandle(): Promise<SandboxHandle | null>;
+  /** Drops the cached provider handle (pause, resume, terminate, loss) so the next lookup reconnects. */
+  invalidateSandboxHandle(): void;
 }

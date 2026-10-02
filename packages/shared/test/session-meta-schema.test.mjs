@@ -41,3 +41,32 @@ test("SessionMetaSchema: rejects invalid session state", () => {
     created_at: "2026-01-01T00:00:00.000Z",
   }));
 });
+
+test("SessionMetaSchema: accepts idle-pause and provider fields", () => {
+  const parsed = SessionMetaSchema.parse({
+    session_id: "ses_1",
+    prompt: "",
+    repo: "r",
+    worker_url: "https://w",
+    provider: "openai",
+    plan_model: "m",
+    exec_model: "m",
+    max_time: "30m",
+    state: "ready",
+    refinement_round: 0,
+    verification_attempts: 0,
+    cost_total_usd: 0,
+    created_at: "2026-10-01T00:00:00.000Z",
+    sandbox_provider: "e2b",
+    sandbox_ref: { provider: "e2b", id: "sbx_1" },
+    max_idle_time: "10m",
+    last_activity_at: "2026-10-01T00:00:00.000Z",
+    sandbox_paused_at: "2026-10-01T00:10:00.000Z",
+    sandbox_lease_renewed_at: "2026-10-01T00:05:00.000Z",
+  });
+  assert.equal(parsed.sandbox_ref.id, "sbx_1");
+  assert.equal(parsed.max_idle_time, "10m");
+  assert.equal(parsed.last_activity_at, "2026-10-01T00:00:00.000Z");
+  assert.equal(parsed.sandbox_paused_at, "2026-10-01T00:10:00.000Z");
+  assert.equal(parsed.sandbox_lease_renewed_at, "2026-10-01T00:05:00.000Z");
+});

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   PreviewCommandRejectedError,
+  previewProcessEnv,
   resolvePreviewSpawn,
   tokenizeCommandLine,
 } from "../dist/preview-spawn.js";
@@ -40,4 +41,31 @@ test("resolvePreviewSpawn accepts node one-liners", () => {
   );
   assert.equal(spawn.executable, "node");
   assert.equal(spawn.argv[0], "-e");
+});
+
+test("previewProcessEnv allows the E2B preview host for Vite only on the e2b provider", () => {
+  const e2b = previewProcessEnv({ CODEVIL_SANDBOX_PROVIDER: "e2b", KEEP: "1" }, 5173);
+  assert.equal(e2b.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS, ".e2b.app");
+  assert.equal(e2b.PORT, "5173");
+  assert.equal(e2b.HOST, "0.0.0.0");
+  assert.equal(e2b.KEEP, "1");
+
+  for (const provider of ["cloudflare", undefined]) {
+    const env = previewProcessEnv(provider ? { CODEVIL_SANDBOX_PROVIDER: provider } : {}, 3000);
+    assert.equal("__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS" in env, false);
+    assert.equal(env.PORT, "3000");
+  }
+});
+
+test("previewProcessEnv merges with an existing allowed-hosts value without duplicating", () => {
+  const merged = previewProcessEnv({
+    CODEVIL_SANDBOX_PROVIDER: "e2b",
+    __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: "example.test, other.test",
+  }, 3000);
+  assert.equal(merged.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS, "example.test,other.test,.e2b.app");
+  const again = previewProcessEnv({
+    CODEVIL_SANDBOX_PROVIDER: "e2b",
+    __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: ".e2b.app",
+  }, 3000);
+  assert.equal(again.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS, ".e2b.app");
 });

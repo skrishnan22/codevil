@@ -13,6 +13,14 @@ upload_source_maps = true
 
 [vars]
 EMAIL_PROVIDER = "none"
+# Sandbox provider: "cloudflare" or "e2b". Keep "cloudflare" until E2B is ready;
+# switch to "e2b" only after publishing the template
+# (`pnpm --filter @codevil/sandbox-image e2b:template`), setting the E2B_API_KEY
+# secret, and passing the manual E2B end-to-end check. E2B_API_KEY is a secret:
+# set it with `wrangler secret put E2B_API_KEY`, never in this file.
+SANDBOX_PROVIDER = "cloudflare"
+E2B_TEMPLATE_ID = "codevil-sandbox"
+# E2B_MAX_SANDBOX_SECONDS = "3600"
 CODEVIL_WEB_ORIGIN = "https://your-web-origin.example"
 CODEVIL_PREVIEW_ORIGIN = "https://your-preview-origin.example"
 BACKUP_BUCKET_NAME = "your-backup-bucket"

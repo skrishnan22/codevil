@@ -1,4 +1,5 @@
 import { isTerminalState, type SessionState } from "@codevil/shared";
+import { SANDBOX_PAST_DUE_RETRY_MS } from "./sandbox-lifecycle.js";
 import { sandboxReconnectDeadline } from "../sandbox-connection.js";
 
 export interface AlarmScheduleInput {
@@ -9,6 +10,8 @@ export interface AlarmScheduleInput {
   sandboxDisconnectedAt?: string;
   presentationRetryAt?: number | null;
   workspaceCacheRetryAt?: number | null;
+  idlePauseAt?: number | null;
+  leaseRenewAt?: number | null;
 }
 
 export function nextAlarmDeadline(input: AlarmScheduleInput): number | undefined {
@@ -18,6 +21,14 @@ export function nextAlarmDeadline(input: AlarmScheduleInput): number | undefined
     if (input.maxTimeMs !== null) deadlines.push(input.createdAt + input.maxTimeMs);
     if (input.sandboxDisconnectedAt) {
       deadlines.push(sandboxReconnectDeadline(input.sandboxDisconnectedAt));
+    }
+    // A past-due pause/renew deadline would be filtered out below and strand
+    // the work (or its retry after a failure); clamp so it re-fires after a
+    // bounded delay instead. Non-finite values are skipped.
+    for (const dueAt of [input.idlePauseAt, input.leaseRenewAt]) {
+      if (dueAt !== null && dueAt !== undefined && Number.isFinite(dueAt)) {
+        deadlines.push(Math.max(dueAt, input.now + SANDBOX_PAST_DUE_RETRY_MS));
+      }
     }
   }
   if (input.presentationRetryAt !== null && input.presentationRetryAt !== undefined) {

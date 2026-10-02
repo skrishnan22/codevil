@@ -1,22 +1,18 @@
-import type { Sandbox } from "@cloudflare/sandbox";
 import { safeExceptionAttributes, safeOwnDataProperty, type ProviderPublicConfig } from "@codevil/shared";
 import { redactEvent } from "./redaction.js";
+import type { SandboxHandle } from "./sandbox-provider/types.js";
 
 export interface SandboxProcessEnvOptions {
   wsUrl: string;
   wsToken: string;
   provider: string;
+  /** Sandbox provider running this process; the preview server adapts to its host names. */
+  sandboxProvider?: string;
   /** Registry-limited, non-secret provider values (for example Cloudflare IDs). */
   providerConfig?: ProviderPublicConfig;
   proxyBase?: string;
   /** Per-Pi-API capabilities; provider credentials never enter the sandbox. */
   proxyTokens?: Partial<Record<import("@codevil/shared").ProviderApi, string>>;
-}
-
-export interface ProvisionSandboxOptions extends SandboxProcessEnvOptions {
-  binding: DurableObjectNamespace<Sandbox>;
-  sessionId: string;
-  beforeStart?: (sandbox: Sandbox) => Promise<void>;
 }
 
 export interface SandboxRetryOptions {
@@ -127,7 +123,7 @@ export interface CodevilKeepAliveSandbox {
 }
 
 export interface CodevilLifecycleSandbox {
-  getCodevilLifecycleSnapshot?: () => Promise<SandboxLifecycleSnapshot>;
+  getCodevilLifecycleSnapshot?: () => Promise<SandboxLifecycleSnapshot | null>;
 }
 
 export interface SandboxLogReader {
@@ -154,6 +150,7 @@ export function sandboxProcessEnv(options: SandboxProcessEnvOptions): Record<str
     CODEVIL_SANDBOX_WS_TOKEN: options.wsToken,
     CODEVIL_WORKSPACE: "/workspace",
     CODEVIL_PROVIDER: options.provider,
+    ...(options.sandboxProvider ? { CODEVIL_SANDBOX_PROVIDER: options.sandboxProvider } : {}),
     ...(options.providerConfig && Object.keys(options.providerConfig).length > 0
       ? { CODEVIL_PROVIDER_CONFIG: JSON.stringify(options.providerConfig) }
       : {}),
@@ -208,33 +205,18 @@ export function shouldDeferSandboxActivityExpiry(state: SandboxKeepAliveState | 
   return state?.active === true;
 }
 
-export async function provisionSandbox(options: ProvisionSandboxOptions): Promise<void> {
-  const { getSandbox } = await import("@cloudflare/sandbox");
-  const sandbox = getCodevilSandbox(getSandbox, options.binding, options.sessionId);
-  await provisionSandboxOnInstance(sandbox, options);
-}
+export const AGENT_COMMAND =
+  "chown 10001:10001 /workspace && chmod u+rwx /workspace && exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js";
 
-export async function provisionSandboxOnInstance(
-  sandbox: Sandbox,
-  options: Omit<ProvisionSandboxOptions, "binding">,
+export async function startAgentOnHandle(
+  handle: SandboxHandle,
+  options: SandboxProcessEnvOptions,
 ): Promise<void> {
-  await retrySandboxOperation(() =>
-    setCodevilSandboxKeepAlive(sandbox as CodevilKeepAliveSandbox, true, "session provisioning"),
-  );
-
-  const env = sandboxProcessEnv(options);
-
-  await options.beforeStart?.(sandbox);
-
-  await retrySandboxOperation(() => sandbox.startProcess(
-    "chown 10001:10001 /workspace && chmod u+rwx /workspace && exec setpriv --reuid=10001 --regid=10001 --clear-groups -- node /app/packages/sandbox-image/dist/index.js",
-    {
-      cwd: "/workspace",
-      env,
-      processId: "codevil-agent",
-      autoCleanup: true,
-    },
-  ));
+  await handle.startProcess(AGENT_COMMAND, {
+    processId: "codevil-agent",
+    cwd: "/workspace",
+    env: sandboxProcessEnv(options),
+  });
 }
 
 export async function retrySandboxOperation<T>(
@@ -282,40 +264,6 @@ function isTransientSandboxError(error: unknown): boolean {
 
 function sleepFor(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-export async function readProcessLogs(
-  binding: DurableObjectNamespace<Sandbox>,
-  sessionId: string,
-  processId: string,
-  secrets: readonly string[],
-): Promise<{ stdout: string; stderr: string } | null> {
-  try {
-    const { getSandbox } = await import("@cloudflare/sandbox");
-    const sandbox = getCodevilSandbox(getSandbox, binding, sessionId);
-    return redactEvent(await sandbox.getProcessLogs(processId), secrets);
-  } catch {
-    return null;
-  }
-}
-
-export async function readSandboxDiagnostics<Binding>(
-  binding: Binding,
-  sessionId: string,
-  processId: string,
-  secrets: readonly string[],
-): Promise<SandboxDiagnostics> {
-  const { getSandbox } = await import("@cloudflare/sandbox");
-  const sandbox = getCodevilSandbox(
-    getSandbox as unknown as (
-      binding: Binding,
-      sessionId: string,
-      options?: typeof CODEVIL_SANDBOX_OPTIONS,
-    ) => SandboxLogReader & CodevilLifecycleSandbox,
-    binding,
-    sessionId,
-  );
-  return collectSandboxDiagnostics(sandbox as SandboxLogReader & CodevilLifecycleSandbox, processId, secrets);
 }
 
 export async function collectSandboxDiagnostics(

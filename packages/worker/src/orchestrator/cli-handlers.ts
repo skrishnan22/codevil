@@ -35,6 +35,11 @@ import {
   ensureAnnotatableRevision,
   lockPlanRevision,
 } from "./plan-revision-actions.js";
+import {
+  buildPreviewStartMessage,
+  deferPreviewCommandWhileUnavailable,
+  sandboxSocketAttached,
+} from "./sandbox-session-lifecycle.js";
 
 export function handleApprove(
   host: OrchestratorHost,
@@ -99,7 +104,14 @@ export function handleAgentRequest(
   const trimmed = text.trim();
   if (!trimmed) return;
 
-  const sandboxConnected = host.ctx.getWebSockets("sandbox").length > 0;
+  host.recordActivity();
+  if (host.meta.sandbox_paused_at) {
+    // Sockets are closed while paused, so the run queues below and drains
+    // when the resumed agent reconnects.
+    host.requestSandboxResume();
+  }
+
+  const sandboxConnected = sandboxSocketAttached(host);
   if (
     host.meta.state === "ready"
     && !host.meta.active_run
@@ -490,16 +502,13 @@ export function cancelOpenQuestions(host: OrchestratorHost, runId: string, reaso
 
 export async function handlePreviewStart(host: OrchestratorHost, appKey?: string): Promise<void> {
   if (!host.meta) return;
+  if (deferPreviewCommandWhileUnavailable(host, "start", appKey)) return;
 
-  host.sendToSandbox({
-    type: "preview_start",
-    model: host.meta.plan_model,
-    provider: host.meta.provider,
-    task_prompt: host.meta.prompt,
-    app_key: appKey,
-  });
+  host.sendToSandbox(buildPreviewStartMessage(host.meta, appKey));
 }
 
 export async function handlePreviewStop(host: OrchestratorHost): Promise<void> {
+  // A paused or reconnecting sandbox may still run the dev server; replay the stop once it is back.
+  if (deferPreviewCommandWhileUnavailable(host, "stop")) return;
   host.sendToSandbox({ type: "preview_stop" });
 }

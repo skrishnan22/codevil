@@ -46,7 +46,7 @@ export interface SessionDirectoryRow {
   last_event_at: string;
 }
 
-const DEFAULT_MAX_IDLE_TIME = "10m";
+export const DEFAULT_MAX_IDLE_TIME = "10m";
 
 export function normalizeCreateSessionBody(body: unknown): NormalizedCreateSession {
   const parsed = CreateSessionRequestSchema.parse(body);

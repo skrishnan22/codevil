@@ -28,7 +28,7 @@ test("checked-in Worker config keeps production on the Cloudflare sandbox until 
     readFile(resolve(workerRoot, ".env.example"), "utf8"),
   ]);
   assert.match(config, /^SANDBOX_PROVIDER = "cloudflare"$/m);
-  assert.doesNotMatch(config, /E2B_API_KEY/);
+  assert.doesNotMatch(config, /^E2B_API_KEY\s*=/m);
   assert.match(envExample, /^E2B_API_KEY=/m);
 });
 

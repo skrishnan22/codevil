@@ -25,6 +25,12 @@ const DEFAULT_E2B_TEMPLATE_ID = "codevil-sandbox";
 /** Matches the E2B Hobby continuous-runtime limit. */
 const DEFAULT_E2B_MAX_SANDBOX_SECONDS = 3600;
 
+/** Lease cap in ms: a positive whole number of seconds, else the Hobby default. */
+export function e2bMaxLeaseMs(env: Pick<SandboxProviderEnv, "E2B_MAX_SANDBOX_SECONDS">): number {
+  const seconds = Math.floor(Number(env.E2B_MAX_SANDBOX_SECONDS));
+  return (Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_E2B_MAX_SANDBOX_SECONDS) * 1000;
+}
+
 export function configuredSandboxProviderName(env: Pick<SandboxProviderEnv, "SANDBOX_PROVIDER">): SandboxProviderName {
   const raw = env.SANDBOX_PROVIDER?.trim();
   if (!raw) return "e2b";
@@ -40,7 +46,7 @@ export function resolveSandboxProvider(env: SandboxProviderEnv, name: SandboxPro
   return createE2BSandboxProvider({
     apiKey,
     templateId: env.E2B_TEMPLATE_ID?.trim() || DEFAULT_E2B_TEMPLATE_ID,
-    maxLeaseMs: (Number(env.E2B_MAX_SANDBOX_SECONDS) || DEFAULT_E2B_MAX_SANDBOX_SECONDS) * 1000,
+    maxLeaseMs: e2bMaxLeaseMs(env),
   });
 }
 

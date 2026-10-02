@@ -180,3 +180,25 @@ test("loadStoredSandboxSecret restores the persisted secret into the redaction l
   await loadStoredSandboxSecret({ get: async () => undefined }, secrets);
   assert.deepEqual(secrets, ["e2b_key", "tat_secret"]);
 });
+
+test("connectSandboxHandle registers and persists a provider-supplied secret when none was stored", async () => {
+  const secrets = [];
+  const stored = [];
+  const provider = { name: "e2b", connect: async () => createFakeSandboxHandle({ secret: "fallback_tat" }) };
+  const meta = { session_id: "ses_1", sandbox_ref: { provider: "e2b", id: "sbx_1" } };
+  await connectSandboxHandle({
+    meta, provider, secrets,
+    readSecret: async () => undefined,
+    storeSecret: async (secret) => { stored.push(secret); },
+  });
+  assert.deepEqual(secrets, ["fallback_tat"]);
+  assert.deepEqual(stored, ["fallback_tat"]);
+
+  await connectSandboxHandle({
+    meta, provider, secrets,
+    readSecret: async () => "fallback_tat",
+    storeSecret: async (secret) => { stored.push(secret); },
+  });
+  assert.deepEqual(secrets, ["fallback_tat"]);
+  assert.deepEqual(stored, ["fallback_tat"]);
+});

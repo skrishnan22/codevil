@@ -50,11 +50,18 @@ export async function connectSandboxHandle(options: {
   meta: { session_id: string; sandbox_ref?: SandboxRef } | null;
   provider: SandboxProvider;
   readSecret: () => Promise<string | undefined>;
+  /** Live redaction list; any secret the handle ends up using is added to it. */
+  secrets?: string[];
+  /** Persist a secret the provider supplied because none was stored. */
+  storeSecret?: (secret: string) => Promise<void>;
 }): Promise<SandboxHandle | null> {
   const ref = sandboxRefForMeta(options.meta, options.provider);
   if (!ref) return null;
   const secret = await options.readSecret();
-  return options.provider.connect(ref, secret ? { secret } : undefined);
+  const handle = await options.provider.connect(ref, secret ? { secret } : undefined);
+  if (options.secrets) registerSandboxSecret(options.secrets, handle.secret);
+  if (!secret && handle.secret) await options.storeSecret?.(handle.secret);
+  return handle;
 }
 
 /** Destroy the Session's sandbox; failures are reported, never thrown. */

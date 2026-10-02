@@ -5,13 +5,20 @@ import {
   type SandboxRef,
   type ShellResult,
 } from "./types.js";
+import { OWNER_IDS, shellQuote } from "./shell.js";
 
 export const E2B_TRAFFIC_TOKEN_HEADER = "e2b-traffic-access-token";
 
 const LOG_DIR = "/var/log/codevil";
 const LOG_TAIL_BYTES = 65_536;
 const PROCESS_ID_PATTERN = /^[a-z0-9-]+$/;
-const OWNER_IDS = { codevil: "10001:10001", root: "0:0" } as const;
+/**
+ * Root-owned staging directory for `writeFile`. It lives on the same tmpfs as
+ * `/run/codevil`, so the final `mv` is an atomic rename there. Assumption: the
+ * targets Codevil writes (the websocket token) are under `/run`; for a target
+ * on another filesystem `mv` degrades to copy-and-delete.
+ */
+const STAGE_DIR = "/run/.codevil-stage";
 
 interface E2BRunOptions {
   user?: string;
@@ -26,7 +33,7 @@ export interface E2BSdkSandbox {
   trafficAccessToken?: string;
   getHost(port: number): string;
   commands: {
-    run(command: string, options: E2BRunOptions & { background: true }): Promise<unknown>;
+    run(command: string, options: E2BRunOptions & { background: true }): Promise<{ disconnect(): Promise<void> }>;
     run(command: string, options?: E2BRunOptions): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   };
   files: { write(path: string, content: string, options?: { user?: string }): Promise<unknown> };
@@ -75,8 +82,10 @@ export function createE2BSandboxProvider(options: E2BSandboxProviderOptions): Sa
       });
       if (!sandbox.trafficAccessToken) {
         // Without a token the sandbox may be publicly reachable; never use it.
-        await sandbox.kill().catch(() => undefined);
-        throw new Error("E2B sandbox was created without a traffic access token");
+        const cleanupFailed = await sandbox.kill().then(() => false, () => true);
+        throw new Error(
+          `E2B sandbox was created without a traffic access token${cleanupFailed ? " (cleanup kill also failed)" : ""}`,
+        );
       }
       return e2bHandle({
         sandbox,
@@ -138,19 +147,28 @@ function e2bHandle(context: {
     ...(context.secret ? { secret: context.secret } : {}),
     exec,
     async writeFile(path, content, fileOptions) {
+      // Content is staged in a root-only directory, permissioned there, then
+      // renamed into place: `mv -fT` replaces a symlink at the target instead of
+      // following it, and the file is never visible with default permissions.
+      const stage = `${STAGE_DIR}/${crypto.randomUUID()}`;
+      const prepare = await exec(
+        `mkdir -p -m 700 ${STAGE_DIR} && chmod 700 ${STAGE_DIR} && chown 0:0 ${STAGE_DIR}`,
+      );
+      assertOk(prepare, `Failed to prepare staging for ${path}`);
       try {
-        await sandbox.files.write(path, content, { user: "root" });
+        await sandbox.files.write(stage, content, { user: "root" });
       } catch (error) {
         throw mapNotFound(sdk, error);
       }
       const steps: string[] = [];
-      if (fileOptions?.mode !== undefined) steps.push(`chmod ${fileOptions.mode.toString(8)} ${shellQuote(path)}`);
-      if (fileOptions?.owner !== undefined) steps.push(`chown ${OWNER_IDS[fileOptions.owner]} ${shellQuote(path)}`);
-      if (steps.length > 0) {
-        const result = await exec(steps.join(" && "));
-        if (result.exitCode !== 0) {
-          throw new Error(`Failed to set permissions on ${path} (exit ${result.exitCode}): ${result.stderr}`);
-        }
+      if (fileOptions?.mode !== undefined) steps.push(`chmod ${fileOptions.mode.toString(8)} ${shellQuote(stage)}`);
+      if (fileOptions?.owner !== undefined) steps.push(`chown ${OWNER_IDS[fileOptions.owner]} ${shellQuote(stage)}`);
+      steps.push(`mkdir -p ${shellQuote(parentDirectory(path))}`);
+      steps.push(`mv -fT ${shellQuote(stage)} ${shellQuote(path)}`);
+      const result = await exec(steps.join(" && "));
+      if (result.exitCode !== 0) {
+        await exec(`rm -f ${shellQuote(stage)}`).catch(() => undefined);
+        throw new Error(`Failed to write ${path} (exit ${result.exitCode}): ${result.stderr}`);
       }
     },
     async startProcess(command, { processId, cwd, env }) {
@@ -161,7 +179,10 @@ function e2bHandle(context: {
       }
       const redirected = `sh -c ${shellQuote(command)} >${LOG_DIR}/${processId}.out 2>${LOG_DIR}/${processId}.err`;
       try {
-        await sandbox.commands.run(redirected, { background: true, user: "root", cwd, envs: env });
+        const handle = await sandbox.commands.run(redirected, { background: true, user: "root", cwd, envs: env });
+        // The process keeps running; this only closes the SDK's event stream,
+        // which would otherwise keep the Durable Object resident.
+        await handle.disconnect();
       } catch (error) {
         throw mapNotFound(sdk, error);
       }
@@ -173,19 +194,26 @@ function e2bHandle(context: {
         stderr: await tail(`${LOG_DIR}/${processId}.err`),
       };
     },
-    fetchPort(port, request) {
+    async fetchPort(port, request) {
       const url = new URL(request.url);
       const target = `https://${sandbox.getHost(port)}${url.pathname}${url.search}`;
       const headers = new Headers(request.headers);
       headers.delete("host");
-      // Overwrites any client-supplied value; without the token E2B answers 403.
-      if (context.secret) headers.set(E2B_TRAFFIC_TOKEN_HEADER, context.secret);
-      return context.fetchImpl(new Request(target, {
+      // Never forward a client-supplied token, and never send tokenless: E2B
+      // would answer 403 at best.
+      headers.delete(E2B_TRAFFIC_TOKEN_HEADER);
+      if (!context.secret) throw new Error("E2B sandbox traffic token is unavailable");
+      headers.set(E2B_TRAFFIC_TOKEN_HEADER, context.secret);
+      const init: RequestInit & { duplex?: "half" } = {
         method: request.method,
         headers,
         body: request.body,
         redirect: "manual",
-      }));
+        signal: request.signal,
+        ...(request.cf ? { cf: request.cf } : {}),
+        ...(request.body ? { duplex: "half" as const } : {}),
+      };
+      return context.fetchImpl(new Request(target, init));
     },
     async renewLease(ms) {
       try {
@@ -231,8 +259,13 @@ function assertProcessId(processId: string): void {
   if (!PROCESS_ID_PATTERN.test(processId)) throw new Error("Invalid process id");
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+function assertOk(result: ShellResult, message: string): void {
+  if (result.exitCode !== 0) throw new Error(`${message} (exit ${result.exitCode}): ${result.stderr}`);
+}
+
+function parentDirectory(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index <= 0 ? "/" : path.slice(0, index);
 }
 
 /** Loads `e2b` on first use so Cloudflare-only paths and tests never pay for the SDK. */

@@ -3,7 +3,7 @@ import test from "node:test";
 import { createE2BSandboxProvider, E2B_TRAFFIC_TOKEN_HEADER } from "../dist/sandbox-provider/e2b.js";
 import { SandboxNotFoundError } from "../dist/sandbox-provider/types.js";
 import { collectWorkerSecretValues } from "../dist/worker-env.js";
-import { configuredSandboxProviderName, resolveSandboxProvider } from "../dist/sandbox-provider/index.js";
+import { configuredSandboxProviderName, e2bMaxLeaseMs, resolveSandboxProvider } from "../dist/sandbox-provider/index.js";
 
 class NotFound extends Error {}
 
@@ -27,6 +27,7 @@ function fakeSdk(options = {}) {
       run: async (cmd, opts) => {
         log.push(["run", cmd, opts]);
         if (options.run) return options.run(cmd, opts);
+        if (opts?.background) return { disconnect: async () => { log.push(["disconnect"]); } };
         if (cmd.startsWith("tail -c 65536 /var/log/codevil/codevil-agent.out")) return { stdout: "agent out", stderr: "", exitCode: 0 };
         if (cmd.startsWith("tail -c 65536 /var/log/codevil/codevil-agent.err")) return { stdout: "agent err", stderr: "", exitCode: 0 };
         return { stdout: "", stderr: "", exitCode: 0 };
@@ -86,6 +87,16 @@ test("create fails closed when E2B returns no traffic token", async () => {
   assert.deepEqual(fake.log.at(-1), ["kill"]);
 });
 
+test("create reports a failed cleanup kill without leaking secrets", async () => {
+  const { p, fake } = provider();
+  delete fake.sandbox.trafficAccessToken;
+  fake.sandbox.kill = async () => { throw new Error("kill failed e2b_key"); };
+  await assert.rejects(p.create({ sessionId: "ses_1", leaseMs: 600_000 }), (error) => {
+    assert.equal(error.message, "E2B sandbox was created without a traffic access token (cleanup kill also failed)");
+    return true;
+  });
+});
+
 test("connect maps not-found to SandboxNotFoundError", async () => {
   const { p } = provider();
   await assert.rejects(p.connect({ provider: "e2b", id: "gone" }), SandboxNotFoundError);
@@ -120,6 +131,28 @@ test("fetchPort targets the E2B host with the traffic token and keeps path and q
   assert.equal(fetchCalls[0].redirect, "manual");
 });
 
+test("fetchPort forwards method, body and abort signal", async () => {
+  const { p, fetchCalls } = provider();
+  const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
+  const controller = new AbortController();
+  await handle.fetchPort(3000, new Request("http://localhost/api", { method: "POST", body: "payload", signal: controller.signal }));
+  assert.equal(fetchCalls[0].method, "POST");
+  assert.equal(await fetchCalls[0].text(), "payload");
+  controller.abort();
+  assert.equal(fetchCalls[0].signal.aborted, true);
+});
+
+test("fetchPort without a traffic token fails closed and never calls fetch", async () => {
+  const { p, fake, fetchCalls } = provider();
+  delete fake.sandbox.trafficAccessToken;
+  const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
+  await assert.rejects(
+    handle.fetchPort(5173, new Request("http://localhost/", { headers: { [E2B_TRAFFIC_TOKEN_HEADER]: "client-supplied" } })),
+    /E2B sandbox traffic token is unavailable/,
+  );
+  assert.deepEqual(fetchCalls, []);
+});
+
 test("startProcess redirects output to per-process log files and readProcessLogs tails them", async () => {
   const { p, fake } = provider();
   const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
@@ -130,25 +163,83 @@ test("startProcess redirects output to per-process log files and readProcessLogs
   assert.deepEqual(background[2], { background: true, user: "root", cwd: "/workspace", envs: { A: "1" } });
   const mkdirIndex = fake.log.findIndex(([, cmd]) => cmd === "mkdir -p /var/log/codevil");
   assert.ok(mkdirIndex >= 0 && mkdirIndex < fake.log.indexOf(background));
+  assert.deepEqual(fake.log[fake.log.indexOf(background) + 1], ["disconnect"]);
   assert.deepEqual(await handle.readProcessLogs("codevil-agent"), { stdout: "agent out", stderr: "agent err" });
   await assert.rejects(handle.startProcess("x", { processId: "../etc", cwd: "/", env: {} }));
   await assert.rejects(handle.readProcessLogs("../etc"));
 });
 
-test("writeFile sets mode and owner", async () => {
+test("writeFile stages as root, permissions the staged file, then renames over the target", async () => {
   const { p, fake } = provider();
   const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
   await handle.writeFile("/run/codevil/ws-token", "tok", { mode: 0o600, owner: "codevil" });
-  assert.equal(fake.files.get("/run/codevil/ws-token"), "tok");
-  assert.deepEqual(fake.log.find(([kind]) => kind === "write")[2], { user: "root" });
-  const chmod = fake.log.find(([kind, cmd]) => kind === "run" && cmd.includes("chmod"));
-  assert.match(chmod[1], /chmod 600 '\/run\/codevil\/ws-token' && chown 10001:10001 '\/run\/codevil\/ws-token'/);
+  const writeIndex = fake.log.findIndex(([kind]) => kind === "write");
+  const [, stage, writeOptions] = fake.log[writeIndex];
+  assert.match(stage, /^\/run\/\.codevil-stage\/[0-9a-f-]{36}$/);
+  assert.deepEqual(writeOptions, { user: "root" });
+  assert.equal(fake.files.get(stage), "tok");
+  assert.equal(fake.files.has("/run/codevil/ws-token"), false);
+  assert.equal(fake.log[writeIndex - 1][1], "mkdir -p -m 700 /run/.codevil-stage && chmod 700 /run/.codevil-stage && chown 0:0 /run/.codevil-stage");
+  assert.equal(
+    fake.log[writeIndex + 1][1],
+    `chmod 600 '${stage}' && chown 10001:10001 '${stage}' && mkdir -p '/run/codevil' && mv -fT '${stage}' '/run/codevil/ws-token'`,
+  );
 });
 
-test("writeFile throws when permissions cannot be set", async () => {
-  const { p } = provider({}, { run: async () => ({ stdout: "", stderr: "denied", exitCode: 1 }) });
+test("writeFile quotes hostile paths and skips chmod/chown when not requested", async () => {
+  const { p, fake } = provider();
   const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
-  await assert.rejects(handle.writeFile("/x", "y", { mode: 0o600 }), /Failed to set permissions on \/x/);
+  await handle.writeFile("/run/it's/x y", "tok");
+  const final = fake.log.at(-1)[1];
+  assert.match(final, /^mkdir -p '\/run\/it'\\''s' && mv -fT '\/run\/\.codevil-stage\/[0-9a-f-]{36}' '\/run\/it'\\''s\/x y'$/);
+});
+
+test("writeFile throws on any failing step and removes the staged file", async () => {
+  const commands = [];
+  const { p } = provider({}, {
+    run: async (cmd) => {
+      commands.push(cmd);
+      return cmd.includes("mv -fT") ? { stdout: "", stderr: "denied", exitCode: 1 } : { stdout: "", stderr: "", exitCode: 0 };
+    },
+  });
+  const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
+  await assert.rejects(handle.writeFile("/x", "y", { mode: 0o600 }), /Failed to write \/x \(exit 1\): denied/);
+  assert.match(commands.at(-1), /^rm -f '\/run\/\.codevil-stage\//);
+  const prep = provider({}, { run: async () => ({ stdout: "", stderr: "ro fs", exitCode: 1 }) });
+  const h2 = await prep.p.connect({ provider: "e2b", id: "sbx_1" });
+  await assert.rejects(h2.writeFile("/x", "y"), /Failed to prepare staging for \/x \(exit 1\): ro fs/);
+  assert.equal(prep.fake.files.size, 0);
+});
+
+test("exec, writeFile and startProcess map not-found to SandboxNotFoundError", async () => {
+  const gone = () => { throw new NotFound("gone"); };
+  const viaRun = provider({}, { run: gone });
+  const h1 = await viaRun.p.connect({ provider: "e2b", id: "sbx_1" });
+  await assert.rejects(h1.exec("echo"), SandboxNotFoundError);
+
+  const viaWrite = provider();
+  const h2 = await viaWrite.p.connect({ provider: "e2b", id: "sbx_1" });
+  viaWrite.fake.sandbox.files.write = gone;
+  await assert.rejects(h2.writeFile("/run/x", "y"), SandboxNotFoundError);
+
+  const viaBackground = provider({}, {
+    run: async (cmd, opts) => { if (opts?.background) gone(); return { stdout: "", stderr: "", exitCode: 0 }; },
+  });
+  const h3 = await viaBackground.p.connect({ provider: "e2b", id: "sbx_1" });
+  await assert.rejects(h3.startProcess("x", { processId: "p", cwd: "/", env: {} }), SandboxNotFoundError);
+});
+
+test("E2B_MAX_SANDBOX_SECONDS is clamped to a positive whole number", () => {
+  const ms = (value) => e2bMaxLeaseMs({ E2B_MAX_SANDBOX_SECONDS: value });
+  assert.equal(ms(undefined), 3_600_000);
+  assert.equal(ms(""), 3_600_000);
+  assert.equal(ms("abc"), 3_600_000);
+  assert.equal(ms("Infinity"), 3_600_000);
+  assert.equal(ms("0"), 3_600_000);
+  assert.equal(ms("-5"), 3_600_000);
+  assert.equal(ms("0.5"), 3_600_000);
+  assert.equal(ms("90.9"), 90_000);
+  assert.equal(ms("1800"), 1_800_000);
 });
 
 test("exec maps users and options, and turns a command exit error into a result", async () => {

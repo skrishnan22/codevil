@@ -12,6 +12,7 @@ import type {
   SandboxRef,
   ShellResult,
 } from "./types.js";
+import { OWNER_IDS, shellQuote } from "./shell.js";
 
 /** The slice of `@cloudflare/sandbox`'s Sandbox the adapter relies on. */
 export interface CloudflareSandboxLike extends WorkspaceCacheSandbox {
@@ -44,8 +45,6 @@ export interface CloudflareSandboxProviderOptions {
   /** Injected in tests; production lazily imports `@cloudflare/sandbox`. */
   getSandbox?: GetCloudflareSandbox;
 }
-
-const OWNER_IDS = { codevil: "10001:10001", root: "0:0" } as const;
 
 export function createCloudflareSandboxProvider(
   providerOptions: CloudflareSandboxProviderOptions,
@@ -124,8 +123,4 @@ function cloudflareHandle(sandbox: CloudflareSandboxLike, ref: SandboxRef): Sand
     },
     workspaceCache: sandbox,
   };
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

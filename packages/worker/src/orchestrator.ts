@@ -749,6 +749,8 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       meta: this.meta,
       provider: this.sandboxProvider(),
       readSecret: () => this.ctx.storage.get<string>(SANDBOX_SECRET_KEY),
+      secrets: this.redactionSecrets,
+      storeSecret: (secret) => this.ctx.storage.put(SANDBOX_SECRET_KEY, secret),
     });
   }
 

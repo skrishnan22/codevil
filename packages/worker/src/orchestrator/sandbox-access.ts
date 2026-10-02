@@ -143,7 +143,11 @@ export async function connectSandboxHandle(options: {
     if (!secret && handle.secret) await options.storeSecret?.(handle.secret);
     return handle;
   };
-  return options.cache ? options.cache.get(`${ref.provider}:${ref.id}`, connect) : connect();
+  // Cloudflare handles wrap a Durable Object stub that many exceptions leave
+  // permanently broken, so every lookup must build a fresh one; only E2B (an
+  // HTTP API connection) is safe to reuse.
+  const cache = options.provider.name === "cloudflare" ? undefined : options.cache;
+  return cache ? cache.get(`${ref.provider}:${ref.id}`, connect) : connect();
 }
 
 /**

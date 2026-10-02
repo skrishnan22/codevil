@@ -49,6 +49,7 @@ test("operator config and local variables are templates, not deployment credenti
 
   assert.match(ignore, /^wrangler\.operator\.toml$/m);
   assert.match(operatorTemplate, /database_id = "your-d1-database-id"/);
+  assert.match(operatorTemplate, /^SANDBOX_PROVIDER = "cloudflare"$/m);
   assert.match(varsTemplate, /^CODEVIL_PROXY_SIGNING_SECRET=$/m);
   for (const name of ["CODEVIL_API_KEY", "CODEVIL_SETUP_TOKEN", "CODEVIL_PROXY_SIGNING_SECRET", "BETTER_AUTH_SECRET", "GOOGLE_CLIENT_SECRET", "GITHUB_PAT"]) {
     assert.match(varsTemplate, new RegExp(`^${name}=$`, "m"));

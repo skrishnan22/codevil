@@ -14,6 +14,7 @@ import {
   sandboxRefForMeta,
 } from "../dist/orchestrator/sandbox-access.js";
 import { SandboxNotFoundError } from "../dist/sandbox-provider/types.js";
+import { createCloudflareSandboxProvider } from "../dist/sandbox-provider/cloudflare.js";
 import { createFakeSandboxHandle } from "./helpers/fake-host.mjs";
 
 const secret = "diagnostics-response-secret";
@@ -302,7 +303,7 @@ test("a SandboxNotFoundError from any handle call evicts the cached handle", asy
   }
 });
 
-test("other handle errors keep the cached handle", async () => {
+test("other handle errors keep the cached E2B handle", async () => {
   let connects = 0;
   const provider = {
     name: "e2b",
@@ -372,4 +373,21 @@ test("a paused sandbox without a by-reference kill is destroyed through its hand
   const handle = createFakeSandboxHandle({ destroy: async (reason) => { reasons.push(reason); } });
   await destroySandbox(async () => handle, "x", () => assert.fail("no error"), { paused: true });
   assert.deepEqual(reasons, ["x"]);
+});
+
+test("Cloudflare lookups never reuse a handle: every lookup builds a fresh stub", async () => {
+  let getSandboxCalls = 0;
+  const provider = createCloudflareSandboxProvider({
+    binding: {},
+    getSandbox: () => {
+      getSandboxCalls += 1;
+      return {};
+    },
+  });
+  const cache = createSandboxHandleCache();
+  const meta = { session_id: "ses_1", sandbox_ref: { provider: "cloudflare", id: "ses_1" } };
+  const first = await connectSandboxHandle({ meta, provider, readSecret: async () => undefined, cache });
+  const second = await connectSandboxHandle({ meta, provider, readSecret: async () => undefined, cache });
+  assert.equal(getSandboxCalls, 2);
+  assert.notEqual(first, second);
 });

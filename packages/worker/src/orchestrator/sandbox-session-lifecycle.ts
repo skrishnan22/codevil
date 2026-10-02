@@ -223,7 +223,7 @@ async function recoverAfterFailedPause(host: OrchestratorHost): Promise<void> {
     host.updateDirectory({});
   }
   drainQueuedAgentWorkIfReady(host);
-  flushPendingPreviewStart(host);
+  flushPendingPreviewAction(host);
   await armAlarmSafely(host);
 }
 
@@ -316,7 +316,7 @@ async function completeResume(host: OrchestratorHost, now: number): Promise<void
   // The agent may have reconnected (old token still valid) while the resume was in
   // flight; that accept ran while the paused marker was set, so release what it left behind.
   drainQueuedAgentWorkIfReady(host);
-  flushPendingPreviewStart(host);
+  flushPendingPreviewAction(host);
   await armAlarmSafely(host);
 }
 
@@ -331,7 +331,7 @@ export function clearStalePausedMarker(host: OrchestratorHost): boolean {
   meta.sandbox_paused_at = undefined;
   meta.expected_close = false;
   host.saveMeta();
-  flushPendingPreviewStart(host);
+  flushPendingPreviewAction(host);
   return true;
 }
 
@@ -406,7 +406,7 @@ async function failSession(
   if (!meta || isTerminalState(meta.state)) return false;
   if (!host.transition("failed")) return false;
   meta.sandbox_paused_at = undefined;
-  meta.pending_preview_start = undefined;
+  meta.pending_preview_action = undefined;
   const activeRunId = failOutstandingRuns(host, message, questionReason);
   host.appendAndBroadcast({ type: "error", message });
   host.updateDirectory({
@@ -440,7 +440,7 @@ export async function terminateSandbox(host: OrchestratorHost, reason: string): 
   await pausing.get(host)?.catch(() => false);
   host.meta.expected_close = true;
   host.meta.sandbox_paused_at = undefined;
-  host.meta.pending_preview_start = undefined;
+  host.meta.pending_preview_action = undefined;
   host.saveMeta();
   await destroySandbox(() => host.sandboxHandle(), reason, (error) => {
     logFailure(host, "sandbox.stop.failed", error);
@@ -477,20 +477,34 @@ export function buildPreviewStartMessage(
 }
 
 /**
- * A preview start requested while the sandbox is paused (or about to be)
- * resumes it and is remembered; it is sent when the agent reconnects.
+ * A preview command (start or stop) issued while the sandbox is paused, about
+ * to be paused, or reconnecting after a resume resumes it and is remembered
+ * (the latest command wins); it is replayed once the agent reconnects. Returns
+ * false when the command can go straight to the agent.
  */
-export function deferPreviewStartWhilePaused(host: OrchestratorHost, appKey?: string): boolean {
+export function deferPreviewCommandWhileUnavailable(
+  host: OrchestratorHost,
+  type: "start" | "stop",
+  appKey?: string,
+): boolean {
   const meta = host.meta;
+  if (!meta) return false;
   const unavailable = previewUnavailableReason(host);
-  if (!meta || !unavailable) return false;
-  meta.pending_preview_start = appKey !== undefined ? { app_key: appKey } : {};
+  if (!unavailable) {
+    // The command is about to reach the agent and supersedes anything deferred earlier.
+    if (meta.pending_preview_action) {
+      meta.pending_preview_action = undefined;
+      host.saveMeta();
+    }
+    return false;
+  }
+  meta.pending_preview_action = { type, ...(type === "start" && appKey !== undefined ? { app_key: appKey } : {}) };
   host.saveMeta();
   host.recordActivity();
   host.requestSandboxResume();
   host.appendAndBroadcast({
     type: "status",
-    message: `Sandbox is ${unavailable}; the preview will start when it reconnects.`,
+    message: `Sandbox is ${unavailable}; the preview will ${type} when it reconnects.`,
   });
   return true;
 }
@@ -509,33 +523,21 @@ function previewUnavailableReason(host: OrchestratorHost): "resuming" | "reconne
   return null;
 }
 
-/** True when there was nothing live to stop: a deferred start was cancelled or the sandbox is paused. */
-export function cancelDeferredPreviewStart(host: OrchestratorHost): boolean {
-  const meta = host.meta;
-  if (!meta) return false;
-  const hadPending = meta.pending_preview_start !== undefined;
-  if (hadPending) {
-    meta.pending_preview_start = undefined;
-    host.saveMeta();
-  }
-  return hadPending || previewUnavailableReason(host) !== null;
-}
-
-/** Sends a deferred preview start once a live agent socket exists. */
-export function flushPendingPreviewStart(host: OrchestratorHost): boolean {
+/** Replays the deferred preview command exactly once, when a live agent socket exists. */
+export function flushPendingPreviewAction(host: OrchestratorHost): boolean {
   const meta = host.meta;
   if (
-    !meta?.pending_preview_start
+    !meta?.pending_preview_action
     || meta.sandbox_paused_at
     || isTerminalState(meta.state)
     || !sandboxSocketAttached(host)
   ) {
     return false;
   }
-  const { app_key: appKey } = meta.pending_preview_start;
-  meta.pending_preview_start = undefined;
+  const { type, app_key: appKey } = meta.pending_preview_action;
+  meta.pending_preview_action = undefined;
   host.saveMeta();
-  host.sendToSandbox(buildPreviewStartMessage(meta, appKey));
+  host.sendToSandbox(type === "start" ? buildPreviewStartMessage(meta, appKey) : { type: "preview_stop" });
   return true;
 }
 

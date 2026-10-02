@@ -37,8 +37,7 @@ import {
 } from "./plan-revision-actions.js";
 import {
   buildPreviewStartMessage,
-  cancelDeferredPreviewStart,
-  deferPreviewStartWhilePaused,
+  deferPreviewCommandWhileUnavailable,
   sandboxSocketAttached,
 } from "./sandbox-session-lifecycle.js";
 
@@ -503,13 +502,13 @@ export function cancelOpenQuestions(host: OrchestratorHost, runId: string, reaso
 
 export async function handlePreviewStart(host: OrchestratorHost, appKey?: string): Promise<void> {
   if (!host.meta) return;
-  if (deferPreviewStartWhilePaused(host, appKey)) return;
+  if (deferPreviewCommandWhileUnavailable(host, "start", appKey)) return;
 
   host.sendToSandbox(buildPreviewStartMessage(host.meta, appKey));
 }
 
 export async function handlePreviewStop(host: OrchestratorHost): Promise<void> {
-  // A deferred start never reached the sandbox and a paused sandbox has no preview to stop.
-  if (cancelDeferredPreviewStart(host)) return;
+  // A paused or reconnecting sandbox may still run the dev server; replay the stop once it is back.
+  if (deferPreviewCommandWhileUnavailable(host, "stop")) return;
   host.sendToSandbox({ type: "preview_stop" });
 }

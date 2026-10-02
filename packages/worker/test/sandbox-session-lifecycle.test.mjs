@@ -7,7 +7,7 @@ import { connectSandboxHandle, sandboxDiagnosticsResponse, sandboxLogsResponse }
 import { handlePreviewStart, handlePreviewStop } from "../dist/orchestrator/cli-handlers.js";
 import {
   clearStalePausedMarker,
-  flushPendingPreviewStart,
+  flushPendingPreviewAction,
   idlePauseInput,
   recordSessionActivity,
   expireSessionAtMaxTime,
@@ -29,8 +29,10 @@ import {
 } from "../dist/sandbox-connection.js";
 import { SandboxNotFoundError } from "../dist/sandbox-provider/types.js";
 import { sandboxProviderMaxLeaseMs } from "../dist/sandbox-provider/index.js";
+import { loadSessionMeta } from "../dist/orchestrator/session-meta.js";
 import {
   actor,
+  createDefaultMeta,
   createFakeHost,
   createFakeSandboxSocket,
   createFakeSandboxProvider,
@@ -838,19 +840,19 @@ test("preview_start on a paused session resumes, defers, and sends once the agen
 
   assert.equal(resumeRequests.count, 1);
   assert.equal(activity.count, 1);
-  assert.deepEqual(host.meta.pending_preview_start, { app_key: "web" });
+  assert.deepEqual(host.meta.pending_preview_action, { type: "start", app_key: "web" });
   assert.deepEqual(sandboxMessages, []);
   assert.ok(broadcasts.some((event) => event.type === "status" && event.message === "Sandbox is resuming; the preview will start when it reconnects."));
   assert.ok(!broadcasts.some((event) => event.type === "error"));
 
   await resumeSandbox(host);
   // Resumed, but the agent has not reconnected yet.
-  assert.equal(flushPendingPreviewStart(host), false);
+  assert.equal(flushPendingPreviewAction(host), false);
   sandboxSockets.push(createFakeSandboxSocket());
-  assert.equal(flushPendingPreviewStart(host), true);
-  assert.equal(flushPendingPreviewStart(host), false);
+  assert.equal(flushPendingPreviewAction(host), true);
+  assert.equal(flushPendingPreviewAction(host), false);
   assert.deepEqual(sandboxMessages.map((message) => [message.type, message.app_key]), [["preview_start", "web"]]);
-  assert.equal(host.meta.pending_preview_start, undefined);
+  assert.equal(host.meta.pending_preview_action, undefined);
 });
 
 test("preview_start on a running session is sent straight away", async () => {
@@ -858,7 +860,7 @@ test("preview_start on a running session is sent straight away", async () => {
   await handlePreviewStart(host, "web");
   assert.deepEqual(sandboxMessages.map((message) => message.type), ["preview_start"]);
   assert.equal(resumeRequests.count, 0);
-  assert.equal(host.meta.pending_preview_start, undefined);
+  assert.equal(host.meta.pending_preview_action, undefined);
 });
 
 test("preview_start during an in-flight pause is sent after the pause fails", async () => {
@@ -869,22 +871,91 @@ test("preview_start during an in-flight pause is sent after the pause fails", as
   const pausing = pauseIdleSandbox(host, T0 + 600_000);
   await new Promise((resolve) => setImmediate(resolve));
   await handlePreviewStart(host);
-  assert.ok(host.meta.pending_preview_start);
+  assert.ok(host.meta.pending_preview_action);
   assert.deepEqual(sandboxMessages, []);
 
   fail(new Error("pause rejected"));
   await pausing;
   assert.deepEqual(sandboxMessages.map((message) => message.type), ["preview_start"]);
-  assert.equal(host.meta.pending_preview_start, undefined);
+  assert.equal(host.meta.pending_preview_action, undefined);
 });
 
-test("preview_stop on a paused session clears the deferred start and does not error", async () => {
-  const { host, broadcasts, sandboxMessages } = createFakeHost(pausedMeta, { e2b: true, sandboxConnected: false });
-  await handlePreviewStart(host, "web");
+test("preview_stop on a paused session resumes, defers, and is replayed exactly once on reconnect", async () => {
+  const { host, resumeRequests, activity, broadcasts, sandboxMessages, sandboxSockets } = createFakeHost(pausedMeta, {
+    e2b: true,
+    sandboxConnected: false,
+  });
+
   await handlePreviewStop(host);
-  assert.equal(host.meta.pending_preview_start, undefined);
+
+  assert.equal(resumeRequests.count, 1);
+  assert.equal(activity.count, 1);
+  assert.deepEqual(host.meta.pending_preview_action, { type: "stop" });
   assert.deepEqual(sandboxMessages, []);
+  assert.ok(broadcasts.some((event) => event.type === "status" && event.message === "Sandbox is resuming; the preview will stop when it reconnects."));
   assert.ok(!broadcasts.some((event) => event.type === "error"));
+
+  await resumeSandbox(host);
+  assert.equal(flushPendingPreviewAction(host), false);
+  sandboxSockets.push(createFakeSandboxSocket());
+  assert.equal(flushPendingPreviewAction(host), true);
+  assert.equal(flushPendingPreviewAction(host), false);
+  assert.deepEqual(sandboxMessages, [{ type: "preview_stop" }]);
+  assert.equal(host.meta.pending_preview_action, undefined);
+});
+
+test("the latest preview command wins while the sandbox is unavailable", async () => {
+  const startThenStop = createFakeHost(pausedMeta, { e2b: true, sandboxConnected: false });
+  await handlePreviewStart(startThenStop.host, "web");
+  await handlePreviewStop(startThenStop.host);
+  assert.deepEqual(startThenStop.host.meta.pending_preview_action, { type: "stop" });
+  startThenStop.sandboxSockets.push(createFakeSandboxSocket());
+  await resumeSandbox(startThenStop.host);
+  assert.deepEqual(startThenStop.sandboxMessages.map((message) => message.type), ["preview_stop"]);
+
+  const stopThenStart = createFakeHost(pausedMeta, { e2b: true, sandboxConnected: false });
+  await handlePreviewStop(stopThenStart.host);
+  await handlePreviewStart(stopThenStart.host, "web");
+  assert.deepEqual(stopThenStart.host.meta.pending_preview_action, { type: "start", app_key: "web" });
+  stopThenStart.sandboxSockets.push(createFakeSandboxSocket());
+  await resumeSandbox(stopThenStart.host);
+  assert.deepEqual(stopThenStart.sandboxMessages.map((message) => [message.type, message.app_key]), [["preview_start", "web"]]);
+});
+
+test("a preview command that reaches a live agent supersedes a stale deferred one", async () => {
+  const { host, sandboxMessages } = createFakeHost(
+    { ...idleMeta, pending_preview_action: { type: "start", app_key: "old" } },
+    { e2b: true, sandboxConnected: true },
+  );
+  await handlePreviewStop(host);
+  assert.deepEqual(sandboxMessages, [{ type: "preview_stop" }]);
+  assert.equal(host.meta.pending_preview_action, undefined);
+});
+
+test("a stale paused marker cleared by the alarm replays a deferred preview stop", async () => {
+  const { host, sandboxMessages } = createFakeHost(
+    { ...pausedMeta, pending_preview_action: { type: "stop" } },
+    { e2b: true, sandboxConnected: true },
+  );
+  assert.equal(clearStalePausedMarker(host), true);
+  assert.deepEqual(sandboxMessages, [{ type: "preview_stop" }]);
+});
+
+test("legacy pending_preview_start meta loads as a start action", () => {
+  const load = (legacy, extra = {}) => {
+    const meta = createDefaultMeta({ pending_preview_start: legacy, ...extra });
+    const store = { meta: null, eventLog: { hydrateFromSql() {} } };
+    loadSessionMeta({ exec: () => [{ value: JSON.stringify(meta) }] }, store);
+    return store.meta;
+  };
+
+  const flag = load(true);
+  assert.deepEqual(flag.pending_preview_action, { type: "start" });
+  assert.equal(flag.pending_preview_start, undefined);
+
+  assert.deepEqual(load({ app_key: "web" }).pending_preview_action, { type: "start", app_key: "web" });
+  // An explicit action is never overwritten by the legacy flag.
+  assert.deepEqual(load(true, { pending_preview_action: { type: "stop" } }).pending_preview_action, { type: "stop" });
 });
 
 test("a deferred preview start is dropped when the session fails", async () => {
@@ -892,7 +963,7 @@ test("a deferred preview start is dropped when the session fails", async () => {
   await handlePreviewStart(host, "web");
   await resumeSandbox(host);
   assert.equal(host.meta.state, "failed");
-  assert.equal(host.meta.pending_preview_start, undefined);
+  assert.equal(host.meta.pending_preview_action, undefined);
 });
 
 // --- activity ---
@@ -988,12 +1059,12 @@ test("an agent that reconnects mid-resume still gets the deferred preview start 
   // connect woke the VM; the agent reconnects with its old token before completeResume runs.
   // The accept path drains and flushes, but the paused marker is still set.
   sandboxSockets.push(createFakeSandboxSocket());
-  assert.equal(flushPendingPreviewStart(host), false);
+  assert.equal(flushPendingPreviewAction(host), false);
 
   release();
   await resuming;
 
-  assert.equal(host.meta.pending_preview_start, undefined);
+  assert.equal(host.meta.pending_preview_action, undefined);
   assert.deepEqual(sandboxMessages.map((message) => message.type).sort(), ["agent_turn", "preview_start"]);
   // A later stop is a real stop, not swallowed as a cancelled deferred start.
   await handlePreviewStop(host);
@@ -1008,7 +1079,7 @@ test("preview_start in the reconnect window after a resume is deferred until the
 
   await handlePreviewStart(host, "web");
 
-  assert.deepEqual(host.meta.pending_preview_start, { app_key: "web" });
+  assert.deepEqual(host.meta.pending_preview_action, { type: "start", app_key: "web" });
   assert.deepEqual(sandboxMessages, []);
   assert.equal(resumeRequests.count, 1);
   assert.ok(broadcasts.some((event) => event.type === "status" && event.message === "Sandbox is reconnecting; the preview will start when it reconnects."));
@@ -1016,18 +1087,25 @@ test("preview_start in the reconnect window after a resume is deferred until the
 
   sandboxSockets.push(createFakeSandboxSocket());
   host.meta.sandbox_disconnected_at = undefined; // completeSandboxReconnect
-  assert.equal(flushPendingPreviewStart(host), true);
+  assert.equal(flushPendingPreviewAction(host), true);
   assert.deepEqual(sandboxMessages.map((message) => message.type), ["preview_start"]);
 });
 
-test("preview_stop in the reconnect window has nothing to stop and does not error", async () => {
-  const { host, sandboxMessages, broadcasts } = createFakeHost(
+test("preview_stop in the reconnect window is deferred and replayed once the agent returns", async () => {
+  const { host, sandboxMessages, broadcasts, sandboxSockets } = createFakeHost(
     { ...idleMeta, sandbox_disconnected_at: "2026-10-01T00:10:01.000Z" },
     { e2b: true, sandboxConnected: false },
   );
   await handlePreviewStop(host);
   assert.deepEqual(sandboxMessages, []);
+  assert.deepEqual(host.meta.pending_preview_action, { type: "stop" });
+  assert.ok(broadcasts.some((event) => event.type === "status" && event.message === "Sandbox is reconnecting; the preview will stop when it reconnects."));
   assert.ok(!broadcasts.some((event) => event.type === "error"));
+
+  sandboxSockets.push(createFakeSandboxSocket());
+  host.meta.sandbox_disconnected_at = undefined; // completeSandboxReconnect
+  assert.equal(flushPendingPreviewAction(host), true);
+  assert.deepEqual(sandboxMessages, [{ type: "preview_stop" }]);
 });
 
 test("preview_start is not deferred when the agent is attached, or for a provider that cannot pause", async () => {
@@ -1044,8 +1122,9 @@ test("preview_start is not deferred when the agent is attached, or for a provide
     { sandboxConnected: false },
   );
   await handlePreviewStart(cloudflare.host, "web");
-  assert.deepEqual(cloudflare.sandboxMessages.map((message) => message.type), ["preview_start"]);
-  assert.equal(cloudflare.host.meta.pending_preview_start, undefined);
+  await handlePreviewStop(cloudflare.host);
+  assert.deepEqual(cloudflare.sandboxMessages.map((message) => message.type), ["preview_start", "preview_stop"]);
+  assert.equal(cloudflare.host.meta.pending_preview_action, undefined);
   assert.equal(cloudflare.resumeRequests.count, 0);
   assert.equal(cloudflare.activity.count, 0);
 });

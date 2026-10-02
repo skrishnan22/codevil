@@ -43,9 +43,18 @@ export function loadSessionMeta(
       break;
     }
 
-    store.meta = parsed.data;
+    store.meta = migrateLegacyPendingPreview(parsed.data);
     break;
   }
 
   store.eventLog.hydrateFromSql();
+}
+
+/** A legacy start-only `pending_preview_start` becomes a "start" `pending_preview_action` (an explicit action wins). */
+export function migrateLegacyPendingPreview(meta: SessionMeta): SessionMeta {
+  const { pending_preview_start: legacy, ...rest } = meta;
+  if (legacy === undefined) return meta;
+  if (rest.pending_preview_action) return rest;
+  const appKey = typeof legacy === "object" ? legacy.app_key : undefined;
+  return { ...rest, pending_preview_action: { type: "start", ...(appKey !== undefined ? { app_key: appKey } : {}) } };
 }

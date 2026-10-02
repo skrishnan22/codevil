@@ -43,8 +43,13 @@ export const SessionMetaSchema = z.object({
   last_activity_at: z.string().optional(),
   sandbox_paused_at: z.string().optional(),
   sandbox_lease_renewed_at: z.string().optional(),
-  /** A preview start requested while the sandbox was paused; sent once the agent reconnects. */
-  pending_preview_start: z.object({ app_key: z.string().optional() }).optional(),
+  /** The latest preview command requested while the sandbox was paused or reconnecting; replayed once the agent reconnects. */
+  pending_preview_action: z.object({
+    type: z.enum(["start", "stop"]),
+    app_key: z.string().optional(),
+  }).optional(),
+  /** @deprecated Legacy start-only flag; migrated to `pending_preview_action` when meta is loaded. */
+  pending_preview_start: z.union([z.literal(true), z.object({ app_key: z.string().optional() })]).optional(),
   last_decision: LastDecisionSchema.optional(),
 });
 

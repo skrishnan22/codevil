@@ -130,7 +130,7 @@ import {
   renewSandboxLeaseIfDue,
   resumeSandbox,
   recordSessionActivity,
-  flushPendingPreviewStart,
+  flushPendingPreviewAction,
   sandboxAlarmDeadlines,
   terminateSandbox as terminateSandboxFn,
 } from "./orchestrator/sandbox-session-lifecycle.js";
@@ -459,7 +459,7 @@ export class Orchestrator extends DurableObject<Env> implements OrchestratorHost
       this.armNextAlarmSafe();
     }
     // A preview requested while the sandbox was paused starts now that the agent is back.
-    flushPendingPreviewStart(this);
+    flushPendingPreviewAction(this);
 
     return new Response(null, { status: 101, webSocket: client });
   }

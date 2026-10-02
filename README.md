@@ -54,6 +54,39 @@ In the Google OAuth client, add the deployed Worker origin as an authorized Java
 
 Open the Worker URL, sign in with Google, claim the first owner account using `CODEVIL_SETUP_TOKEN`, and invite the rest of the team.
 
+## Sandbox provider
+
+Codevil runs each session in either an E2B sandbox (the default) or a Cloudflare Sandbox container. Configure the provider with Worker vars in `packages/worker/wrangler.toml` (or an untracked `wrangler.operator.toml` overlay):
+
+| Name | Kind | Default | Purpose |
+| --- | --- | --- | --- |
+| `SANDBOX_PROVIDER` | var | `e2b` | `e2b` or `cloudflare`. |
+| `E2B_API_KEY` | secret | none | Required when `SANDBOX_PROVIDER=e2b`. Upload with `pnpm exec wrangler secret put E2B_API_KEY`; never put it in `wrangler.toml`. |
+| `E2B_TEMPLATE_ID` | var | `codevil-sandbox` | E2B template the sandboxes start from. |
+| `E2B_MAX_SANDBOX_SECONDS` | var | `3600` | Maximum continuous sandbox runtime; the default matches the E2B Hobby limit. |
+
+### Publishing the E2B template
+
+Both providers share `Dockerfile.sandbox`. The Cloudflare build uses its default `cloudflare/sandbox` base; the E2B template is built from the same file on a plain `node:22-slim` base. E2B's Template SDK cannot read multi-stage Dockerfiles, so the publish script builds the image with local Docker, pushes it to a registry, and then registers the pushed image as an E2B template with 2 vCPU / 4096 MiB:
+
+```sh
+export E2B_API_KEY=...                                   # E2B account key
+export CODEVIL_SANDBOX_IMAGE=ghcr.io/<owner>/codevil-sandbox:<tag>
+export CODEVIL_REGISTRY_USERNAME=...                     # private registries only
+export CODEVIL_REGISTRY_PASSWORD=...                     # private registries only
+pnpm --filter @codevil/sandbox-image e2b:template -- --dry-run   # print the plan without running it
+pnpm --filter @codevil/sandbox-image e2b:template                # build -> push -> template
+```
+
+| Name | Required | Purpose |
+| --- | --- | --- |
+| `E2B_API_KEY` | yes | Authenticates the template build. |
+| `CODEVIL_SANDBOX_IMAGE` | yes | Full registry reference that is built, pushed, and used as the template base. |
+| `E2B_TEMPLATE_ID` | no | Template name to publish (default `codevil-sandbox`); keep it equal to the Worker's `E2B_TEMPLATE_ID`. |
+| `CODEVIL_REGISTRY_USERNAME`, `CODEVIL_REGISTRY_PASSWORD` | no | Registry credentials, needed together when the image is private. |
+
+Registry credentials come only from the environment of the person publishing the template. The password is passed to `docker login` over stdin (never as an argument), is never printed, and is never committed or stored in wrangler config. The machine running the script needs Docker, access to push to the registry, and the built image must be pullable by E2B (public, or private with the credentials above).
+
 ## Slack integration
 
 The first Slack integration supports one statically configured Slack workspace per Codevil deployment. Any non-bot member of that workspace can configure a channel repository and invoke Codevil, but an Agent Request is created only when `@codevil` is explicitly mentioned.

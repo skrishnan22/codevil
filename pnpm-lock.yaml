@@ -67,6 +67,9 @@ importers:
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
+      e2b:
+        specifier: ^2.51.0
+        version: 2.51.0
       typescript:
         specifier: ^5.8.0
         version: 5.9.3

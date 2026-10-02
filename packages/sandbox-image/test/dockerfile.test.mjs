@@ -9,10 +9,8 @@ const dockerfile = await readFile(dockerfilePath, "utf8");
 const runtime = dockerfile.slice(dockerfile.lastIndexOf("FROM --platform=$CODEVIL_SANDBOX_PLATFORM"));
 
 test("sandbox runtime preserves Cloudflare backup support and Node development tools", () => {
-  assert.match(
-    runtime,
-    /^FROM --platform=\$CODEVIL_SANDBOX_PLATFORM docker\.io\/cloudflare\/sandbox:0\.12\.7/m,
-  );
+  assert.match(dockerfile, /^ARG SANDBOX_BASE=docker\.io\/cloudflare\/sandbox:0\.12\.7$/m);
+  assert.match(runtime, /^FROM --platform=\$CODEVIL_SANDBOX_PLATFORM \$\{SANDBOX_BASE\}$/m);
   assert.doesNotMatch(runtime, /COPY --from=sandbox-runtime \/container-server\/sandbox \/sandbox/);
   assert.doesNotMatch(runtime, /FROM --platform=\$CODEVIL_SANDBOX_PLATFORM node:22-slim/);
   for (const tool of ["git", "curl", "wget", "jq", "zip", "unzip", "file", "procps"]) {
@@ -38,4 +36,20 @@ test("sandbox server keeps its supported runtime while Codevil workspace access 
   assert.doesNotMatch(runtime, /\/run\/secrets/);
   assert.doesNotMatch(runtime, /USER codevil/);
   assert.match(runtime, /WORKDIR \/workspace/);
+});
+
+test("runtime stage base is configurable and defaults to the Cloudflare sandbox image", () => {
+  assert.match(dockerfile, /^ARG SANDBOX_BASE=docker\.io\/cloudflare\/sandbox:0\.12\.7$/m);
+  assert.match(dockerfile, /^FROM --platform=\$CODEVIL_SANDBOX_PLATFORM \$\{SANDBOX_BASE\}$/m);
+  // The ARG must be declared before the first FROM so the FROM line can expand it.
+  assert.ok(dockerfile.indexOf("ARG SANDBOX_BASE=") < dockerfile.indexOf("FROM "));
+});
+
+test("runtime stage installs bun when the base image lacks it", () => {
+  assert.match(runtime, /command -v bun >\/dev\/null \|\| npm install -g bun/);
+});
+
+test("runtime stage prepares the agent log and token directories", () => {
+  assert.match(runtime, /mkdir -p \/workspace \/var\/log\/codevil \/run\/codevil/);
+  assert.match(runtime, /chown codevil:codevil \/workspace \/run\/codevil/);
 });

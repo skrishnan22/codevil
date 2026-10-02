@@ -22,6 +22,16 @@ test("checked-in Worker config is portable and defaults to workers.dev", async (
   assert.match(config, /binding = "BACKUP_BUCKET"/);
 });
 
+test("checked-in Worker config keeps production on the Cloudflare sandbox until E2B is ready", async () => {
+  const [config, envExample] = await Promise.all([
+    readFile(resolve(workerRoot, "wrangler.toml"), "utf8"),
+    readFile(resolve(workerRoot, ".env.example"), "utf8"),
+  ]);
+  assert.match(config, /^SANDBOX_PROVIDER = "cloudflare"$/m);
+  assert.doesNotMatch(config, /E2B_API_KEY/);
+  assert.match(envExample, /^E2B_API_KEY=/m);
+});
+
 test("operator config and local variables are templates, not deployment credentials", async () => {
   const [ignore, operatorTemplate, varsTemplate] = await Promise.all([
     readFile(resolve(repoRoot, ".gitignore"), "utf8"),

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createE2BSandboxProvider, E2B_TRAFFIC_TOKEN_HEADER } from "../dist/sandbox-provider/e2b.js";
+import { createE2BSandboxProvider, E2B_TRAFFIC_TOKEN_HEADER, isRetryableE2BCreateError } from "../dist/sandbox-provider/e2b.js";
 import { SandboxNotFoundError } from "../dist/sandbox-provider/types.js";
 import { collectWorkerSecretValues } from "../dist/worker-env.js";
 import { configuredSandboxProviderName, e2bMaxLeaseMs, resolveSandboxProvider } from "../dist/sandbox-provider/index.js";
@@ -39,7 +39,16 @@ function fakeSdk(options = {}) {
     kill: async () => { log.push(["kill"]); if (options.killError) throw options.killError; },
   };
   const sdk = {
-    create: async (template, opts) => { log.push(["create", template, opts]); return sandbox; },
+    create: async (template, opts) => {
+      log.push(["create", template, opts]);
+      if (options.createErrors?.length) throw options.createErrors.shift();
+      return sandbox;
+    },
+    kill: async (id, opts) => {
+      log.push(["staticKill", id, opts]);
+      if (options.staticKillError) throw options.staticKillError;
+      return true;
+    },
     connect: async (id, opts) => {
       log.push(["connect", id, opts]);
       if (id === "gone") throw new NotFound("sandbox gone");
@@ -160,7 +169,7 @@ test("startProcess redirects output to per-process log files and readProcessLogs
   const background = fake.log.find(([kind, , opts]) => kind === "run" && opts?.background);
   assert.match(background[1], /^sh -c '.*' >\/var\/log\/codevil\/codevil-agent\.out 2>\/var\/log\/codevil\/codevil-agent\.err$/);
   assert.ok(background[1].includes(`node /app/x.js --name '\\''a b'\\''`));
-  assert.deepEqual(background[2], { background: true, user: "root", cwd: "/workspace", envs: { A: "1" } });
+  assert.deepEqual(background[2], { background: true, user: "root", cwd: "/workspace", envs: { A: "1" }, timeoutMs: 0 });
   const mkdirIndex = fake.log.findIndex(([, cmd]) => cmd === "mkdir -p /var/log/codevil");
   assert.ok(mkdirIndex >= 0 && mkdirIndex < fake.log.indexOf(background));
   assert.deepEqual(fake.log[fake.log.indexOf(background) + 1], ["disconnect"]);
@@ -182,7 +191,7 @@ test("writeFile stages as root, permissions the staged file, then renames over t
   assert.equal(fake.log[writeIndex - 1][1], "mkdir -p -m 700 /run/.codevil-stage && chmod 700 /run/.codevil-stage && chown 0:0 /run/.codevil-stage");
   assert.equal(
     fake.log[writeIndex + 1][1],
-    `chmod 600 '${stage}' && chown 10001:10001 '${stage}' && mkdir -p '/run/codevil' && mv -fT '${stage}' '/run/codevil/ws-token'`,
+    `chmod 600 '${stage}' && chown 10001:10001 '${stage}' && install -d -m 0755 '/run/codevil' && mv -fT '${stage}' '/run/codevil/ws-token'`,
   );
 });
 
@@ -215,7 +224,7 @@ test("writeFile quotes hostile paths and skips chmod/chown when not requested", 
   const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
   await handle.writeFile("/run/it's/x y", "tok");
   const final = fake.log.at(-1)[1];
-  assert.match(final, /^mkdir -p '\/run\/it'\\''s' && mv -fT '\/run\/\.codevil-stage\/[0-9a-f-]{36}' '\/run\/it'\\''s\/x y'$/);
+  assert.match(final, /^install -d -m 0755 '\/run\/it'\\''s' && mv -fT '\/run\/\.codevil-stage\/[0-9a-f-]{36}' '\/run\/it'\\''s\/x y'$/);
 });
 
 test("writeFile throws on any failing step and removes the staged file", async () => {
@@ -319,4 +328,86 @@ test("E2B key is a redacted worker secret and e2b is the default provider", () =
 test("resolveSandboxProvider builds the e2b provider from env", () => {
   const provider = resolveSandboxProvider({ Sandbox: {}, E2B_API_KEY: "e2b_key" }, "e2b");
   assert.equal(provider.name, "e2b");
+});
+
+test("the background agent start disables the SDK's default 60s command deadline", async () => {
+  const { p, fake } = provider();
+  const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
+  await handle.startProcess("node agent.js", { processId: "codevil-agent", cwd: "/workspace", env: {} });
+  const background = fake.log.find(([kind, , opts]) => kind === "run" && opts?.background);
+  assert.strictEqual(background[2].timeoutMs, 0);
+});
+
+test("create retries a 429, a 5xx and a network failure, then succeeds", async () => {
+  const sleeps = [];
+  const rateLimited = Object.assign(new Error("slow down"), { name: "RateLimitError", statusCode: 429 });
+  const serverError = Object.assign(new Error("502: bad gateway"), { statusCode: 502 });
+  const { p, fake } = provider(
+    { sleep: async (ms) => { sleeps.push(ms); } },
+    { createErrors: [rateLimited, serverError] },
+  );
+  const handle = await p.create({ sessionId: "ses_1", leaseMs: 600_000 });
+  assert.equal(handle.ref.id, "sbx_1");
+  assert.equal(fake.log.filter(([kind]) => kind === "create").length, 3);
+  assert.equal(sleeps.length, 2);
+
+  const network = provider(
+    { sleep: async () => {} },
+    { createErrors: [Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } })] },
+  );
+  await network.p.create({ sessionId: "ses_1", leaseMs: 600_000 });
+  assert.equal(network.fake.log.filter(([kind]) => kind === "create").length, 2);
+});
+
+test("create gives up after three attempts and surfaces the last error", async () => {
+  const errors = [1, 2, 3, 4].map((n) => Object.assign(new Error(`503 try ${n}`), { statusCode: 503 }));
+  const { p, fake } = provider({ sleep: async () => {} }, { createErrors: errors });
+  await assert.rejects(p.create({ sessionId: "ses_1", leaseMs: 600_000 }), /503 try 3/);
+  assert.equal(fake.log.filter(([kind]) => kind === "create").length, 3);
+});
+
+test("create does not retry 4xx errors", async () => {
+  for (const statusCode of [400, 401, 403, 404]) {
+    const { p, fake } = provider(
+      { sleep: async () => assert.fail("must not sleep") },
+      { createErrors: [Object.assign(new Error("denied"), { statusCode })] },
+    );
+    await assert.rejects(p.create({ sessionId: "ses_1", leaseMs: 600_000 }), /denied/);
+    assert.equal(fake.log.filter(([kind]) => kind === "create").length, 1);
+  }
+  assert.equal(isRetryableE2BCreateError(new Error("template invalid")), false);
+  assert.equal(isRetryableE2BCreateError("x"), false);
+});
+
+test("fetchPort does not forward the inbound request's cf options", async () => {
+  const { p } = provider();
+  const handle = await p.connect({ provider: "e2b", id: "sbx_1" });
+  const inbound = new Request("http://localhost/");
+  Object.defineProperty(inbound, "cf", { value: { colo: "SFO", cacheEverything: true } });
+  const NativeRequest = globalThis.Request;
+  const outboundInits = [];
+  globalThis.Request = class extends NativeRequest {
+    constructor(input, init) {
+      super(input, init);
+      if (typeof input === "string") outboundInits.push(init);
+    }
+  };
+  try {
+    await handle.fetchPort(3000, inbound);
+  } finally {
+    globalThis.Request = NativeRequest;
+  }
+  assert.equal(outboundInits.length, 1);
+  assert.equal("cf" in outboundInits[0], false);
+});
+
+test("destroyByRef kills statically without connecting; not-found is success", async () => {
+  const { p, fake } = provider();
+  await p.destroyByRef({ provider: "e2b", id: "sbx_9" });
+  assert.deepEqual(fake.log, [["staticKill", "sbx_9", { apiKey: "e2b_key" }]]);
+
+  const gone = provider({}, { staticKillError: new NotFound("gone") });
+  await gone.p.destroyByRef({ provider: "e2b", id: "sbx_9" });
+  const broken = provider({}, { staticKillError: new Error("boom") });
+  await assert.rejects(broken.p.destroyByRef({ provider: "e2b", id: "sbx_9" }), /boom/);
 });

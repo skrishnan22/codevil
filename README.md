@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/skrishnan22/codevil/actions/workflows/ci.yml/badge.svg)](https://github.com/skrishnan22/codevil/actions/workflows/ci.yml)
 
-Codevil is a self-hosted AI coding agent platform. Each coding session runs in an isolated Cloudflare Sandbox and streams its progress to a collaborative web UI.
+Codevil is a self-hosted AI coding agent platform. Each coding session runs in an isolated sandbox (an E2B sandbox or a Cloudflare Sandbox container, selectable per deployment) and streams its progress to a collaborative web UI.
 
 ## Self-hosting
 
-Prerequisites: Node.js 20+, pnpm 10, a Cloudflare account with Workers Containers access, a Google OAuth client, at least one supported provider API key, and a fine-grained GitHub token.
+Prerequisites: Node.js 20+, pnpm 10, a Cloudflare account (with Workers Containers access for the Cloudflare sandbox provider), an E2B account and API key if you use the E2B provider, a Google OAuth client, at least one supported provider API key, and a fine-grained GitHub token.
 
 Install dependencies, authenticate Wrangler, and prepare the auth, GitHub, and bootstrap secrets:
 
@@ -22,7 +22,7 @@ Set `GITHUB_PAT`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET` in `packages/wo
 openssl rand -hex 32
 ```
 
-Replace every `REPLACE_ME` placeholder before upload. Never upload the example placeholders unchanged. Once all seven values are set, upload the file through Wrangler's existing bootstrap path:
+Replace every `REPLACE_ME` placeholder before upload. Never upload the example placeholders unchanged. Add `E2B_API_KEY` to the file as well if you will run sessions on E2B (see [Sandbox provider](#sandbox-provider)); leave it out for Cloudflare-only deployments. Once all values are set, upload the file through Wrangler's existing bootstrap path:
 
 ```sh
 cd packages/worker
@@ -56,11 +56,11 @@ Open the Worker URL, sign in with Google, claim the first owner account using `C
 
 ## Sandbox provider
 
-Codevil runs each session in either an E2B sandbox (the default) or a Cloudflare Sandbox container. Configure the provider with Worker vars in `packages/worker/wrangler.toml` (or an untracked `wrangler.operator.toml` overlay):
+Codevil runs each session in either an E2B sandbox or a Cloudflare Sandbox container. The shipped `wrangler.toml` pins `SANDBOX_PROVIDER = "cloudflare"` so a deploy never switches to E2B before it is ready; to move to E2B, (1) publish the template, (2) set the `E2B_API_KEY` secret, (3) pass the manual end-to-end check, then set `SANDBOX_PROVIDER = "e2b"`. The Worker's code default (no var set) is `e2b`. Configure the provider with Worker vars in `packages/worker/wrangler.toml` (or an untracked `wrangler.operator.toml` overlay):
 
 | Name | Kind | Default | Purpose |
 | --- | --- | --- | --- |
-| `SANDBOX_PROVIDER` | var | `e2b` | `e2b` or `cloudflare`. |
+| `SANDBOX_PROVIDER` | var | `e2b` in code; `cloudflare` in the shipped `wrangler.toml` | `e2b` or `cloudflare`. |
 | `E2B_API_KEY` | secret | none | Required when `SANDBOX_PROVIDER=e2b`. Upload with `pnpm exec wrangler secret put E2B_API_KEY`; never put it in `wrangler.toml`. |
 | `E2B_TEMPLATE_ID` | var | `codevil-sandbox` | E2B template the sandboxes start from. |
 | `E2B_MAX_SANDBOX_SECONDS` | var | `3600` | Maximum continuous sandbox runtime; the default matches the E2B Hobby limit. |

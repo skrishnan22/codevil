@@ -6,6 +6,7 @@ import {
   type ShellResult,
 } from "./types.js";
 import { OWNER_IDS, shellQuote } from "./shell.js";
+import { retrySandboxOperation } from "../sandbox.js";
 
 export const E2B_TRAFFIC_TOKEN_HEADER = "e2b-traffic-access-token";
 
@@ -50,6 +51,8 @@ export interface E2BSdk {
     metadata: Record<string, string>;
   }): Promise<E2BSdkSandbox>;
   connect(sandboxId: string, options: { apiKey: string; timeoutMs?: number }): Promise<E2BSdkSandbox>;
+  /** Kills a sandbox by id without resuming it; resolves false when it does not exist. */
+  kill(sandboxId: string, options: { apiKey: string }): Promise<boolean>;
   isNotFound(error: unknown): boolean;
 }
 
@@ -61,6 +64,35 @@ export interface E2BSandboxProviderOptions {
   /** Injected in tests; production lazily imports `e2b`. */
   sdk?: E2BSdk;
   fetch?: typeof fetch;
+  /** Delay between create retries; injected in tests. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const CREATE_ATTEMPTS = 3;
+const CREATE_RETRY_BASE_DELAY_MS = 500;
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND", "EPIPE",
+  "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
+]);
+
+/** Rate limits (429), server errors (5xx) and network failures; never other 4xx (bad key, bad template). */
+export function isRetryableE2BCreateError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { statusCode?: unknown; message?: unknown; name?: unknown; code?: unknown; cause?: unknown };
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  const status = typeof candidate.statusCode === "number"
+    ? candidate.statusCode
+    : Number(/^(\d{3}):/.exec(message)?.[1]);
+  if (Number.isFinite(status)) return status === 429 || status >= 500;
+  if (candidate.name === "RateLimitError") return true;
+  const cause = typeof candidate.cause === "object" && candidate.cause !== null
+    ? (candidate.cause as { code?: unknown })
+    : undefined;
+  for (const code of [candidate.code, cause?.code]) {
+    if (typeof code === "string" && TRANSIENT_NETWORK_CODES.has(code)) return true;
+  }
+  // undici surfaces connection failures as `TypeError: fetch failed`.
+  return candidate.name === "TypeError" && /fetch failed|network/i.test(message);
 }
 
 export function createE2BSandboxProvider(options: E2BSandboxProviderOptions): SandboxProvider {
@@ -74,12 +106,20 @@ export function createE2BSandboxProvider(options: E2BSandboxProviderOptions): Sa
     async create({ sessionId, leaseMs }) {
       // `secure` is ignored in e2b 2.x and a top-level `allowPublicTraffic`
       // is not honored: only `network.allowPublicTraffic` locks the sandbox.
-      const sandbox = await sdk.create(options.templateId, {
-        apiKey: options.apiKey,
-        timeoutMs: cap(leaseMs),
-        network: { allowPublicTraffic: false },
-        metadata: { codevil_session_id: sessionId },
-      });
+      const sandbox = await retrySandboxOperation(
+        () => sdk.create(options.templateId, {
+          apiKey: options.apiKey,
+          timeoutMs: cap(leaseMs),
+          network: { allowPublicTraffic: false },
+          metadata: { codevil_session_id: sessionId },
+        }),
+        {
+          attempts: CREATE_ATTEMPTS,
+          baseDelayMs: CREATE_RETRY_BASE_DELAY_MS,
+          retryOn: isRetryableE2BCreateError,
+          ...(options.sleep ? { sleep: options.sleep } : {}),
+        },
+      );
       if (!sandbox.trafficAccessToken) {
         // Without a token the sandbox may be publicly reachable; never use it.
         const cleanupFailed = await sandbox.kill().then(() => false, () => true);
@@ -108,6 +148,14 @@ export function createE2BSandboxProvider(options: E2BSandboxProviderOptions): Sa
       }
       const secret = connectOptions?.secret ?? sandbox.trafficAccessToken;
       return e2bHandle({ sandbox, ref, ...(secret ? { secret } : {}), sdk, cap, fetchImpl });
+    },
+    async destroyByRef(ref: SandboxRef) {
+      // Static kill: never resumes a paused sandbox. A missing sandbox is already gone.
+      try {
+        await sdk.kill(ref.id, { apiKey: options.apiKey });
+      } catch (error) {
+        if (!sdk.isNotFound(error)) throw error;
+      }
     },
   };
 }
@@ -164,7 +212,9 @@ function e2bHandle(context: {
         const steps: string[] = [];
         if (fileOptions?.mode !== undefined) steps.push(`chmod ${fileOptions.mode.toString(8)} ${shellQuote(stage)}`);
         if (fileOptions?.owner !== undefined) steps.push(`chown ${OWNER_IDS[fileOptions.owner]} ${shellQuote(stage)}`);
-        steps.push(`mkdir -p ${shellQuote(parentDirectory(path))}`);
+        // `install -d` (not `mkdir -p`) so a parent created here is root-owned 0755
+        // whatever the umask: the agent may traverse it but never replace its entries.
+        steps.push(`install -d -m 0755 ${shellQuote(parentDirectory(path))}`);
         steps.push(`mv -fT ${shellQuote(stage)} ${shellQuote(path)}`);
         assertOk(await exec(steps.join(" && ")), `Failed to write ${path}`);
       } catch (error) {
@@ -182,7 +232,8 @@ function e2bHandle(context: {
       const redirected = `sh -c ${shellQuote(command)} >${LOG_DIR}/${processId}.out 2>${LOG_DIR}/${processId}.err`;
       let handle: { disconnect(): Promise<void> };
       try {
-        handle = await sandbox.commands.run(redirected, { background: true, user: "root", cwd, envs: env });
+        // `timeoutMs: 0` disables the SDK's 60 s default deadline, which would otherwise kill the long-lived agent.
+        handle = await sandbox.commands.run(redirected, { background: true, user: "root", cwd, envs: env, timeoutMs: 0 });
       } catch (error) {
         throw mapNotFound(sdk, error);
       }
@@ -214,7 +265,6 @@ function e2bHandle(context: {
         body: request.body,
         redirect: "manual",
         signal: request.signal,
-        ...(request.cf ? { cf: request.cf } : {}),
         ...(request.body ? { duplex: "half" as const } : {}),
       };
       return context.fetchImpl(new Request(target, init));
@@ -288,6 +338,10 @@ function lazyE2BSdk(): E2BSdk {
     async connect(sandboxId, connectOptions) {
       const { Sandbox } = await load();
       return (await Sandbox.connect(sandboxId, connectOptions)) as unknown as E2BSdkSandbox;
+    },
+    async kill(sandboxId, killOptions) {
+      const { Sandbox } = await load();
+      return Sandbox.kill(sandboxId, killOptions);
     },
     // Synchronous by contract: any error the SDK can throw implies it is already loaded.
     isNotFound: (error) => notFoundClass !== undefined && error instanceof notFoundClass,

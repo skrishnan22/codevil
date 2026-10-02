@@ -14,6 +14,11 @@ export interface SandboxProvider {
   create(options: { sessionId: string; leaseMs: number }): Promise<SandboxHandle>;
   /** `secret` is the opaque value returned as `handle.secret` at create time. */
   connect(ref: SandboxRef, options?: { leaseMs?: number; secret?: string }): Promise<SandboxHandle>;
+  /**
+   * Kills a sandbox without connecting to it, so a paused sandbox is not resumed
+   * first. A missing sandbox counts as success. Providers that cannot pause omit it.
+   */
+  destroyByRef?(ref: SandboxRef): Promise<void>;
 }
 
 export interface SandboxHandle {

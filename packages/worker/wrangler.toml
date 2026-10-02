@@ -7,7 +7,11 @@ upload_source_maps = true
 
 [vars]
 EMAIL_PROVIDER = "none"
-SANDBOX_PROVIDER = "e2b"
+# Production stays on Cloudflare until E2B is ready. Switch to "e2b" only after
+# publishing the template (`pnpm --filter @codevil/sandbox-image e2b:template`),
+# setting the E2B_API_KEY secret, and passing the manual E2B end-to-end check.
+# (Code default with no var at all is "e2b"; keep this explicit.)
+SANDBOX_PROVIDER = "cloudflare"
 E2B_TEMPLATE_ID = "codevil-sandbox"
 CODEVIL_WEB_ORIGIN = "http://localhost:5173,http://localhost:8787"
 # Leaving CODEVIL_PREVIEW_ORIGIN unset keeps preview URLs on the portable

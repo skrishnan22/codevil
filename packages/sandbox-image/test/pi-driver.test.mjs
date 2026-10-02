@@ -272,6 +272,47 @@ test("Cloudflare AI Gateway uses a proxy capability and its resolved account/gat
   }
 });
 
+test("changes reasoning effort and model on the existing conversation without rewriting messages", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "codevil-pi-effort-switch-"));
+  const driver = new PiAgentDriver();
+  try {
+    await driver.start({
+      cwd,
+      mode: "coding",
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      thinkingLevel: "low",
+      proxyBase: "https://worker.example",
+      proxySessionId: "ses_effort_switch",
+      proxyTokens: { "anthropic-messages": "initial-capability" },
+      onEvent: () => {},
+      createPullRequest: async () => ({ url: "https://github.com/example/app/pull/1" }),
+    });
+
+    const messagesBefore = driver.session.messages;
+    assert.equal(driver.session.thinkingLevel, "low");
+    driver.setThinkingLevel("high");
+    await driver.switchToExecution("claude-haiku-4-5", "anthropic", "minimal");
+
+    assert.equal(driver.session.thinkingLevel, "minimal");
+    assert.equal(driver.session.messages, messagesBefore);
+    assert.equal(driver.session.model.id, "claude-haiku-4-5");
+  } finally {
+    driver.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("rejects model or effort changes while a provider request is streaming", () => {
+  const driver = new PiAgentDriver();
+  driver.session = { isStreaming: true };
+
+  assert.throws(
+    () => driver.setThinkingLevel("high"),
+    /while an agent turn is streaming/,
+  );
+});
+
 test("switchToExecution preserves the Pi provider target and refreshes the selected API capability", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "codevil-pi-proxy-switch-"));
   const driver = new PiAgentDriver();

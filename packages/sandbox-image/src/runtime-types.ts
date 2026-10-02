@@ -13,11 +13,16 @@ import type { CommandRunner, Verifier } from "./verification.js";
 
 export type ProxyCapabilities = Partial<Record<ProviderApi, string>> & { git?: string };
 
+/** Pi's provider-neutral reasoning/effort levels. */
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
 export interface AgentStartOptions {
   cwd: string;
   mode: "coding";
   model: string;
   provider: string;
+  /** Reasoning effort for the first turn; omitted to use Pi's default. */
+  thinkingLevel?: ThinkingLevel;
   providerConfig?: ProviderPublicConfig;
   llmKey?: string;
   proxyBase?: string;
@@ -90,7 +95,14 @@ export interface AgentDriver {
   consolidateAnnotations?(input: ConsolidationInput): Promise<ConsolidationResult>;
   /** Replace expiring sandbox-only proxy capabilities without exposing provider keys. */
   refreshProxyCapabilities?(tokens: Partial<Record<ProviderApi, string>>): Promise<void> | void;
-  switchToExecution(model: string, provider?: string): Promise<void>;
+  /**
+   * Change model and, optionally, reasoning effort on the existing conversation.
+   * Call only between turns so no provider request is interrupted.
+   */
+  switchToExecution(model: string, provider?: string, thinkingLevel?: ThinkingLevel): Promise<void>;
+  /** Change reasoning effort on the existing conversation between turns. */
+  setThinkingLevel?(thinkingLevel: ThinkingLevel): void;
+
   execute(plan: string): Promise<CostInfo>;
   dispose?(): Promise<void> | void;
 }

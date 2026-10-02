@@ -164,7 +164,7 @@ async function main() {
   }
 
   if (process.env.CODEVIL_E2B_TEMPLATE_SKIP_BUILD === "1") {
-    console.log("E2B template build skipped (CODEVIL_E2B_TEMPLATE_SKIP_BUILD=1)");
+    console.error("E2B template NOT published: CODEVIL_E2B_TEMPLATE_SKIP_BUILD=1 is set (test-only switch)");
     return;
   }
 

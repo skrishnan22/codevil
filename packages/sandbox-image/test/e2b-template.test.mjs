@@ -160,6 +160,11 @@ test("real run executes build, login, push through docker with the password only
     CODEVIL_REGISTRY_PASSWORD: FAKE_PASSWORD,
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(
+    result.stderr,
+    /E2B template NOT published: CODEVIL_E2B_TEMPLATE_SKIP_BUILD=1 is set \(test-only switch\)/,
+  );
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /E2B template ready/);
 
   assert.deepEqual(
     calls.map((call) => call.argv),

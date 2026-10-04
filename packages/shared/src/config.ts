@@ -15,5 +15,5 @@ export const DEFAULT_CONFIG: ConfigDefaults = {
   plan_model: "deepseek-v4-flash",
   exec_model: "deepseek-v4-flash",
   provider: "opencode-go",
-  max_time: "30m",
+  max_time: "20m",
 };

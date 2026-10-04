@@ -4622,3 +4622,209 @@ mark.annotation-highlight {
   color: var(--fg-3);
   font-style: italic;
 }
+
+/* ─── Active sessions sidebar ─────────────────────────────────────────────── */
+.session-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+.session-body .session-workbench {
+  min-width: 0;
+}
+
+.session-sidebar {
+  width: 248px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+  transition: width var(--t-base) var(--ease-out);
+}
+
+.session-sidebar--collapsed {
+  width: 40px;
+}
+
+.session-sidebar-head {
+  height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.session-sidebar-title {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+
+.session-sidebar-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.session-sidebar-toggle {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-md);
+  background: transparent;
+  border: 0;
+  color: var(--fg-4);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out);
+}
+
+.session-sidebar-toggle:hover {
+  background: var(--surface-3);
+  color: var(--fg-2);
+}
+
+.session-sidebar--collapsed .session-sidebar-toggle {
+  margin: 10px auto 0;
+  color: var(--fg-3);
+}
+
+.session-sidebar-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.session-sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-sidebar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg);
+  text-decoration: none;
+  transition: background var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out);
+}
+
+.session-sidebar-item:hover {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.session-sidebar-item-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-sidebar-item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.session-sidebar-item-sub {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-sidebar-item-repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+}
+
+.session-sidebar-item-time {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--fg-4);
+  white-space: nowrap;
+}
+
+.session-sidebar-item .home-status-pill {
+  flex-shrink: 0;
+  height: 20px;
+  padding: 0 8px;
+  gap: 5px;
+  font-size: 10.5px;
+}
+
+.session-sidebar-empty {
+  padding: 4px 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg-4);
+}
+
+.session-sidebar-count-badge {
+  margin: 12px auto 0;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .session-sidebar {
+    width: 200px;
+  }
+  .session-sidebar--collapsed {
+    width: 40px;
+  }
+}

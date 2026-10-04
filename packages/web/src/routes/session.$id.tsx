@@ -13,6 +13,7 @@ import { SessionRail } from "@/components/session/session-rail";
 import { Timeline } from "@/components/session/Timeline";
 import { ChatInput } from "@/components/session/ChatInput";
 import { WorkspacePane } from "@/components/session/workspace-pane";
+import { SessionSidebar } from "@/components/session/session-sidebar";
 import { RoomHeader } from "@/components/session/room-header";
 import { PlanReviewPanel } from "@/components/session/plan-review-panel";
 import { openThreadsSorted } from "@/lib/annotation-predicates";
@@ -102,42 +103,45 @@ function SessionPage() {
   return (
     <div className="session-shell">
       <SessionRail />
-      <div className="session-workbench">
-        <section className="conversation-pane" aria-label="Conversation">
-          <RoomHeader />
-          {planRevision && (
-            <div className="plan-trigger-card">
-              <div className="plan-trigger-card-copy">
-                <span className="plan-trigger-card-label">
-                  Plan ready · Round {planRevision.round + 1}
-                  {openCount > 0 && (
-                    <> · {openCount} {openCount === 1 ? "comment" : "comments"}</>
+      <div className="session-body">
+        <SessionSidebar sessionId={id} />
+        <div className="session-workbench">
+          <section className="conversation-pane" aria-label="Conversation">
+            <RoomHeader />
+            {planRevision && (
+              <div className="plan-trigger-card">
+                <div className="plan-trigger-card-copy">
+                  <span className="plan-trigger-card-label">
+                    Plan ready · Round {planRevision.round + 1}
+                    {openCount > 0 && (
+                      <> · {openCount} {openCount === 1 ? "comment" : "comments"}</>
+                    )}
+                  </span>
+                  {planRevision.locked && (
+                    <span className="plan-trigger-card-locked">Locked</span>
                   )}
-                </span>
-                {planRevision.locked && (
-                  <span className="plan-trigger-card-locked">Locked</span>
-                )}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary plan-trigger-card-btn"
+                  onClick={openPlanPanel}
+                >
+                  Review &amp; annotate
+                </button>
               </div>
-              <button
-                type="button"
-                className="btn btn-primary plan-trigger-card-btn"
-                onClick={openPlanPanel}
-              >
-                Review &amp; annotate
-              </button>
-            </div>
-          )}
-          <Timeline
-            onOpenActivity={handleOpenActivity}
+            )}
+            <Timeline
+              onOpenActivity={handleOpenActivity}
+            />
+            <ChatInput />
+          </section>
+          <WorkspacePane
+            activeTab={activeWorkspaceTab}
+            onSelectTab={handleSelectWorkspaceTab}
+            selectedActivityId={selectedActivityId}
+            onSelectActivity={setSelectedActivityId}
           />
-          <ChatInput />
-        </section>
-        <WorkspacePane
-          activeTab={activeWorkspaceTab}
-          onSelectTab={handleSelectWorkspaceTab}
-          selectedActivityId={selectedActivityId}
-          onSelectActivity={setSelectedActivityId}
-        />
+        </div>
       </div>
 
       {/* Full-screen slide-out panel — PlanRevisionView lives here ONLY */}

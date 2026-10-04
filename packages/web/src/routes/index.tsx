@@ -18,6 +18,7 @@ import {
   assignParticipantAvatarColors,
   getParticipantColorKey,
 } from "@/lib/avatar-colors";
+import { deriveStatus, STATUS_LABEL } from "@/lib/session-status";
 import type { CSSProperties } from "react";
 
 export const Route = createFileRoute("/")({
@@ -58,38 +59,6 @@ function loadModelPrefs(): ModelPrefs {
 
 function saveModelPrefs(prefs: ModelPrefs): void {
   localStorage.setItem(MODEL_PREFS_KEY, JSON.stringify(prefs));
-}
-
-type SessionStatus = "running" | "review" | "done" | "failed" | "idle";
-
-const STATUS_LABEL: Record<SessionStatus, string> = {
-  running: "Running",
-  review: "Review",
-  done: "Done",
-  failed: "Failed",
-  idle: "Idle",
-};
-
-function deriveStatus(session: SessionSummary): SessionStatus {
-  if (session.room_state === "failed" || session.sandbox_state === "failed") return "failed";
-  switch (session.active_run_state) {
-    case "completed":
-      return "done";
-    case "awaiting_approval":
-    case "verifying":
-    case "publishing":
-      return "review";
-    case "queued":
-    case "thinking":
-    case "executing":
-      return "running";
-    case "failed":
-      return "failed";
-    default:
-      break;
-  }
-  if (["provisioning", "cloning", "not_started"].includes(session.sandbox_state)) return "running";
-  return "idle";
 }
 
 const FILTERS = ["all", "running", "review", "done"] as const;

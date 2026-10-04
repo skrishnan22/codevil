@@ -19,11 +19,14 @@ import {
   observeRoutedResponse,
   sandboxLifecycleLogger,
   withRequestId,
+  workerLog,
+  workerLogException,
 } from "./logging.js";
 import { collectWorkerSecretValues } from "./worker-env.js";
 import { redactEvent } from "./redaction.js";
 import type { Env } from "./worker-env.js";
 import { handleSandboxProxy } from "./sandbox-proxy.js";
+import { sweepWorkspaceBackups } from "./backup-reaper.js";
 
 export type { Env } from "./worker-env.js";
 
@@ -177,6 +180,28 @@ function withCors(request: Request, env: Env, response: Response): Response {
 }
 
 export default {
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    const secrets = collectWorkerSecretValues(env);
+    try {
+      const result = await sweepWorkspaceBackups(env.BACKUP_BUCKET, env.DB);
+      workerLog(
+        result.deleted > 0 ? "INFO" : "DEBUG",
+        "workspace_cache.sweep",
+        {
+          cron: controller.cron,
+          listed: result.listed,
+          deleted: result.deleted,
+          expired_rows: result.expiredRows,
+        },
+        secrets,
+      );
+    } catch (error) {
+      workerLogException("workspace_cache.sweep.failed", error, {
+        cron: controller.cron,
+      }, secrets);
+    }
+  },
+
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const redactionSecrets = collectWorkerSecretValues(env);
     if (request.method === "OPTIONS") {
